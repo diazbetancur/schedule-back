@@ -14,7 +14,9 @@ internal static class OptionsValidationHelpers
     ];
 
     public static bool IsRelaxedEnvironment(IHostEnvironment environment)
-        => environment.IsDevelopment() || environment.IsEnvironment("Testing");
+        => environment.IsDevelopment()
+           || environment.IsEnvironment("Testing")
+           || environment.IsEnvironment("QA");
 
     public static bool IsConfigured(string? value)
     {

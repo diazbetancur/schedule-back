@@ -1,0 +1,17 @@
+**/bin/
+**/obj/
+**/TestResults/
+**/.vs/
+**/.vscode/
+
+.git/
+.gitignore
+
+*.user
+*.suo
+*.mdf
+*.ldf
+*.log
+
+Dockerfile*
+.dockerignore

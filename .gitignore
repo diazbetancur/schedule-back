@@ -1,0 +1,42 @@
+# Build output
+bin/
+obj/
+publish/
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+
+# Test results
+TestResults/
+coverage/
+*.trx
+*.coveragexml
+
+# NuGet
+packages/
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Local settings and secrets (use env vars or dotnet user-secrets in dev)
+appsettings.Development.json
+appsettings.Local.json
+appsettings.Production.json
+
+# dotnet user-secrets are stored outside the repo; this path is just for reference
+# ~/.microsoft/usersecrets/
+
+# System
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -18,6 +18,8 @@ using Api.Barbershop.Middleware;
 using Barbershop.Application;
 using Barbershop.Infrastructure;
 using Barbershop.Infrastructure.Configuration;
+using Barbershop.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -29,6 +31,12 @@ builder.Services.AddInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddApiFoundation(builder.Configuration, builder.Environment);
 
 var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.MigrateAsync();
+}
 
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseExceptionHandler();

@@ -22,6 +22,9 @@ internal sealed class UserConfiguration : IEntityTypeConfiguration<User>
     builder.Property(x => x.PhoneNumber).HasMaxLength(40);
     builder.Property(x => x.PasswordHash).HasMaxLength(1024).IsRequired();
     builder.Property(x => x.DateOfBirth).HasColumnType("date");
+    builder.Property(x => x.PasswordResetTokenHash).HasMaxLength(512);
+    builder.Property(x => x.PasswordResetTokenExpiresAt).HasColumnType("timestamp with time zone");
+    builder.HasIndex(x => x.PasswordResetTokenHash).IsUnique().HasFilter("\"PasswordResetTokenHash\" IS NOT NULL");
     builder.Property(x => x.IsActive).HasDefaultValue(true);
     builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
     builder.Property(x => x.UpdatedAt).HasColumnType("timestamp with time zone");

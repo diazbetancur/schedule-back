@@ -85,6 +85,13 @@ public static class DependencyInjection
         services.AddScoped<StaffManagementService>();
         services.AddScoped<IAdminStaffService>(serviceProvider => serviceProvider.GetRequiredService<StaffManagementService>());
         services.AddScoped<IStaffProfileService>(serviceProvider => serviceProvider.GetRequiredService<StaffManagementService>());
+        services.AddHttpClient("Resend", (sp, client) =>
+        {
+            var opts = sp.GetRequiredService<IOptions<ResendOptions>>().Value;
+            client.BaseAddress = new Uri(opts.ApiBaseUrl.TrimEnd('/') + "/");
+            client.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", opts.ApiKey);
+        });
         services.AddScoped<IEmailSender, ResendEmailSender>();
         services.AddScoped<IMediaAssetsService, MediaAssetManagementService>();
         services.AddScoped<ContentManagementService>();

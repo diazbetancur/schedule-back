@@ -17,4 +17,6 @@ public sealed class AppOptions
 
     [Required]
     public string CorrelationIdHeaderName { get; init; } = "X-Correlation-ID";
+
+    public string FrontendUrl { get; init; } = string.Empty;
 }

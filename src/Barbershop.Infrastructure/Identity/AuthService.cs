@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Email;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Configuration;
 using Barbershop.Infrastructure.Persistence;
@@ -20,20 +21,26 @@ internal sealed class AuthService : IAuthService
     private readonly AppDbContext _dbContext;
     private readonly IPasswordHasher<object> _passwordHasher;
     private readonly IIdentitySeedService _identitySeedService;
+    private readonly IEmailSender _emailSender;
     private readonly IOptions<JwtOptions> _jwtOptions;
+    private readonly IOptions<AppOptions> _appOptions;
     private readonly TimeProvider _timeProvider;
 
     public AuthService(
         AppDbContext dbContext,
         IPasswordHasher<object> passwordHasher,
         IIdentitySeedService identitySeedService,
+        IEmailSender emailSender,
         IOptions<JwtOptions> jwtOptions,
+        IOptions<AppOptions> appOptions,
         TimeProvider timeProvider)
     {
         _dbContext = dbContext;
         _passwordHasher = passwordHasher;
         _identitySeedService = identitySeedService;
+        _emailSender = emailSender;
         _jwtOptions = jwtOptions;
+        _appOptions = appOptions;
         _timeProvider = timeProvider;
     }
 
@@ -174,6 +181,130 @@ internal sealed class AuthService : IAuthService
 
         return CreateUserResponse(user, roles, profilePhotoUrl);
     }
+
+    public async Task ForgotPasswordAsync(ForgotPasswordRequest request, CancellationToken cancellationToken = default)
+    {
+        if (!IsValidEmail(request.Email))
+        {
+            return;
+        }
+
+        var normalizedEmail = NormalizeEmail(request.Email);
+        var user = await _dbContext.Users
+            .SingleOrDefaultAsync(u => u.NormalizedEmail == normalizedEmail, cancellationToken);
+
+        if (user is null || !user.IsActive)
+        {
+            return;
+        }
+
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        var rawToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+        var tokenHash = ComputeTokenHash(rawToken);
+        var expiresAt = utcNow.AddMinutes(_jwtOptions.Value.PasswordResetTokenMinutes);
+
+        user.SetPasswordResetToken(tokenHash, expiresAt);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        var frontendUrl = _appOptions.Value.FrontendUrl.TrimEnd('/');
+        var resetUrl = $"{frontendUrl}/auth/reset-password?token={rawToken}";
+        var firstName = user.FullName.Split(' ')[0];
+
+        var email = new EmailMessage(
+            To: user.Email,
+            Subject: "Restablece tu contraseña",
+            HtmlBody: BuildResetEmailHtml(firstName, resetUrl, _jwtOptions.Value.PasswordResetTokenMinutes),
+            TextBody: $"Hola {firstName},\n\nVisita el siguiente enlace para restablecer tu contraseña (válido {_jwtOptions.Value.PasswordResetTokenMinutes} minutos):\n{resetUrl}\n\nSi no solicitaste este cambio, ignora este correo.");
+
+        await _emailSender.SendAsync(email, cancellationToken);
+    }
+
+    public async Task ResetPasswordAsync(ResetPasswordRequest request, CancellationToken cancellationToken = default)
+    {
+        var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        AddErrorIf(errors, "token", string.IsNullOrWhiteSpace(request.Token), "El token es requerido.");
+        AddErrorIf(errors, "newPassword", string.IsNullOrWhiteSpace(request.NewPassword) || request.NewPassword.Length is < 8 or > 128,
+            "La contraseña debe tener entre 8 y 128 caracteres.");
+        ThrowIfAnyErrors(errors);
+
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        var tokenHash = ComputeTokenHash(request.Token);
+
+        var user = await _dbContext.Users
+            .SingleOrDefaultAsync(u => u.PasswordResetTokenHash == tokenHash, cancellationToken);
+
+        if (user is null || !user.IsActive || !user.ConsumePasswordResetToken(utcNow))
+        {
+            throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["token"] = ["El enlace de recuperación es inválido o ha expirado."]
+            });
+        }
+
+        var newHash = _passwordHasher.HashPassword(new object(), request.NewPassword);
+        user.SetPasswordHash(newHash, utcNow);
+
+        var activeTokens = await _dbContext.RefreshTokens
+            .Where(t => t.UserId == user.Id && t.RevokedAt == null)
+            .ToListAsync(cancellationToken);
+
+        foreach (var token in activeTokens)
+        {
+            token.Revoke(utcNow);
+        }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    private static string BuildResetEmailHtml(string firstName, string resetUrl, int expiryMinutes) => $"""
+        <!DOCTYPE html>
+        <html lang="es">
+        <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+        <body style="margin:0;padding:0;background:#1a1612;font-family:system-ui,-apple-system,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#1a1612;padding:40px 16px;">
+            <tr><td align="center">
+              <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#231f1a;border-radius:16px;border:1px solid #3a3228;">
+                <tr>
+                  <td style="padding:28px 36px;border-bottom:1px solid #3a3228;">
+                    <p style="margin:0;font-size:20px;font-weight:700;color:#c9a55a;">Barbershop</p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:32px 36px;">
+                    <p style="margin:0 0 8px;font-size:22px;font-weight:700;color:#f0e6d3;">Hola, {firstName}</p>
+                    <p style="margin:0 0 24px;font-size:15px;color:#a89880;line-height:1.6;">
+                      Recibimos una solicitud para restablecer la contraseña de tu cuenta.<br>
+                      El enlace es válido por <strong style="color:#f0e6d3;">{expiryMinutes} minutos</strong>.
+                    </p>
+                    <table cellpadding="0" cellspacing="0" style="margin:0 0 28px;">
+                      <tr>
+                        <td style="background:#c9a55a;border-radius:999px;">
+                          <a href="{resetUrl}" style="display:inline-block;padding:13px 30px;font-size:15px;font-weight:700;color:#1a1612;text-decoration:none;">
+                            Restablecer contraseña
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:0 0 6px;font-size:12px;color:#7a6e64;">Si el botón no funciona, copia este enlace:</p>
+                    <p style="margin:0 0 24px;font-size:12px;color:#c9a55a;word-break:break-all;">{resetUrl}</p>
+                    <p style="margin:0;font-size:13px;color:#7a6e64;line-height:1.6;">
+                      Si no solicitaste este cambio, ignora este correo de forma segura.
+                    </p>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="padding:18px 36px;border-top:1px solid #3a3228;">
+                    <p style="margin:0;font-size:12px;color:#5a5048;text-align:center;">
+                      © Barbershop &middot; Correo automático, no respondas a este mensaje.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body>
+        </html>
+        """;
 
     private TokenResponse CreateTokenResponse(User user, IReadOnlyList<string> roles, string refreshToken, string? profilePhotoUrl)
     {

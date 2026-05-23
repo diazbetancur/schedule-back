@@ -24,4 +24,7 @@ public sealed class JwtOptions
     public int RefreshTokenDays { get; init; } = 7;
 
     public bool RequireHttpsMetadata { get; init; } = true;
+
+    [Range(5, 1440)]
+    public int PasswordResetTokenMinutes { get; init; } = 30;
 }

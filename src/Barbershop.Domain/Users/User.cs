@@ -28,6 +28,8 @@ public sealed class User
   public string PasswordHash { get; private set; } = string.Empty;
   public Guid? ProfilePhotoMediaAssetId { get; private set; }
   public DateOnly? DateOfBirth { get; private set; }
+  public string? PasswordResetTokenHash { get; private set; }
+  public DateTime? PasswordResetTokenExpiresAt { get; private set; }
   public bool IsActive { get; private set; }
   public DateTime CreatedAt { get; private set; }
   public DateTime? UpdatedAt { get; private set; }
@@ -69,6 +71,24 @@ public sealed class User
   {
     PasswordHash = DomainValidation.Required(passwordHash, nameof(passwordHash), 1024);
     UpdatedAt = DomainValidation.EnsureUtc(updatedAt, nameof(updatedAt));
+  }
+
+  public void SetPasswordResetToken(string tokenHash, DateTime expiresAt)
+  {
+    PasswordResetTokenHash = DomainValidation.Required(tokenHash, nameof(tokenHash), 512);
+    PasswordResetTokenExpiresAt = DomainValidation.EnsureUtc(expiresAt, nameof(expiresAt));
+  }
+
+  public bool ConsumePasswordResetToken(DateTime utcNow)
+  {
+    if (PasswordResetTokenExpiresAt is null || PasswordResetTokenExpiresAt <= utcNow)
+    {
+      return false;
+    }
+
+    PasswordResetTokenHash = null;
+    PasswordResetTokenExpiresAt = null;
+    return true;
   }
 
   public void Activate(DateTime updatedAt)

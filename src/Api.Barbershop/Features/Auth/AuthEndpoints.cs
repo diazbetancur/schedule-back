@@ -48,6 +48,16 @@ public static class AuthEndpoints
             .Produces<AuthUserResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized);
 
+        auth.MapPost("/forgot-password", ForgotPasswordAsync)
+            .WithName("ForgotPassword")
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
+
+        auth.MapPost("/reset-password", ResetPasswordAsync)
+            .WithName("ResetPassword")
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
+
         return api;
     }
 
@@ -112,6 +122,24 @@ public static class AuthEndpoints
     {
         var response = await authService.GetCurrentUserAsync(user.GetRequiredUserId(), cancellationToken);
         return Results.Ok(response);
+    }
+
+    private static async Task<IResult> ForgotPasswordAsync(
+        ForgotPasswordRequest request,
+        IAuthService authService,
+        CancellationToken cancellationToken)
+    {
+        await authService.ForgotPasswordAsync(request, cancellationToken);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> ResetPasswordAsync(
+        ResetPasswordRequest request,
+        IAuthService authService,
+        CancellationToken cancellationToken)
+    {
+        await authService.ResetPasswordAsync(request, cancellationToken);
+        return Results.NoContent();
     }
 
     private static void SetRefreshTokenCookie(HttpContext context, string refreshToken, int refreshTokenDays)

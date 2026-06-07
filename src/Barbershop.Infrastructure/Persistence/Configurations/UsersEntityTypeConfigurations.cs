@@ -55,6 +55,11 @@ internal sealed class UserConfiguration : IEntityTypeConfiguration<User>
         .WithOne(x => x.User)
         .HasForeignKey(x => x.UserId)
         .OnDelete(DeleteBehavior.Cascade);
+
+    builder.HasMany(x => x.PushSubscriptions)
+        .WithOne(x => x.User)
+        .HasForeignKey(x => x.UserId)
+        .OnDelete(DeleteBehavior.Cascade);
   }
 }
 
@@ -132,6 +137,50 @@ internal sealed class RefreshTokenConfiguration : IEntityTypeConfiguration<Refre
     builder.HasOne<RefreshToken>()
         .WithMany()
         .HasForeignKey(x => x.ReplacedByRefreshTokenId)
+        .OnDelete(DeleteBehavior.Restrict);
+  }
+}
+
+internal sealed class PushSubscriptionConfiguration : IEntityTypeConfiguration<PushSubscription>
+{
+  public void Configure(EntityTypeBuilder<PushSubscription> builder)
+  {
+    builder.ToTable("push_subscriptions");
+
+    builder.HasKey(x => x.Id);
+
+    builder.Property(x => x.Id).ValueGeneratedNever();
+    builder.Property(x => x.Endpoint).HasMaxLength(2048).IsRequired();
+    builder.Property(x => x.P256dhKey).HasMaxLength(256).IsRequired();
+    builder.Property(x => x.AuthKey).HasMaxLength(256).IsRequired();
+    builder.Property(x => x.UserAgent).HasMaxLength(256);
+    builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
+
+    builder.HasIndex(x => x.Endpoint).IsUnique();
+    builder.HasIndex(x => x.UserId);
+  }
+}
+
+internal sealed class NotificationCampaignConfiguration : IEntityTypeConfiguration<NotificationCampaign>
+{
+  public void Configure(EntityTypeBuilder<NotificationCampaign> builder)
+  {
+    builder.ToTable("notification_campaigns");
+
+    builder.HasKey(x => x.Id);
+
+    builder.Property(x => x.Id).ValueGeneratedNever();
+    builder.Property(x => x.Title).HasMaxLength(160).IsRequired();
+    builder.Property(x => x.Body).HasMaxLength(1000).IsRequired();
+    builder.Property(x => x.TargetSummary).HasMaxLength(280).IsRequired();
+    builder.Property(x => x.RecipientCount).IsRequired();
+    builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
+
+    builder.HasIndex(x => x.CreatedAt);
+
+    builder.HasOne(x => x.SentByUser)
+        .WithMany()
+        .HasForeignKey(x => x.SentByUserId)
         .OnDelete(DeleteBehavior.Restrict);
   }
 }

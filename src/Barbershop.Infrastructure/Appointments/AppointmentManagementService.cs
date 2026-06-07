@@ -1,6 +1,7 @@
 using System.Net.Mail;
 using Barbershop.Application.Appointments;
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Notifications;
 using Barbershop.Domain.Appointments;
 using Barbershop.Domain.Staff;
 using Barbershop.Domain.Users;
@@ -13,11 +14,13 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 {
   private readonly AppDbContext _dbContext;
   private readonly TimeProvider _timeProvider;
+  private readonly IAppointmentNotificationService _notificationService;
 
-  public AppointmentManagementService(AppDbContext dbContext, TimeProvider timeProvider)
+  public AppointmentManagementService(AppDbContext dbContext, TimeProvider timeProvider, IAppointmentNotificationService notificationService)
   {
     _dbContext = dbContext;
     _timeProvider = timeProvider;
+    _notificationService = notificationService;
   }
 
   async Task<AppointmentView> ICustomerAppointmentsService.CreateAsync(
@@ -59,6 +62,10 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     _dbContext.Appointments.Add(appointment);
     await _dbContext.SaveChangesAsync(cancellationToken);
 
+    await _notificationService.NotifyStaffOfNewAppointmentAsync(
+        new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, currentUser.Id, currentUser.FullName, appointment.StartsAt),
+        cancellationToken);
+
     return Map(appointment);
   }
 
@@ -82,6 +89,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
   async Task<AppointmentView> ICustomerAppointmentsService.CancelAsync(Guid currentUserId, Guid appointmentId, CancellationToken cancellationToken)
   {
     var appointment = await _dbContext.Appointments
+        .Include(candidate => candidate.StaffProfile)
         .SingleOrDefaultAsync(
             candidate => candidate.Id == appointmentId && candidate.CustomerUserId == currentUserId,
             cancellationToken)
@@ -104,6 +112,10 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 
     appointment.UpdateStatus(AppointmentStatus.Cancelled, nowUtc);
     await _dbContext.SaveChangesAsync(cancellationToken);
+
+    await _notificationService.NotifyStaffOfCustomerCancellationAsync(
+        new AppointmentNotificationContext(appointment.StaffProfile.UserId, appointment.StaffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt),
+        cancellationToken);
 
     return Map(appointment);
   }
@@ -168,7 +180,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
             cancellationToken)
         ?? throw new KeyNotFoundException("The appointment was not found.");
 
-    return await UpdateAppointmentCoreAsync(appointment, request, cancellationToken);
+    return await UpdateAppointmentCoreAsync(appointment, staffProfile, request, cancellationToken);
   }
 
   async Task<AppointmentView> IStaffAppointmentsService.UpdateStatusForCurrentStaffAsync(
@@ -185,7 +197,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
             cancellationToken)
         ?? throw new KeyNotFoundException("The appointment was not found.");
 
-    return await UpdateStatusCoreAsync(appointment, request, cancellationToken);
+    return await UpdateStatusCoreAsync(appointment, staffProfile, request, cancellationToken);
   }
 
   async Task<IReadOnlyList<AppointmentView>> IAdminAppointmentsService.GetAsync(Guid? staffProfileId, CancellationToken cancellationToken)
@@ -244,9 +256,9 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
         .SingleOrDefaultAsync(candidate => candidate.Id == appointmentId, cancellationToken)
         ?? throw new KeyNotFoundException("The appointment was not found.");
 
-    await LoadActiveStaffProfileAsync(appointment.StaffProfileId, cancellationToken);
+    var staffProfile = await LoadActiveStaffProfileAsync(appointment.StaffProfileId, cancellationToken);
 
-    return await UpdateAppointmentCoreAsync(appointment, request, cancellationToken);
+    return await UpdateAppointmentCoreAsync(appointment, staffProfile, request, cancellationToken);
   }
 
   async Task<AppointmentView> IAdminAppointmentsService.UpdateStatusAsync(
@@ -258,9 +270,9 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
         .SingleOrDefaultAsync(candidate => candidate.Id == appointmentId, cancellationToken)
         ?? throw new KeyNotFoundException("The appointment was not found.");
 
-    await LoadActiveStaffProfileAsync(appointment.StaffProfileId, cancellationToken);
+    var staffProfile = await LoadActiveStaffProfileAsync(appointment.StaffProfileId, cancellationToken);
 
-    return await UpdateStatusCoreAsync(appointment, request, cancellationToken);
+    return await UpdateStatusCoreAsync(appointment, staffProfile, request, cancellationToken);
   }
 
   private async Task<IReadOnlyList<AppointmentView>> LoadByStaffProfileAsync(Guid staffProfileId, CancellationToken cancellationToken)
@@ -275,6 +287,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 
   private async Task<AppointmentView> UpdateAppointmentCoreAsync(
       Appointment appointment,
+      StaffProfile staffProfile,
       AppointmentUpdateRequest request,
       CancellationToken cancellationToken)
   {
@@ -301,11 +314,16 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 
     await _dbContext.SaveChangesAsync(cancellationToken);
 
+    await _notificationService.NotifyCustomerOfAppointmentUpdateAsync(
+        new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt),
+        cancellationToken);
+
     return Map(appointment);
   }
 
   private async Task<AppointmentView> UpdateStatusCoreAsync(
       Appointment appointment,
+      StaffProfile staffProfile,
       AppointmentStatusUpdateRequest request,
       CancellationToken cancellationToken)
   {
@@ -339,6 +357,13 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 
     appointment.UpdateStatus(request.Status, _timeProvider.GetUtcNow().UtcDateTime);
     await _dbContext.SaveChangesAsync(cancellationToken);
+
+    if (request.Status == AppointmentStatus.Cancelled)
+    {
+      await _notificationService.NotifyCustomerOfAppointmentCancellationAsync(
+          new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt),
+          cancellationToken);
+    }
 
     return Map(appointment);
   }

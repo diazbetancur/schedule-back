@@ -36,6 +36,7 @@ public sealed class User
   public StaffProfile? StaffProfile { get; private set; }
   public ICollection<UserRole> UserRoles { get; } = [];
   public ICollection<RefreshToken> RefreshTokens { get; } = [];
+  public ICollection<PushSubscription> PushSubscriptions { get; } = [];
   public ICollection<Appointment> CustomerAppointments { get; } = [];
   public ICollection<Review> Reviews { get; } = [];
 

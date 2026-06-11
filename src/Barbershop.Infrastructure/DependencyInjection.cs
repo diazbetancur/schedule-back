@@ -5,6 +5,7 @@ using Barbershop.Application.Appointments;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Availability;
 using Barbershop.Application.Media;
+using Barbershop.Application.Notifications;
 using Barbershop.Application.PublicContent;
 using Barbershop.Application.Reviews;
 using Barbershop.Application.Staff.Admin;
@@ -18,6 +19,7 @@ using Barbershop.Infrastructure.Email;
 using Barbershop.Infrastructure.Identity;
 using Barbershop.Infrastructure.Landing;
 using Barbershop.Infrastructure.Media;
+using Barbershop.Infrastructure.Notifications;
 using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.Reviews;
 using Barbershop.Infrastructure.Staff;
@@ -85,7 +87,19 @@ public static class DependencyInjection
         services.AddScoped<StaffManagementService>();
         services.AddScoped<IAdminStaffService>(serviceProvider => serviceProvider.GetRequiredService<StaffManagementService>());
         services.AddScoped<IStaffProfileService>(serviceProvider => serviceProvider.GetRequiredService<StaffManagementService>());
+        services.AddHttpClient("Resend", (sp, client) =>
+        {
+            var opts = sp.GetRequiredService<IOptions<ResendOptions>>().Value;
+            client.BaseAddress = new Uri(opts.ApiBaseUrl.TrimEnd('/') + "/");
+            client.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", opts.ApiKey);
+        });
         services.AddScoped<IEmailSender, ResendEmailSender>();
+        services.AddScoped<IPushSubscriptionService, PushSubscriptionService>();
+        services.AddSingleton<WebPush.WebPushClient>();
+        services.AddScoped<IPushNotificationSender, WebPushNotificationSender>();
+        services.AddScoped<IAppointmentNotificationService, AppointmentNotificationService>();
+        services.AddScoped<IAdminNotificationsService, AdminNotificationsService>();
         services.AddScoped<IMediaAssetsService, MediaAssetManagementService>();
         services.AddScoped<ContentManagementService>();
         services.AddScoped<IPublicContentService>(serviceProvider => serviceProvider.GetRequiredService<ContentManagementService>());
@@ -147,6 +161,15 @@ public static class DependencyInjection
             .Bind(configuration.GetSection(EmailOptions.SectionName))
             .ValidateDataAnnotations()
             .Validate(options => !options.Enabled || !string.IsNullOrWhiteSpace(options.DefaultFromName), $"{EmailOptions.SectionName}:DefaultFromName is required when email is enabled.")
+            .ValidateOnStart();
+
+        services.AddOptions<WebPushOptions>()
+            .Bind(configuration.GetSection(WebPushOptions.SectionName))
+            .Validate(
+                options => !options.Enabled || (OptionsValidationHelpers.IsConfigured(options.PublicKey)
+                    && OptionsValidationHelpers.IsConfigured(options.PrivateKey)
+                    && OptionsValidationHelpers.IsConfigured(options.ContactEmail)),
+                $"{WebPushOptions.SectionName} must include PublicKey, PrivateKey, and ContactEmail when enabled.")
             .ValidateOnStart();
 
         services.AddOptions<FileStorageOptions>()

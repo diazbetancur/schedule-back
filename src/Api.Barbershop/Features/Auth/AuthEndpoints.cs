@@ -1,6 +1,8 @@
+using Api.Barbershop.Configuration;
 using Barbershop.Application.Auth;
 using Barbershop.Infrastructure.Configuration;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 using System.Security.Claims;
 
@@ -21,18 +23,21 @@ public static class AuthEndpoints
 
         auth.MapPost("/register", RegisterAsync)
             .WithName("Register")
+            .RequireRateLimiting(RateLimitPolicyNames.AuthCredentials)
             .Produces<AuthApiTokenResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
 
         auth.MapPost("/login", LoginAsync)
             .WithName("Login")
+            .RequireRateLimiting(RateLimitPolicyNames.AuthCredentials)
             .Produces<AuthApiTokenResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
 
         auth.MapPost("/refresh", RefreshAsync)
             .WithName("RefreshToken")
+            .RequireRateLimiting(RateLimitPolicyNames.AuthRefresh)
             .Produces<AuthApiTokenResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized);
 
@@ -47,6 +52,18 @@ public static class AuthEndpoints
             .RequireAuthorization()
             .Produces<AuthUserResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized);
+
+        auth.MapPost("/forgot-password", ForgotPasswordAsync)
+            .WithName("ForgotPassword")
+            .RequireRateLimiting(RateLimitPolicyNames.AuthPasswordReset)
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
+
+        auth.MapPost("/reset-password", ResetPasswordAsync)
+            .WithName("ResetPassword")
+            .RequireRateLimiting(RateLimitPolicyNames.AuthPasswordReset)
+            .Produces(StatusCodes.Status204NoContent)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
 
         return api;
     }
@@ -112,6 +129,24 @@ public static class AuthEndpoints
     {
         var response = await authService.GetCurrentUserAsync(user.GetRequiredUserId(), cancellationToken);
         return Results.Ok(response);
+    }
+
+    private static async Task<IResult> ForgotPasswordAsync(
+        ForgotPasswordRequest request,
+        IAuthService authService,
+        CancellationToken cancellationToken)
+    {
+        await authService.ForgotPasswordAsync(request, cancellationToken);
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> ResetPasswordAsync(
+        ResetPasswordRequest request,
+        IAuthService authService,
+        CancellationToken cancellationToken)
+    {
+        await authService.ResetPasswordAsync(request, cancellationToken);
+        return Results.NoContent();
     }
 
     private static void SetRefreshTokenCookie(HttpContext context, string refreshToken, int refreshTokenDays)

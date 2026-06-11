@@ -2,11 +2,13 @@ using Api.Barbershop.Features.Admin.Appointments;
 using Api.Barbershop.Configuration;
 using Api.Barbershop.Features.Admin.Landing;
 using Api.Barbershop.Features.Admin.Media;
+using Api.Barbershop.Features.Admin.Notifications;
 using Api.Barbershop.Features.Admin.Staff;
 using Api.Barbershop.Features.Auth;
 using Api.Barbershop.Features.Customer.Appointments;
 using Api.Barbershop.Features.Customer.Profile;
 using Api.Barbershop.Features.Customer.Reviews;
+using Api.Barbershop.Features.Notifications;
 using Api.Barbershop.Features.Public.Availability;
 using Api.Barbershop.Features.Public.Content;
 using Api.Barbershop.Features.Public.Reviews;
@@ -18,6 +20,8 @@ using Api.Barbershop.Middleware;
 using Barbershop.Application;
 using Barbershop.Infrastructure;
 using Barbershop.Infrastructure.Configuration;
+using Barbershop.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -30,10 +34,18 @@ builder.Services.AddApiFoundation(builder.Configuration, builder.Environment);
 
 var app = builder.Build();
 
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await db.Database.MigrateAsync();
+}
+
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseCors(CorsOptions.PolicyName);
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -51,7 +63,9 @@ api.MapCustomerReviewsEndpoints();
 api.MapAdminStaffEndpoints();
 api.MapAdminStaffAvailabilityEndpoints();
 api.MapAdminAppointmentsEndpoints();
+api.MapAdminNotificationsEndpoints();
 api.MapMediaEndpoints();
+api.MapNotificationsEndpoints();
 api.MapAdminContentEndpoints();
 api.MapPublicAvailabilityEndpoints();
 api.MapPublicContentEndpoints();

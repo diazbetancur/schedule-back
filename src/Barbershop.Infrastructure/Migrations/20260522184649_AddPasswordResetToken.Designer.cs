@@ -3,6 +3,7 @@ using System;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Barbershop.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260522184649_AddPasswordResetToken")]
+    partial class AddPasswordResetToken
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -526,84 +529,6 @@ namespace Barbershop.Infrastructure.Migrations
                         });
                 });
 
-            modelBuilder.Entity("Barbershop.Domain.Users.NotificationCampaign", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Body")
-                        .IsRequired()
-                        .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("RecipientCount")
-                        .HasColumnType("integer");
-
-                    b.Property<Guid>("SentByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("TargetSummary")
-                        .IsRequired()
-                        .HasMaxLength(280)
-                        .HasColumnType("character varying(280)");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasMaxLength(160)
-                        .HasColumnType("character varying(160)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CreatedAt");
-
-                    b.HasIndex("SentByUserId");
-
-                    b.ToTable("notification_campaigns", "public");
-                });
-
-            modelBuilder.Entity("Barbershop.Domain.Users.PushSubscription", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("AuthKey")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Endpoint")
-                        .IsRequired()
-                        .HasMaxLength(2048)
-                        .HasColumnType("character varying(2048)");
-
-                    b.Property<string>("P256dhKey")
-                        .IsRequired()
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<string>("UserAgent")
-                        .HasMaxLength(256)
-                        .HasColumnType("character varying(256)");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Endpoint")
-                        .IsUnique();
-
-                    b.HasIndex("UserId");
-
-                    b.ToTable("push_subscriptions", "public");
-                });
-
             modelBuilder.Entity("Barbershop.Domain.Users.RefreshToken", b =>
                 {
                     b.Property<Guid>("Id")
@@ -880,28 +805,6 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Navigation("StaffProfile");
                 });
 
-            modelBuilder.Entity("Barbershop.Domain.Users.NotificationCampaign", b =>
-                {
-                    b.HasOne("Barbershop.Domain.Users.User", "SentByUser")
-                        .WithMany()
-                        .HasForeignKey("SentByUserId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("SentByUser");
-                });
-
-            modelBuilder.Entity("Barbershop.Domain.Users.PushSubscription", b =>
-                {
-                    b.HasOne("Barbershop.Domain.Users.User", "User")
-                        .WithMany("PushSubscriptions")
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("User");
-                });
-
             modelBuilder.Entity("Barbershop.Domain.Users.RefreshToken", b =>
                 {
                     b.HasOne("Barbershop.Domain.Users.RefreshToken", null)
@@ -969,8 +872,6 @@ namespace Barbershop.Infrastructure.Migrations
             modelBuilder.Entity("Barbershop.Domain.Users.User", b =>
                 {
                     b.Navigation("CustomerAppointments");
-
-                    b.Navigation("PushSubscriptions");
 
                     b.Navigation("RefreshTokens");
 

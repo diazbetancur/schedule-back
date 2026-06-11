@@ -14,6 +14,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<UserRole> UserRoles => Set<UserRole>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<PushSubscription> PushSubscriptions => Set<PushSubscription>();
+    public DbSet<NotificationCampaign> NotificationCampaigns => Set<NotificationCampaign>();
     public DbSet<StaffProfile> StaffProfiles => Set<StaffProfile>();
     public DbSet<StaffService> StaffServices => Set<StaffService>();
     public DbSet<StaffAvailabilityRule> StaffAvailabilityRules => Set<StaffAvailabilityRule>();

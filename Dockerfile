@@ -23,8 +23,8 @@ ENV ASPNETCORE_ENVIRONMENT=Production
 
 COPY --from=build /app/publish .
 
-RUN addgroup --system appgroup \
-  && adduser --system --ingroup appgroup appuser \
+RUN groupadd --system appgroup \
+  && useradd --system --no-create-home --gid appgroup appuser \
   && chown -R appuser:appgroup /app
 
 USER appuser

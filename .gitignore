@@ -25,11 +25,13 @@ packages/
 project.lock.json
 project.fragment.lock.json
 artifacts/
+.artifacts/
 
 # Local settings and secrets (use env vars or dotnet user-secrets in dev)
 appsettings.Development.json
 appsettings.Local.json
 appsettings.Production.json
+!src/Api.Barbershop/appsettings.Production.json
 
 # dotnet user-secrets are stored outside the repo; this path is just for reference
 # ~/.microsoft/usersecrets/

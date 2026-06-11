@@ -12,6 +12,9 @@ namespace Barbershop.Infrastructure.Notifications;
 
 internal sealed class WebPushNotificationSender : IPushNotificationSender
 {
+  private const string NotificationIconPath = "/icons/icon-192x192.png";
+  private const string NotificationBadgePath = "/icons/icon-72x72.png";
+
   private readonly AppDbContext _dbContext;
   private readonly WebPushOptions _options;
   private readonly WebPushClient _client;
@@ -56,6 +59,8 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender
       {
         title = message.Title,
         body = message.Body,
+        icon = NotificationIconPath,
+        badge = NotificationBadgePath,
       },
     });
 

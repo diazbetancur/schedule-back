@@ -34,6 +34,18 @@ public sealed record BannerResponse(
     DateTime CreatedAtUtc,
     DateTime? UpdatedAtUtc);
 
+public sealed record BusinessScheduleResponse(
+    IReadOnlyList<BusinessScheduleDayResponse> Days);
+
+/// <param name="DayOfWeek">0 = Monday … 6 = Sunday</param>
+/// <param name="OpenTime">HH:mm format, null when IsOpen is false</param>
+/// <param name="CloseTime">HH:mm format, null when IsOpen is false</param>
+public sealed record BusinessScheduleDayResponse(
+    int DayOfWeek,
+    bool IsOpen,
+    string? OpenTime,
+    string? CloseTime);
+
 public sealed record PublicStaffServiceResponse(
     Guid Id,
     string Name,

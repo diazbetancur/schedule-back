@@ -21,4 +21,8 @@ public interface IAdminContentService
   Task<BrandingSettingsResponse> GetBrandingAsync(CancellationToken cancellationToken = default);
 
   Task<BrandingSettingsResponse> UpsertBrandingAsync(UpsertBrandingSettingsRequest request, CancellationToken cancellationToken = default);
+
+  Task<BusinessScheduleResponse> GetBusinessScheduleAsync(CancellationToken cancellationToken = default);
+
+  Task<BusinessScheduleResponse> UpsertBusinessScheduleAsync(UpsertBusinessScheduleRequest request, CancellationToken cancellationToken = default);
 }

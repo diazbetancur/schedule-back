@@ -35,3 +35,15 @@ public sealed record UpdateBannerRequest(
     bool IsActive,
     DateTime? StartsAtUtc,
     DateTime? EndsAtUtc);
+
+public sealed record UpsertBusinessScheduleRequest(
+    IReadOnlyList<BusinessScheduleDayRequest> Days);
+
+/// <param name="DayOfWeek">0 = Monday … 6 = Sunday</param>
+/// <param name="OpenTime">HH:mm format, null when IsOpen is false</param>
+/// <param name="CloseTime">HH:mm format, null when IsOpen is false</param>
+public sealed record BusinessScheduleDayRequest(
+    int DayOfWeek,
+    bool IsOpen,
+    string? OpenTime,
+    string? CloseTime);

@@ -57,6 +57,23 @@ internal sealed class LandingContentConfiguration : IEntityTypeConfiguration<Lan
   }
 }
 
+internal sealed class BusinessScheduleDayConfiguration : IEntityTypeConfiguration<BusinessScheduleDay>
+{
+  public void Configure(EntityTypeBuilder<BusinessScheduleDay> builder)
+  {
+    builder.ToTable("business_schedule_days");
+
+    builder.HasKey(x => x.Id);
+
+    builder.Property(x => x.Id).ValueGeneratedNever();
+    builder.Property(x => x.DayOfWeek).IsRequired();
+    builder.Property(x => x.OpenTime).HasColumnType("time without time zone");
+    builder.Property(x => x.CloseTime).HasColumnType("time without time zone");
+
+    builder.HasIndex(x => x.DayOfWeek).IsUnique();
+  }
+}
+
 internal sealed class AppBrandingSettingsConfiguration : IEntityTypeConfiguration<AppBrandingSettings>
 {
   public void Configure(EntityTypeBuilder<AppBrandingSettings> builder)

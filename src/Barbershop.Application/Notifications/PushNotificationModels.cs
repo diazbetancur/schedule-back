@@ -8,4 +8,4 @@ public sealed record PushSubscriptionRequest(
 
 public sealed record PushUnsubscribeRequest(string Endpoint);
 
-public sealed record PushNotificationMessage(string Title, string Body);
+public sealed record PushNotificationMessage(string Title, string Body, string? Url = null);

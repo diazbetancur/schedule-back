@@ -488,6 +488,111 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
           null,
           null);
 
+  // ── Business Schedule ─────────────────────────────────────────────────
+
+  public Task<BusinessScheduleResponse> GetPublicBusinessScheduleAsync(CancellationToken cancellationToken = default)
+      => GetScheduleInternalAsync(cancellationToken);
+
+  public Task<BusinessScheduleResponse> GetBusinessScheduleAsync(CancellationToken cancellationToken = default)
+      => GetScheduleInternalAsync(cancellationToken);
+
+  public async Task<BusinessScheduleResponse> UpsertBusinessScheduleAsync(
+      UpsertBusinessScheduleRequest request,
+      CancellationToken cancellationToken = default)
+  {
+    ArgumentNullException.ThrowIfNull(request);
+
+    var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+
+    if (request.Days is null || request.Days.Count != 7)
+    {
+      errors["days"] = ["Se deben proveer exactamente 7 entradas (una por dia de la semana)."];
+      ThrowIfAnyValidationErrors(errors);
+    }
+
+    var orderedDayNumbers = request.Days!.Select(d => d.DayOfWeek).OrderBy(d => d).ToList();
+    if (!orderedDayNumbers.SequenceEqual(Enumerable.Range(0, 7)))
+    {
+      errors["days"] = ["Los dias deben ser exactamente 0-6 (lunes a domingo) sin duplicados."];
+      ThrowIfAnyValidationErrors(errors);
+    }
+
+    foreach (var day in request.Days)
+    {
+      var key = $"days[{day.DayOfWeek}]";
+
+      if (!day.IsOpen)
+        continue;
+
+      if (string.IsNullOrWhiteSpace(day.OpenTime) || string.IsNullOrWhiteSpace(day.CloseTime))
+      {
+        errors[key] = ["El dia esta marcado como abierto pero le falta hora de apertura o cierre."];
+        continue;
+      }
+
+      if (!TimeOnly.TryParseExact(day.OpenTime.Trim(), "HH:mm", out var openTime) ||
+          !TimeOnly.TryParseExact(day.CloseTime.Trim(), "HH:mm", out var closeTime))
+      {
+        errors[key] = ["El formato de hora es invalido. Use HH:mm (ej: 09:00)."];
+        continue;
+      }
+
+      if (openTime >= closeTime)
+      {
+        errors[key] = ["La hora de apertura debe ser anterior a la hora de cierre."];
+      }
+    }
+
+    ThrowIfAnyValidationErrors(errors);
+
+    var existing = await _dbContext.BusinessScheduleDays.ToListAsync(cancellationToken);
+    _dbContext.BusinessScheduleDays.RemoveRange(existing);
+
+    var newDays = request.Days.Select(d =>
+    {
+      TimeOnly? openTime = d.IsOpen && !string.IsNullOrWhiteSpace(d.OpenTime)
+          ? TimeOnly.ParseExact(d.OpenTime.Trim(), "HH:mm") : null;
+      TimeOnly? closeTime = d.IsOpen && !string.IsNullOrWhiteSpace(d.CloseTime)
+          ? TimeOnly.ParseExact(d.CloseTime.Trim(), "HH:mm") : null;
+
+      return new BusinessScheduleDay(d.DayOfWeek, d.IsOpen, openTime, closeTime);
+    }).ToList();
+
+    _dbContext.BusinessScheduleDays.AddRange(newDays);
+    await _dbContext.SaveChangesAsync(cancellationToken);
+
+    return MapSchedule(newDays);
+  }
+
+  private async Task<BusinessScheduleResponse> GetScheduleInternalAsync(CancellationToken cancellationToken)
+  {
+    var days = await _dbContext.BusinessScheduleDays
+        .AsNoTracking()
+        .OrderBy(d => d.DayOfWeek)
+        .ToListAsync(cancellationToken);
+
+    return days.Count == 0 ? CreateDefaultBusinessSchedule() : MapSchedule(days);
+  }
+
+  private static BusinessScheduleResponse MapSchedule(IEnumerable<BusinessScheduleDay> days)
+      => new(days
+          .OrderBy(d => d.DayOfWeek)
+          .Select(d => new BusinessScheduleDayResponse(
+              d.DayOfWeek,
+              d.IsOpen,
+              d.OpenTime?.ToString("HH:mm"),
+              d.CloseTime?.ToString("HH:mm")))
+          .ToList());
+
+  private static BusinessScheduleResponse CreateDefaultBusinessSchedule()
+  {
+    // Mon(0)–Sat(5) 09:00–19:00 open, Sun(6) closed
+    var days = Enumerable.Range(0, 7)
+        .Select(i => new BusinessScheduleDayResponse(i, i < 6, i < 6 ? "09:00" : null, i < 6 ? "19:00" : null))
+        .ToList();
+    return new BusinessScheduleResponse(days);
+  }
+
   [GeneratedRegex("^#[0-9A-Fa-f]{6}$", RegexOptions.CultureInvariant)]
   private static partial Regex HexColorRegex();
 }

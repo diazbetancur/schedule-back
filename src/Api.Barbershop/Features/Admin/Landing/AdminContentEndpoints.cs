@@ -73,6 +73,19 @@ public static class AdminContentEndpoints
         .ProducesProblem(StatusCodes.Status401Unauthorized)
         .ProducesProblem(StatusCodes.Status403Forbidden);
 
+    content.MapGet("/business-hours", GetBusinessScheduleAsync)
+        .WithName("GetAdminBusinessSchedule")
+        .Produces<BusinessScheduleResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden);
+
+    content.MapPut("/business-hours", UpsertBusinessScheduleAsync)
+        .WithName("UpsertAdminBusinessSchedule")
+        .Produces<BusinessScheduleResponse>(StatusCodes.Status200OK)
+        .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden);
+
     return api;
   }
 
@@ -118,4 +131,13 @@ public static class AdminContentEndpoints
       IAdminContentService service,
       CancellationToken cancellationToken)
       => service.UpsertBrandingAsync(request, cancellationToken);
+
+  private static Task<BusinessScheduleResponse> GetBusinessScheduleAsync(IAdminContentService service, CancellationToken cancellationToken)
+      => service.GetBusinessScheduleAsync(cancellationToken);
+
+  private static Task<BusinessScheduleResponse> UpsertBusinessScheduleAsync(
+      UpsertBusinessScheduleRequest request,
+      IAdminContentService service,
+      CancellationToken cancellationToken)
+      => service.UpsertBusinessScheduleAsync(request, cancellationToken);
 }

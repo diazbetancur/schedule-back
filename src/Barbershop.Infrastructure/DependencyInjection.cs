@@ -23,6 +23,8 @@ using Barbershop.Infrastructure.Notifications;
 using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.Reviews;
 using Barbershop.Infrastructure.Staff;
+using Barbershop.Infrastructure.Users;
+using Barbershop.Application.Users.Admin;
 using Barbershop.Infrastructure.Storage;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -107,6 +109,7 @@ public static class DependencyInjection
         services.AddScoped<IPublicStaffService, PublicStaffService>();
         services.AddScoped<IFileStorageService, R2FileStorageService>();
         services.AddScoped<ICustomerProfileService, CustomerProfileService>();
+        services.AddScoped<IAdminUsersService, AdminUsersService>();
 
         return services;
     }

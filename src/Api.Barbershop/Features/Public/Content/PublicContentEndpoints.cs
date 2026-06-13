@@ -21,6 +21,10 @@ public static class PublicContentEndpoints
         .WithName("GetPublicBranding")
         .Produces<BrandingSettingsResponse>(StatusCodes.Status200OK);
 
+    content.MapGet("/business-hours", GetBusinessScheduleAsync)
+        .WithName("GetPublicBusinessSchedule")
+        .Produces<BusinessScheduleResponse>(StatusCodes.Status200OK);
+
     return api;
   }
 
@@ -32,4 +36,7 @@ public static class PublicContentEndpoints
 
   private static Task<BrandingSettingsResponse> GetBrandingAsync(IPublicContentService service, CancellationToken cancellationToken)
       => service.GetPublicBrandingAsync(cancellationToken);
+
+  private static Task<BusinessScheduleResponse> GetBusinessScheduleAsync(IPublicContentService service, CancellationToken cancellationToken)
+      => service.GetPublicBusinessScheduleAsync(cancellationToken);
 }

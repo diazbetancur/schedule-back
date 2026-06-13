@@ -19,7 +19,8 @@ internal sealed class AppointmentNotificationService : IAppointmentNotificationS
   {
     var message = new PushNotificationMessage(
         "Nueva cita agendada",
-        $"{context.CustomerName} agendó una cita para el {FormatDateTime(context.StartsAtUtc)}.");
+        $"{context.CustomerName} agendó una cita para el {FormatDateTime(context.StartsAtUtc)}.",
+        "/staff/appointments");
 
     return _sender.SendToUsersAsync([context.StaffUserId], message, cancellationToken);
   }
@@ -28,7 +29,8 @@ internal sealed class AppointmentNotificationService : IAppointmentNotificationS
   {
     var message = new PushNotificationMessage(
         "Cita cancelada",
-        $"{context.CustomerName} canceló su cita del {FormatDateTime(context.StartsAtUtc)}.");
+        $"{context.CustomerName} canceló su cita del {FormatDateTime(context.StartsAtUtc)}.",
+        "/staff/appointments");
 
     return _sender.SendToUsersAsync([context.StaffUserId], message, cancellationToken);
   }
@@ -42,7 +44,8 @@ internal sealed class AppointmentNotificationService : IAppointmentNotificationS
 
     var message = new PushNotificationMessage(
         "Tu cita fue modificada",
-        $"{context.StaffDisplayName} modificó tu cita. Nueva fecha: {FormatDateTime(context.StartsAtUtc)}.");
+        $"{context.StaffDisplayName} modificó tu cita. Nueva fecha: {FormatDateTime(context.StartsAtUtc)}.",
+        "/customer/appointments");
 
     return _sender.SendToUsersAsync([customerUserId], message, cancellationToken);
   }
@@ -56,7 +59,23 @@ internal sealed class AppointmentNotificationService : IAppointmentNotificationS
 
     var message = new PushNotificationMessage(
         "Tu cita fue cancelada",
-        $"{context.StaffDisplayName} canceló tu cita del {FormatDateTime(context.StartsAtUtc)}.");
+        $"{context.StaffDisplayName} canceló tu cita del {FormatDateTime(context.StartsAtUtc)}.",
+        "/customer/appointments");
+
+    return _sender.SendToUsersAsync([customerUserId], message, cancellationToken);
+  }
+
+  public Task NotifyCustomerOfAppointmentConfirmationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
+  {
+    if (context.CustomerUserId is not { } customerUserId)
+    {
+      return Task.CompletedTask;
+    }
+
+    var message = new PushNotificationMessage(
+        "Tu cita fue confirmada",
+        $"{context.StaffDisplayName} confirmó tu cita del {FormatDateTime(context.StartsAtUtc)}.",
+        "/customer/appointments");
 
     return _sender.SendToUsersAsync([customerUserId], message, cancellationToken);
   }

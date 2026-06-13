@@ -27,6 +27,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<Banner> Banners => Set<Banner>();
     public DbSet<LandingContent> LandingContents => Set<LandingContent>();
     public DbSet<AppBrandingSettings> AppBrandingSettings => Set<AppBrandingSettings>();
+    public DbSet<BusinessScheduleDay> BusinessScheduleDays => Set<BusinessScheduleDay>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

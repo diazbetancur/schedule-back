@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Barbershop.Application.Notifications;
 using Barbershop.Infrastructure.Configuration;
 using Barbershop.Infrastructure.Persistence;
@@ -61,8 +62,9 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender
         body = message.Body,
         icon = NotificationIconPath,
         badge = NotificationBadgePath,
+        data = message.Url is not null ? new { url = message.Url } : (object?)null,
       },
-    });
+    }, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull });
 
     var staleSubscriptionIds = new List<Guid>();
 
@@ -86,6 +88,13 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender
             "Push delivery failed for subscription {SubscriptionId} with status {StatusCode}.",
             subscription.Id,
             webPushException.StatusCode);
+      }
+      catch (Exception ex) when (ex is not OperationCanceledException)
+      {
+        _logger.LogWarning(
+            ex,
+            "Unexpected error delivering push to subscription {SubscriptionId}.",
+            subscription.Id);
       }
     }
 

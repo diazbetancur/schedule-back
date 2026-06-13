@@ -247,6 +247,10 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     _dbContext.Appointments.Add(appointment);
     await _dbContext.SaveChangesAsync(cancellationToken);
 
+    await _notificationService.NotifyStaffOfNewAppointmentAsync(
+        new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, null, appointment.CustomerName, appointment.StartsAt),
+        cancellationToken);
+
     return Map(appointment);
   }
 
@@ -329,6 +333,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
   {
     var allowedStatuses = new[]
     {
+            AppointmentStatus.Confirmed,
             AppointmentStatus.Completed,
             AppointmentStatus.Cancelled,
             AppointmentStatus.NoShow
@@ -338,7 +343,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["status"] = ["Status must be Completed, Cancelled, or NoShow."]
+        ["status"] = ["Status must be Confirmed, Completed, Cancelled, or NoShow."]
       });
     }
 
@@ -361,6 +366,13 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     if (request.Status == AppointmentStatus.Cancelled)
     {
       await _notificationService.NotifyCustomerOfAppointmentCancellationAsync(
+          new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt),
+          cancellationToken);
+    }
+
+    if (request.Status == AppointmentStatus.Confirmed)
+    {
+      await _notificationService.NotifyCustomerOfAppointmentConfirmationAsync(
           new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt),
           cancellationToken);
     }

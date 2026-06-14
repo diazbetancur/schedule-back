@@ -52,23 +52,39 @@ internal sealed class AuthService : IAuthService
         await _identitySeedService.EnsureSeededAsync(cancellationToken);
 
         var normalizedEmail = NormalizeEmail(request.Email);
-        var emailExists = await _dbContext.Users.AnyAsync(user => user.NormalizedEmail == normalizedEmail, cancellationToken);
-        if (emailExists)
+        var existingUser = await _dbContext.Users
+            .Include(u => u.UserRoles)
+            .ThenInclude(ur => ur.Role)
+            .SingleOrDefaultAsync(u => u.NormalizedEmail == normalizedEmail, cancellationToken);
+
+        if (existingUser is not null && existingUser.IsActive)
         {
             throw new ConflictException("A user with this email already exists.");
         }
 
         var createdAt = _timeProvider.GetUtcNow().UtcDateTime;
         var passwordHash = _passwordHasher.HashPassword(new object(), request.Password);
-        var user = new User(request.FullName, request.Email, passwordHash, createdAt, request.PhoneNumber);
 
-        var customerRole = await _dbContext.Roles.SingleAsync(role => role.NormalizedName == RoleNames.Customer.ToUpperInvariant(), cancellationToken);
-        user.UserRoles.Add(new UserRole(user.Id, customerRole.Id, createdAt));
+        User user;
+        if (existingUser is not null)
+        {
+            // Inactive user: overwrite data and reactivate
+            existingUser.UpdateCustomerProfile(request.FullName, request.PhoneNumber, null, createdAt);
+            existingUser.SetPasswordHash(passwordHash, createdAt);
+            existingUser.Activate(createdAt);
+            user = existingUser;
+        }
+        else
+        {
+            user = new User(request.FullName, request.Email, passwordHash, createdAt, request.PhoneNumber);
+            var customerRole = await _dbContext.Roles.SingleAsync(role => role.NormalizedName == RoleNames.Customer.ToUpperInvariant(), cancellationToken);
+            user.UserRoles.Add(new UserRole(user.Id, customerRole.Id, createdAt));
+            _dbContext.Users.Add(user);
+        }
 
         var refreshToken = CreateRefreshToken(user.Id, createdAt);
         user.RefreshTokens.Add(refreshToken.Entity);
 
-        _dbContext.Users.Add(user);
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         return CreateTokenResponse(user, [RoleNames.Customer], refreshToken.RawToken, null);

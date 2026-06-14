@@ -152,7 +152,11 @@ public static class AuthEndpoints
     private static void SetRefreshTokenCookie(HttpContext context, string refreshToken, int refreshTokenDays)
     {
         var options = BuildRefreshCookieOptions(context);
+        // iOS WebKit (PWA standalone) requiere Expires explícito — Max-Age solo
+        // hace que la cookie se trate como de sesión y se borre al cerrar la app.
+        var expiry = DateTimeOffset.UtcNow.AddDays(refreshTokenDays);
         options.MaxAge = TimeSpan.FromDays(refreshTokenDays);
+        options.Expires = expiry;
         context.Response.Cookies.Append(RefreshTokenCookieName, refreshToken, options);
     }
 

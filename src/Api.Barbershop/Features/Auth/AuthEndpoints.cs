@@ -12,9 +12,12 @@ public static class AuthEndpoints
 {
     private const string RefreshTokenCookieName = "X-Refresh-Token";
 
-    // Response type for the API layer — does not expose the refresh token in the body.
-    // The refresh token lives exclusively in the HttpOnly cookie set by the server.
-    private sealed record AuthApiTokenResponse(string AccessToken, int ExpiresInSeconds, AuthUserResponse User);
+    // El refresh token va en cookie HttpOnly (todos los browsers) Y en el body
+    // (fallback para iOS standalone donde las cookies cross-origin son bloqueadas por ITP).
+    private sealed record AuthApiTokenResponse(string AccessToken, int ExpiresInSeconds, AuthUserResponse User, string RefreshToken);
+
+    // Cuerpo opcional en /auth/refresh — iOS standalone envía el token aquí cuando la cookie no llega.
+    private sealed record RefreshBodyRequest(string? RefreshToken);
 
     public static RouteGroupBuilder MapAuthEndpoints(this RouteGroupBuilder api)
     {
@@ -78,7 +81,7 @@ public static class AuthEndpoints
         var response = await authService.RegisterAsync(request, cancellationToken);
         SetRefreshTokenCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays);
         return Results.Json(
-            new AuthApiTokenResponse(response.AccessToken, response.ExpiresInSeconds, response.User),
+            new AuthApiTokenResponse(response.AccessToken, response.ExpiresInSeconds, response.User, response.RefreshToken),
             statusCode: StatusCodes.Status201Created);
     }
 
@@ -91,7 +94,7 @@ public static class AuthEndpoints
     {
         var response = await authService.LoginAsync(request, cancellationToken);
         SetRefreshTokenCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays);
-        return Results.Ok(new AuthApiTokenResponse(response.AccessToken, response.ExpiresInSeconds, response.User));
+        return Results.Ok(new AuthApiTokenResponse(response.AccessToken, response.ExpiresInSeconds, response.User, response.RefreshToken));
     }
 
     private static async Task<IResult> RefreshAsync(
@@ -100,7 +103,16 @@ public static class AuthEndpoints
         IOptions<JwtOptions> jwtOptions,
         CancellationToken cancellationToken)
     {
+        // Cookie-based (browsers estándar)
         var refreshToken = httpContext.Request.Cookies[RefreshTokenCookieName];
+
+        // Fallback body-based: iOS standalone PWA no envía cookies cross-origin confiablemente
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            var body = await httpContext.Request.ReadFromJsonAsync<RefreshBodyRequest>(cancellationToken);
+            refreshToken = body?.RefreshToken;
+        }
+
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
             return Results.Unauthorized();
@@ -108,7 +120,7 @@ public static class AuthEndpoints
 
         var response = await authService.RefreshAsync(new RefreshRequest(refreshToken), cancellationToken);
         SetRefreshTokenCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays);
-        return Results.Ok(new AuthApiTokenResponse(response.AccessToken, response.ExpiresInSeconds, response.User));
+        return Results.Ok(new AuthApiTokenResponse(response.AccessToken, response.ExpiresInSeconds, response.User, response.RefreshToken));
     }
 
     [Authorize]

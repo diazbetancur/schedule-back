@@ -22,6 +22,7 @@ using Barbershop.Application;
 using Barbershop.Infrastructure;
 using Barbershop.Infrastructure.Configuration;
 using Barbershop.Infrastructure.Persistence;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -40,6 +41,18 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
 }
+
+// Cuando el backend corre detrás de un proxy HTTPS (Vercel, Railway, Render, etc.)
+// el proxy termina TLS y reenvía HTTP internamente. Sin esto, IsHttps = false y el
+// cookie de refresh token se setea con SameSite=Lax, lo que impide que el browser
+// lo envíe en llamadas fetch() cross-origin → la sesión no persiste entre arranques.
+var forwardedHeadersOptions = new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+};
+forwardedHeadersOptions.KnownNetworks.Clear();
+forwardedHeadersOptions.KnownProxies.Clear();
+app.UseForwardedHeaders(forwardedHeadersOptions);
 
 app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseExceptionHandler();

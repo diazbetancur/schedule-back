@@ -102,12 +102,19 @@ app.MapGet("/", (HttpContext httpContext) => Results.Ok(new
 app.MapHealthChecks("/health")
    .WithName("GetHealth");
 
-api.MapGet("/health", (HttpContext httpContext) => Results.Ok(new
+// GET + HEAD: monitores de uptime (UptimeRobot, etc.) suelen pingear con HEAD.
+// Un MapGet por sí solo respondería 405 a HEAD.
+api.MapMethods("/health", new[] { "GET", "HEAD" }, (HttpContext httpContext) => Results.Ok(new
 {
     status = "Healthy",
     correlationId = httpContext.GetCorrelationId()
 }))
 .WithName("GetApiHealth");
+
+// Endpoint ultra liviano para keep-alive (Render free duerme tras inactividad).
+// No toca BD ni dependencias: solo confirma que el proceso responde.
+app.MapMethods("/ping", new[] { "GET", "HEAD" }, () => Results.Ok("OK"))
+   .WithName("GetPing");
 
 app.Run();
 

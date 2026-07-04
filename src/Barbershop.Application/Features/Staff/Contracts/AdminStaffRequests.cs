@@ -24,3 +24,7 @@ public sealed record AdminStaffUpdateRequest(
     bool? IsActive);
 
 public sealed record StaffStatusUpdateRequest(bool IsActive);
+
+public sealed record EnableProfessionalProfileRequest(
+    string DisplayName,
+    int? DefaultAppointmentDurationMinutes);

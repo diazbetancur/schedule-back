@@ -2,6 +2,7 @@ using Barbershop.Domain.Appointments;
 using Barbershop.Domain.Landing;
 using Barbershop.Domain.Media;
 using Barbershop.Domain.Scheduling;
+using Barbershop.Domain.Services;
 using Barbershop.Domain.Staff;
 using Barbershop.Domain.Users;
 using Microsoft.EntityFrameworkCore;
@@ -20,6 +21,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<StaffService> StaffServices => Set<StaffService>();
     public DbSet<StaffAvailabilityRule> StaffAvailabilityRules => Set<StaffAvailabilityRule>();
     public DbSet<StaffUnavailablePeriod> StaffUnavailablePeriods => Set<StaffUnavailablePeriod>();
+    public DbSet<Service> Services => Set<Service>();
     public DbSet<Appointment> Appointments => Set<Appointment>();
     public DbSet<Review> Reviews => Set<Review>();
     public DbSet<MediaAsset> MediaAssets => Set<MediaAsset>();

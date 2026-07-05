@@ -1,5 +1,6 @@
 using Barbershop.Application.Customer;
 using Barbershop.Application.Email;
+using Barbershop.Application.Finance.Admin;
 using Barbershop.Application.Landing;
 using Barbershop.Application.Appointments;
 using Barbershop.Application.Auth;
@@ -17,6 +18,7 @@ using Barbershop.Infrastructure.Availability;
 using Barbershop.Infrastructure.Configuration;
 using Barbershop.Infrastructure.Customer;
 using Barbershop.Infrastructure.Email;
+using Barbershop.Infrastructure.Finance;
 using Barbershop.Infrastructure.Identity;
 using Barbershop.Infrastructure.Landing;
 using Barbershop.Infrastructure.Media;
@@ -113,6 +115,7 @@ public static class DependencyInjection
         services.AddScoped<ICustomerProfileService, CustomerProfileService>();
         services.AddScoped<IAdminUsersService, AdminUsersService>();
         services.AddScoped<IAdminServicesService, ServiceManagementService>();
+        services.AddScoped<IAdminIncomeService, IncomeManagementService>();
 
         return services;
     }

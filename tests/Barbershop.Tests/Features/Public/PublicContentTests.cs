@@ -58,7 +58,7 @@ public sealed class PublicContentTests : IDisposable
     Assert.Null(landing.AboutTitle);
     Assert.Null(landing.AboutText);
     Assert.Null(landing.ContactPhone);
-    Assert.Null(landing.ContactEmail);
+    Assert.Null(landing.MapsUrl);
     Assert.Null(landing.Address);
   }
 

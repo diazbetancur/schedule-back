@@ -185,6 +185,56 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         return await MapAsync(staffProfile, cancellationToken);
     }
 
+    public async Task<StaffManagementView> EnableProfessionalForCurrentUserAsync(
+        Guid currentUserId,
+        EnableProfessionalProfileRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateEnableRequest(request);
+        await _identitySeedService.EnsureSeededAsync(cancellationToken);
+
+        var user = await _dbContext.Users
+            .Include(candidate => candidate.UserRoles)
+            .ThenInclude(userRole => userRole.Role)
+            .Include(candidate => candidate.StaffProfile)
+            .SingleOrDefaultAsync(candidate => candidate.Id == currentUserId, cancellationToken)
+            ?? throw new KeyNotFoundException("The current user was not found.");
+
+        if (user.StaffProfile is not null)
+        {
+            throw new ConflictException("The professional profile is already active.");
+        }
+
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        var durationMinutes = request.DefaultAppointmentDurationMinutes is null or 0
+            ? DefaultAppointmentDurationMinutes
+            : request.DefaultAppointmentDurationMinutes.Value;
+
+        var alreadyStaff = user.UserRoles.Any(assignment => assignment.Role.Name == RoleNames.Staff);
+        if (!alreadyStaff)
+        {
+            var staffRole = await _dbContext.Roles.SingleAsync(
+                role => role.NormalizedName == RoleNames.Staff.ToUpperInvariant(), cancellationToken);
+            user.UserRoles.Add(new UserRole(user.Id, staffRole.Id, utcNow));
+        }
+
+        var staffProfile = new StaffProfile(user.Id, request.DisplayName, durationMinutes, utcNow);
+        staffProfile.UpdateDetails(
+            request.DisplayName,
+            null,
+            user.PhoneNumber,
+            null,
+            null,
+            durationMinutes,
+            true,
+            utcNow);
+
+        _dbContext.StaffProfiles.Add(staffProfile);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+
+        return await MapAsync(staffProfile, cancellationToken);
+    }
+
     public async Task<StaffManagementView> GetCurrentAsync(Guid currentUserId, CancellationToken cancellationToken = default)
     {
         var staffProfile = await LoadStaffProfileByUserIdAsync(currentUserId, cancellationToken);
@@ -488,6 +538,21 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
             "YoutubeUrl must be 2048 characters or fewer.");
         AddErrorIf(errors, "xUrl", !string.IsNullOrWhiteSpace(request.XUrl) && request.XUrl.Trim().Length > 2048,
             "XUrl must be 2048 characters or fewer.");
+
+        ThrowIfAnyErrors(errors);
+    }
+
+    private static void ValidateEnableRequest(EnableProfessionalProfileRequest request)
+    {
+        var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+
+        AddErrorIf(errors, "displayName",
+            string.IsNullOrWhiteSpace(request.DisplayName) || request.DisplayName.Trim().Length is < 2 or > 120,
+            "DisplayName must be between 2 and 120 characters.");
+        AddErrorIf(errors, "defaultAppointmentDurationMinutes",
+            request.DefaultAppointmentDurationMinutes is not null and not 0 &&
+            (request.DefaultAppointmentDurationMinutes < MinimumAppointmentDurationMinutes || request.DefaultAppointmentDurationMinutes > MaximumAppointmentDurationMinutes),
+            $"DefaultAppointmentDurationMinutes must be between {MinimumAppointmentDurationMinutes} and {MaximumAppointmentDurationMinutes}.");
 
         ThrowIfAnyErrors(errors);
     }

@@ -11,4 +11,9 @@ public interface IAdminStaffService
     Task<StaffManagementView> UpdateAsync(Guid staffProfileId, AdminStaffUpdateRequest request, CancellationToken cancellationToken = default);
 
     Task<StaffManagementView> UpdateStatusAsync(Guid staffProfileId, StaffStatusUpdateRequest request, CancellationToken cancellationToken = default);
+
+    Task<StaffManagementView> EnableProfessionalForCurrentUserAsync(
+        Guid currentUserId,
+        EnableProfessionalProfileRequest request,
+        CancellationToken cancellationToken = default);
 }

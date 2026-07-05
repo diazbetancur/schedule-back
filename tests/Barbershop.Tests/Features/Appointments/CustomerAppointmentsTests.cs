@@ -1,6 +1,7 @@
 using Barbershop.Application.Appointments;
 using Barbershop.Application.Availability;
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Notifications;
 using Barbershop.Application.Staff;
 using Barbershop.Application.Staff.Admin;
 using Barbershop.Domain.Appointments;
@@ -58,7 +59,7 @@ public sealed class CustomerAppointmentsTests : IDisposable
             null!);
 
         var availabilityManagementService = new AvailabilityManagementService(_dbContext, timeProvider);
-        var appointmentManagementService = new AppointmentManagementService(_dbContext, timeProvider);
+        var appointmentManagementService = new AppointmentManagementService(_dbContext, timeProvider, new NoOpAppointmentNotificationService());
 
         _adminStaffService = staffManagementService;
         _adminStaffAvailabilityService = availabilityManagementService;
@@ -267,5 +268,18 @@ public sealed class CustomerAppointmentsTests : IDisposable
         public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
 
         public IFileProvider ContentRootFileProvider { get; set; } = new PhysicalFileProvider(AppContext.BaseDirectory);
+    }
+
+    private sealed class NoOpAppointmentNotificationService : IAppointmentNotificationService
+    {
+        public Task NotifyStaffOfNewAppointmentAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task NotifyStaffOfCustomerCancellationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task NotifyCustomerOfAppointmentUpdateAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task NotifyCustomerOfAppointmentCancellationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task NotifyCustomerOfAppointmentConfirmationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 }

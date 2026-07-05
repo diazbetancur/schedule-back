@@ -19,6 +19,7 @@ public sealed class StaffManagementServiceTests : IDisposable
   private readonly AppDbContext _dbContext;
   private readonly IAdminStaffService _adminStaffService;
   private readonly IStaffProfileService _staffProfileService;
+  private readonly IdentitySeedService _seedService;
 
   public StaffManagementServiceTests()
   {
@@ -37,6 +38,7 @@ public sealed class StaffManagementServiceTests : IDisposable
         Options.Create(new SeedAdminOptions()),
         hostEnvironment,
         timeProvider);
+    _seedService = seedService;
 
     var staffManagementService = new StaffManagementService(
         _dbContext,
@@ -221,6 +223,44 @@ public sealed class StaffManagementServiceTests : IDisposable
     Assert.Contains("defaultAppointmentDurationMinutes", exception.Errors.Keys);
   }
 
+  [Fact]
+  public async Task EnableProfessionalForCurrentUserAsync_AddsStaffRoleAndActiveProfile()
+  {
+    var adminUserId = await CreateAdminUserAsync("owner@example.com", "Owner Admin");
+
+    var response = await _adminStaffService.EnableProfessionalForCurrentUserAsync(
+        adminUserId,
+        new EnableProfessionalProfileRequest("Owner", null));
+
+    Assert.Equal(adminUserId, response.UserId);
+    Assert.Equal("Owner", response.DisplayName);
+    Assert.Equal(30, response.DefaultAppointmentDurationMinutes);
+    Assert.True(response.IsActive);
+
+    var user = await _dbContext.Users
+        .Include(candidate => candidate.UserRoles)
+        .ThenInclude(userRole => userRole.Role)
+        .SingleAsync(candidate => candidate.Id == adminUserId);
+
+    Assert.Contains(user.UserRoles, assignment => assignment.Role.Name == RoleNames.Staff);
+    Assert.Contains(user.UserRoles, assignment => assignment.Role.Name == RoleNames.Admin);
+    Assert.Single(await _dbContext.StaffProfiles.Where(profile => profile.UserId == adminUserId).ToListAsync());
+  }
+
+  [Fact]
+  public async Task EnableProfessionalForCurrentUserAsync_RejectsWhenAlreadyActive()
+  {
+    var adminUserId = await CreateAdminUserAsync("dup@example.com", "Dup Admin");
+    await _adminStaffService.EnableProfessionalForCurrentUserAsync(
+        adminUserId, new EnableProfessionalProfileRequest("Dup", null));
+
+    var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+        _adminStaffService.EnableProfessionalForCurrentUserAsync(
+            adminUserId, new EnableProfessionalProfileRequest("Dup", null)));
+
+    Assert.Equal("The professional profile is already active.", exception.Message);
+  }
+
   private static AdminStaffCreateRequest CreateRequest(string email, string fullName, string displayName)
       => new(
           fullName,
@@ -236,6 +276,21 @@ public sealed class StaffManagementServiceTests : IDisposable
 
   private async Task<Barbershop.Application.Staff.StaffManagementView> CreateStaffAsync(string email, string fullName, string displayName)
       => await _adminStaffService.CreateAsync(CreateRequest(email, fullName, displayName));
+
+  private async Task<Guid> CreateAdminUserAsync(string email, string fullName)
+  {
+    await _seedService.EnsureSeededAsync();
+
+    var passwordHasher = new PasswordHasher<object>();
+    var utcNow = DateTime.UtcNow;
+    var user = new User(fullName, email, passwordHasher.HashPassword(new object(), "Secret123!"), utcNow, null);
+    var adminRole = await _dbContext.Roles.SingleAsync(role => role.NormalizedName == RoleNames.Admin.ToUpperInvariant());
+    user.UserRoles.Add(new UserRole(user.Id, adminRole.Id, utcNow));
+
+    _dbContext.Users.Add(user);
+    await _dbContext.SaveChangesAsync();
+    return user.Id;
+  }
 
   private sealed class TestHostEnvironment : IHostEnvironment
   {

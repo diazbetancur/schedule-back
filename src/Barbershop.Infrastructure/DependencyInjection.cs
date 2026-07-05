@@ -117,6 +117,7 @@ public static class DependencyInjection
         services.AddScoped<IAdminServicesService, ServiceManagementService>();
         services.AddScoped<IAdminIncomeService, IncomeManagementService>();
         services.AddScoped<IAdminFixedExpensesService, FixedExpenseManagementService>();
+        services.AddScoped<IAdminExpensesService, ExpenseManagementService>();
 
         return services;
     }

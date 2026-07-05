@@ -1,4 +1,5 @@
 using Barbershop.Application.Auth;
+using Barbershop.Application.Email;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Configuration;
 using Barbershop.Infrastructure.Identity;
@@ -38,6 +39,7 @@ public sealed class AuthServiceTests : IDisposable
             _dbContext,
             passwordHasher,
             seedService,
+            new NoOpEmailSender(),
             Options.Create(new JwtOptions
             {
                 Enabled = true,
@@ -48,6 +50,7 @@ public sealed class AuthServiceTests : IDisposable
                 RefreshTokenDays = 7,
                 RequireHttpsMetadata = false
             }),
+            Options.Create(new AppOptions()),
             timeProvider);
     }
 
@@ -160,5 +163,10 @@ public sealed class AuthServiceTests : IDisposable
         public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
 
         public IFileProvider ContentRootFileProvider { get; set; } = new PhysicalFileProvider(AppContext.BaseDirectory);
+    }
+
+    private sealed class NoOpEmailSender : IEmailSender
+    {
+        public Task SendAsync(EmailMessage message, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 }

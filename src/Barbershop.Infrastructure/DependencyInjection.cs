@@ -8,6 +8,7 @@ using Barbershop.Application.Media;
 using Barbershop.Application.Notifications;
 using Barbershop.Application.PublicContent;
 using Barbershop.Application.Reviews;
+using Barbershop.Application.Services.Admin;
 using Barbershop.Application.Staff.Admin;
 using Barbershop.Application.Staff.SelfService;
 using Barbershop.Application.Storage;
@@ -22,6 +23,7 @@ using Barbershop.Infrastructure.Media;
 using Barbershop.Infrastructure.Notifications;
 using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.Reviews;
+using Barbershop.Infrastructure.Services;
 using Barbershop.Infrastructure.Staff;
 using Barbershop.Infrastructure.Users;
 using Barbershop.Application.Users.Admin;
@@ -110,6 +112,7 @@ public static class DependencyInjection
         services.AddScoped<IFileStorageService, R2FileStorageService>();
         services.AddScoped<ICustomerProfileService, CustomerProfileService>();
         services.AddScoped<IAdminUsersService, AdminUsersService>();
+        services.AddScoped<IAdminServicesService, ServiceManagementService>();
 
         return services;
     }

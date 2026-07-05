@@ -67,6 +67,29 @@ public sealed class ServiceManagementServiceTests : IDisposable
   }
 
   [Fact]
+  public async Task UpdateAsync_KeepingSameName_Succeeds()
+  {
+    var created = await _service.CreateAsync(new ServiceCreateRequest("Corte", 20000));
+
+    var updated = await _service.UpdateAsync(created.Id, new ServiceUpdateRequest("Corte", 25000));
+
+    Assert.Equal("Corte", updated.Name);
+    Assert.Equal(25000, updated.BasePrice);
+  }
+
+  [Fact]
+  public async Task UpdateAsync_ToAnotherServicesName_ThrowsConflict()
+  {
+    await _service.CreateAsync(new ServiceCreateRequest("Corte", 20000));
+    var barba = await _service.CreateAsync(new ServiceCreateRequest("Barba", 10000));
+
+    var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+        _service.UpdateAsync(barba.Id, new ServiceUpdateRequest("corte", 15000)));
+
+    Assert.Equal("A service with this name already exists.", exception.Message);
+  }
+
+  [Fact]
   public async Task UpdateStatusAsync_Deactivates_ButKeepsInList()
   {
     var created = await _service.CreateAsync(new ServiceCreateRequest("Tinte", 40000));

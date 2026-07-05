@@ -24,6 +24,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<StaffUnavailablePeriod> StaffUnavailablePeriods => Set<StaffUnavailablePeriod>();
     public DbSet<Service> Services => Set<Service>();
     public DbSet<IncomeEntry> IncomeEntries => Set<IncomeEntry>();
+    public DbSet<FixedExpense> FixedExpenses => Set<FixedExpense>();
+    public DbSet<ExpenseEntry> ExpenseEntries => Set<ExpenseEntry>();
     public DbSet<Appointment> Appointments => Set<Appointment>();
     public DbSet<Review> Reviews => Set<Review>();
     public DbSet<MediaAsset> MediaAssets => Set<MediaAsset>();

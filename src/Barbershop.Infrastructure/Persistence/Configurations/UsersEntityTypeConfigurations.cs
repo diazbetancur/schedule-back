@@ -28,6 +28,8 @@ internal sealed class UserConfiguration : IEntityTypeConfiguration<User>
     builder.Property(x => x.IsActive).HasDefaultValue(true);
     builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
     builder.Property(x => x.UpdatedAt).HasColumnType("timestamp with time zone");
+    builder.Property(x => x.FailedLoginCount).HasColumnType("integer").HasDefaultValue(0).IsRequired();
+    builder.Property(x => x.LockedUntil).HasColumnType("timestamp with time zone");
 
     builder.HasIndex(x => x.NormalizedEmail).IsUnique();
 

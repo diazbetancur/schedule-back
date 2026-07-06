@@ -3,6 +3,7 @@ using System;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Barbershop.Infrastructure.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260705185603_AddServiceCatalog")]
+    partial class AddServiceCatalog
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -116,150 +119,6 @@ namespace Barbershop.Infrastructure.Migrations
                     b.ToTable("reviews", "public", t =>
                         {
                             t.HasCheckConstraint("ck_reviews_stars_range", "\"Stars\" BETWEEN 1 AND 5");
-                        });
-                });
-
-            modelBuilder.Entity("Barbershop.Domain.Finance.ExpenseEntry", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("Amount")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("CreatedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid?>("FixedExpenseId")
-                        .HasColumnType("uuid");
-
-                    b.Property<bool>("IsDeleted")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false);
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<DateOnly>("OccurredOn")
-                        .HasColumnType("date");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("FixedExpenseId");
-
-                    b.HasIndex("OccurredOn");
-
-                    b.ToTable("expense_entries", "public", t =>
-                        {
-                            t.HasCheckConstraint("ck_expense_entries_amount_non_negative", "\"Amount\" >= 0");
-                        });
-                });
-
-            modelBuilder.Entity("Barbershop.Domain.Finance.FixedExpense", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int?>("DefaultAmount")
-                        .HasColumnType("integer");
-
-                    b.Property<bool>("IsActive")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(true);
-
-                    b.Property<bool>("IsDeleted")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false);
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Name")
-                        .IsUnique()
-                        .HasFilter("\"IsDeleted\" = false");
-
-                    b.ToTable("fixed_expenses", "public", t =>
-                        {
-                            t.HasCheckConstraint("ck_fixed_expenses_default_amount_non_negative", "\"DefaultAmount\" IS NULL OR \"DefaultAmount\" >= 0");
-                        });
-                });
-
-            modelBuilder.Entity("Barbershop.Domain.Finance.IncomeEntry", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("Amount")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("BasePriceSnapshot")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("CreatedByUserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<bool>("IsDeleted")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(false);
-
-                    b.Property<bool>("IsPromo")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateOnly>("OccurredOn")
-                        .HasColumnType("date");
-
-                    b.Property<Guid>("ServiceId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("ServiceNameSnapshot")
-                        .IsRequired()
-                        .HasMaxLength(120)
-                        .HasColumnType("character varying(120)");
-
-                    b.Property<Guid>("StaffProfileId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("OccurredOn");
-
-                    b.HasIndex("ServiceId");
-
-                    b.HasIndex("StaffProfileId");
-
-                    b.ToTable("income_entries", "public", t =>
-                        {
-                            t.HasCheckConstraint("ck_income_entries_amount_non_negative", "\"Amount\" >= 0");
-
-                            t.HasCheckConstraint("ck_income_entries_base_price_non_negative", "\"BasePriceSnapshot\" >= 0");
                         });
                 });
 
@@ -1004,29 +863,6 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Navigation("Appointment");
 
                     b.Navigation("CustomerUser");
-                });
-
-            modelBuilder.Entity("Barbershop.Domain.Finance.ExpenseEntry", b =>
-                {
-                    b.HasOne("Barbershop.Domain.Finance.FixedExpense", null)
-                        .WithMany()
-                        .HasForeignKey("FixedExpenseId")
-                        .OnDelete(DeleteBehavior.Restrict);
-                });
-
-            modelBuilder.Entity("Barbershop.Domain.Finance.IncomeEntry", b =>
-                {
-                    b.HasOne("Barbershop.Domain.Services.Service", null)
-                        .WithMany()
-                        .HasForeignKey("ServiceId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("Barbershop.Domain.Staff.StaffProfile", null)
-                        .WithMany()
-                        .HasForeignKey("StaffProfileId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Landing.AppBrandingSettings", b =>

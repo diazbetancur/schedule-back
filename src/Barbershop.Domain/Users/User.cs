@@ -33,6 +33,8 @@ public sealed class User
   public bool IsActive { get; private set; }
   public DateTime CreatedAt { get; private set; }
   public DateTime? UpdatedAt { get; private set; }
+  public int FailedLoginCount { get; private set; }
+  public DateTime? LockedUntil { get; private set; }
   public StaffProfile? StaffProfile { get; private set; }
   public ICollection<UserRole> UserRoles { get; } = [];
   public ICollection<RefreshToken> RefreshTokens { get; } = [];
@@ -102,5 +104,23 @@ public sealed class User
   {
     IsActive = false;
     UpdatedAt = DomainValidation.EnsureUtc(updatedAt, nameof(updatedAt));
+  }
+
+  public bool IsLockedOut(DateTime utcNow) => LockedUntil.HasValue && LockedUntil.Value > utcNow;
+
+  public void RegisterFailedLogin(DateTime utcNow, int threshold, TimeSpan lockoutDuration)
+  {
+    FailedLoginCount++;
+    if (FailedLoginCount >= threshold)
+    {
+      LockedUntil = utcNow + lockoutDuration;
+      FailedLoginCount = 0;
+    }
+  }
+
+  public void RegisterSuccessfulLogin(DateTime utcNow)
+  {
+    FailedLoginCount = 0;
+    LockedUntil = null;
   }
 }

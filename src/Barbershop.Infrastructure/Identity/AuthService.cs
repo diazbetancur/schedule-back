@@ -18,6 +18,9 @@ namespace Barbershop.Infrastructure.Identity;
 
 internal sealed class AuthService : IAuthService
 {
+    private const int MaxFailedLoginAttempts = 5;
+    private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
+
     private readonly AppDbContext _dbContext;
     private readonly IPasswordHasher<object> _passwordHasher;
     private readonly IIdentitySeedService _identitySeedService;
@@ -108,10 +111,24 @@ internal sealed class AuthService : IAuthService
             throw new UnauthorizedException("Invalid email or password.");
         }
 
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        if (user.IsLockedOut(now))
+        {
+            throw new TooManyRequestsException("Demasiados intentos fallidos. Intenta de nuevo más tarde.");
+        }
+
         var verification = _passwordHasher.VerifyHashedPassword(new object(), user.PasswordHash, request.Password);
         if (verification == PasswordVerificationResult.Failed)
         {
+            user.RegisterFailedLogin(now, MaxFailedLoginAttempts, LockoutDuration);
+            await _dbContext.SaveChangesAsync(cancellationToken);
             throw new UnauthorizedException("Invalid email or password.");
+        }
+
+        if (user.FailedLoginCount > 0 || user.LockedUntil is not null)
+        {
+            user.RegisterSuccessfulLogin(now);
+            await _dbContext.SaveChangesAsync(cancellationToken);
         }
 
         var issuedAt = _timeProvider.GetUtcNow().UtcDateTime;

@@ -61,6 +61,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
         ArgumentException => (StatusCodes.Status400BadRequest, "Invalid request", "invalid_request"),
         ConflictException => (StatusCodes.Status409Conflict, "Conflict", "conflict"),
         UnauthorizedException => (StatusCodes.Status401Unauthorized, "Unauthorized", "unauthorized"),
+        TooManyRequestsException => (StatusCodes.Status429TooManyRequests, "Too many requests", "too_many_requests"),
         NotFoundException => (StatusCodes.Status404NotFound, "Resource not found", "resource_not_found"),
         KeyNotFoundException => (StatusCodes.Status404NotFound, "Resource not found", "resource_not_found"),
         UnauthorizedAccessException => (StatusCodes.Status403Forbidden, "Forbidden", "forbidden"),

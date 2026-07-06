@@ -26,7 +26,7 @@ internal sealed class ExpenseManagementService : IAdminExpensesService
     public async Task<IReadOnlyList<ExpenseEntryView>> GetAsync(int? year, int? month, CancellationToken cancellationToken = default)
     {
         var today = Today();
-        var targetYear = year ?? today.Year;
+        var targetYear = year is >= 1 and <= 9999 ? year.Value : today.Year;
         var targetMonth = month is >= 1 and <= 12 ? month.Value : today.Month;
 
         var first = new DateOnly(targetYear, targetMonth, 1);

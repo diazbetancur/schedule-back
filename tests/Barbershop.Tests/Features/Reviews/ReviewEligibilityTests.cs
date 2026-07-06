@@ -1,6 +1,7 @@
 using Barbershop.Application.Appointments;
 using Barbershop.Application.Availability;
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Notifications;
 using Barbershop.Application.Reviews;
 using Barbershop.Application.Staff;
 using Barbershop.Application.Staff.Admin;
@@ -62,7 +63,7 @@ public sealed class ReviewEligibilityTests : IDisposable
         null!);
 
     var availabilityManagementService = new AvailabilityManagementService(_dbContext, timeProvider);
-    var appointmentManagementService = new AppointmentManagementService(_dbContext, timeProvider);
+    var appointmentManagementService = new AppointmentManagementService(_dbContext, timeProvider, new NoOpAppointmentNotificationService());
     var reviewManagementService = new ReviewManagementService(_dbContext, timeProvider);
 
     _adminStaffService = staffManagementService;
@@ -311,5 +312,18 @@ public sealed class ReviewEligibilityTests : IDisposable
     public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
 
     public IFileProvider ContentRootFileProvider { get; set; } = new PhysicalFileProvider(AppContext.BaseDirectory);
+  }
+
+  private sealed class NoOpAppointmentNotificationService : IAppointmentNotificationService
+  {
+    public Task NotifyStaffOfNewAppointmentAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task NotifyStaffOfCustomerCancellationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task NotifyCustomerOfAppointmentUpdateAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task NotifyCustomerOfAppointmentCancellationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    public Task NotifyCustomerOfAppointmentConfirmationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
   }
 }

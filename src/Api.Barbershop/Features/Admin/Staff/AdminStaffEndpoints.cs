@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Staff;
 using Barbershop.Application.Staff.Admin;
@@ -49,6 +51,14 @@ public static class AdminStaffEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
+        adminStaff.MapPost("/me", EnableProfessionalForCurrentUserAsync)
+            .WithName("EnableAdminProfessionalProfile")
+            .Produces<StaffManagementView>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
+
         return api;
     }
 
@@ -69,4 +79,11 @@ public static class AdminStaffEndpoints
 
     private static Task<StaffManagementView> UpdateStatusAsync(Guid staffId, StaffStatusUpdateRequest request, IAdminStaffService service, CancellationToken cancellationToken)
         => service.UpdateStatusAsync(staffId, request, cancellationToken);
+
+    private static Task<StaffManagementView> EnableProfessionalForCurrentUserAsync(
+        EnableProfessionalProfileRequest request,
+        ClaimsPrincipal user,
+        IAdminStaffService service,
+        CancellationToken cancellationToken)
+        => service.EnableProfessionalForCurrentUserAsync(user.GetRequiredUserId(), request, cancellationToken);
 }

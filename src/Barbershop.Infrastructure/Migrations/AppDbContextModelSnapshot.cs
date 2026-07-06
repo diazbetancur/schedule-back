@@ -119,6 +119,150 @@ namespace Barbershop.Infrastructure.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Finance.ExpenseEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Amount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("FixedExpenseId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsDeleted")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<DateOnly>("OccurredOn")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FixedExpenseId");
+
+                    b.HasIndex("OccurredOn");
+
+                    b.ToTable("expense_entries", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_expense_entries_amount_non_negative", "\"Amount\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Finance.FixedExpense", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("DefaultAmount")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("IsDeleted")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique()
+                        .HasFilter("\"IsDeleted\" = false");
+
+                    b.ToTable("fixed_expenses", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_fixed_expenses_default_amount_non_negative", "\"DefaultAmount\" IS NULL OR \"DefaultAmount\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Finance.IncomeEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Amount")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("BasePriceSnapshot")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsDeleted")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<bool>("IsPromo")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateOnly>("OccurredOn")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("ServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ServiceNameSnapshot")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<Guid>("StaffProfileId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OccurredOn");
+
+                    b.HasIndex("ServiceId");
+
+                    b.HasIndex("StaffProfileId");
+
+                    b.ToTable("income_entries", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_income_entries_amount_non_negative", "\"Amount\" >= 0");
+
+                            t.HasCheckConstraint("ck_income_entries_base_price_non_negative", "\"BasePriceSnapshot\" >= 0");
+                        });
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Landing.AppBrandingSettings", b =>
                 {
                     b.Property<Guid>("Id")
@@ -428,6 +572,47 @@ namespace Barbershop.Infrastructure.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Services.Service", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("BasePrice")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("IsDeleted")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique()
+                        .HasFilter("\"IsDeleted\" = false");
+
+                    b.ToTable("services", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_services_base_price_non_negative", "\"BasePrice\" >= 0");
+                        });
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Staff.StaffProfile", b =>
                 {
                     b.Property<Guid>("Id")
@@ -715,6 +900,11 @@ namespace Barbershop.Infrastructure.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
+                    b.Property<int>("FailedLoginCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
                     b.Property<string>("FullName")
                         .IsRequired()
                         .HasMaxLength(120)
@@ -724,6 +914,9 @@ namespace Barbershop.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
                         .HasDefaultValue(true);
+
+                    b.Property<DateTime?>("LockedUntil")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("NormalizedEmail")
                         .IsRequired()
@@ -819,6 +1012,29 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Navigation("Appointment");
 
                     b.Navigation("CustomerUser");
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Finance.ExpenseEntry", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Finance.FixedExpense", null)
+                        .WithMany()
+                        .HasForeignKey("FixedExpenseId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Finance.IncomeEntry", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Services.Service", null)
+                        .WithMany()
+                        .HasForeignKey("ServiceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Staff.StaffProfile", null)
+                        .WithMany()
+                        .HasForeignKey("StaffProfileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Landing.AppBrandingSettings", b =>

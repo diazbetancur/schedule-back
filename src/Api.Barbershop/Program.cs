@@ -81,6 +81,7 @@ api.MapAdminServicesEndpoints();
 api.MapAdminIncomeEndpoints();
 api.MapAdminFixedExpensesEndpoints();
 api.MapAdminExpensesEndpoints();
+api.MapAdminReportsEndpoints();
 api.MapAdminUsersEndpoints();
 api.MapAdminStaffAvailabilityEndpoints();
 api.MapAdminAppointmentsEndpoints();

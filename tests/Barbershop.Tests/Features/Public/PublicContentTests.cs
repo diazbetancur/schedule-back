@@ -154,6 +154,35 @@ public sealed class PublicContentTests : IDisposable
   }
 
   [Fact]
+  public async Task GetPublicTickerItemsAsync_ReturnsOnlyActiveItems_OrderedBySortOrder()
+  {
+    var now = CurrentUtc.UtcDateTime;
+
+    var active1 = CreateTickerItem("Sin fila · Con cita", sortOrder: 1, isActive: true, createdAt: now.AddMinutes(-10));
+    var active2 = CreateTickerItem("El corte es oficio", sortOrder: 2, isActive: true, createdAt: now.AddMinutes(-5));
+    var inactive = CreateTickerItem("Frase archivada", sortOrder: 0, isActive: false, createdAt: now.AddMinutes(-20));
+
+    _dbContext.TickerItems.AddRange(active1, active2, inactive);
+    await _dbContext.SaveChangesAsync();
+
+    var items = await _publicContentService.GetPublicTickerItemsAsync();
+
+    Assert.Equal(2, items.Count);
+    Assert.Collection(
+        items,
+        first => Assert.Equal(active1.Id, first.Id),
+        second => Assert.Equal(active2.Id, second.Id));
+  }
+
+  [Fact]
+  public async Task GetPublicTickerItemsAsync_ReturnsEmptyList_WhenNoneActive()
+  {
+    var items = await _publicContentService.GetPublicTickerItemsAsync();
+
+    Assert.Empty(items);
+  }
+
+  [Fact]
   public async Task GetPublicStaffAsync_ReturnsOnlyActiveStaffProfiles()
   {
     var visibleStaff = await CreateStaffProfileAsync("Visible Barber", isStaffActive: true, isUserActive: true);
@@ -394,6 +423,13 @@ public sealed class PublicContentTests : IDisposable
     var banner = new Banner(title, sortOrder, createdAt, subtitle, imageMediaAssetId, linkUrl);
     banner.Update(title, subtitle, imageMediaAssetId, linkUrl, sortOrder, isActive, startsAtUtc, endsAtUtc, createdAt.AddMinutes(1));
     return banner;
+  }
+
+  private static TickerItem CreateTickerItem(string text, int sortOrder, bool isActive, DateTime createdAt)
+  {
+    var item = new TickerItem(text, sortOrder, createdAt);
+    item.Update(text, sortOrder, isActive, createdAt.AddMinutes(1));
+    return item;
   }
 
   private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider

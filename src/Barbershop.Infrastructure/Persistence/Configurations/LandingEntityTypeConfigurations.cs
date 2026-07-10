@@ -99,3 +99,21 @@ internal sealed class AppBrandingSettingsConfiguration : IEntityTypeConfiguratio
         .OnDelete(DeleteBehavior.SetNull);
   }
 }
+
+internal sealed class TickerItemConfiguration : IEntityTypeConfiguration<TickerItem>
+{
+  public void Configure(EntityTypeBuilder<TickerItem> builder)
+  {
+    builder.ToTable("ticker_items");
+
+    builder.HasKey(x => x.Id);
+
+    builder.Property(x => x.Id).ValueGeneratedNever();
+    builder.Property(x => x.Text).HasMaxLength(120).IsRequired();
+    builder.Property(x => x.IsActive).HasDefaultValue(true);
+    builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
+    builder.Property(x => x.UpdatedAt).HasColumnType("timestamp with time zone");
+
+    builder.HasIndex(x => new { x.IsActive, x.SortOrder });
+  }
+}

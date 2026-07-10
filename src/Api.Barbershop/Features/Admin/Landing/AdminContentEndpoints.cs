@@ -60,6 +60,41 @@ public static class AdminContentEndpoints
         .ProducesProblem(StatusCodes.Status401Unauthorized)
         .ProducesProblem(StatusCodes.Status403Forbidden);
 
+    content.MapGet("/ticker-items", GetTickerItemsAsync)
+        .WithName("GetAdminTickerItems")
+        .Produces<IReadOnlyList<TickerItemResponse>>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden);
+
+    content.MapGet("/ticker-items/{tickerItemId:guid}", GetTickerItemByIdAsync)
+        .WithName("GetAdminTickerItemById")
+        .Produces<TickerItemResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status404NotFound)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden);
+
+    content.MapPost("/ticker-items", CreateTickerItemAsync)
+        .WithName("CreateAdminTickerItem")
+        .Produces<TickerItemResponse>(StatusCodes.Status201Created)
+        .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden);
+
+    content.MapPut("/ticker-items/{tickerItemId:guid}", UpdateTickerItemAsync)
+        .WithName("UpdateAdminTickerItem")
+        .Produces<TickerItemResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status404NotFound)
+        .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden);
+
+    content.MapDelete("/ticker-items/{tickerItemId:guid}", DeleteTickerItemAsync)
+        .WithName("DeleteAdminTickerItem")
+        .Produces(StatusCodes.Status204NoContent)
+        .ProducesProblem(StatusCodes.Status404NotFound)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden);
+
     content.MapGet("/branding", GetBrandingAsync)
         .WithName("GetAdminBranding")
         .Produces<BrandingSettingsResponse>(StatusCodes.Status200OK)
@@ -120,6 +155,31 @@ public static class AdminContentEndpoints
   private static async Task<IResult> DeleteBannerAsync(Guid bannerId, IAdminContentService service, CancellationToken cancellationToken)
   {
     await service.DeleteBannerAsync(bannerId, cancellationToken);
+    return Results.NoContent();
+  }
+
+  private static Task<IReadOnlyList<TickerItemResponse>> GetTickerItemsAsync(IAdminContentService service, CancellationToken cancellationToken)
+      => service.GetTickerItemsAsync(cancellationToken);
+
+  private static Task<TickerItemResponse> GetTickerItemByIdAsync(Guid tickerItemId, IAdminContentService service, CancellationToken cancellationToken)
+      => service.GetTickerItemByIdAsync(tickerItemId, cancellationToken);
+
+  private static async Task<IResult> CreateTickerItemAsync(CreateTickerItemRequest request, IAdminContentService service, CancellationToken cancellationToken)
+  {
+    var response = await service.CreateTickerItemAsync(request, cancellationToken);
+    return Results.Created($"/api/v1/admin/content/ticker-items/{response.Id}", response);
+  }
+
+  private static Task<TickerItemResponse> UpdateTickerItemAsync(
+      Guid tickerItemId,
+      UpdateTickerItemRequest request,
+      IAdminContentService service,
+      CancellationToken cancellationToken)
+      => service.UpdateTickerItemAsync(tickerItemId, request, cancellationToken);
+
+  private static async Task<IResult> DeleteTickerItemAsync(Guid tickerItemId, IAdminContentService service, CancellationToken cancellationToken)
+  {
+    await service.DeleteTickerItemAsync(tickerItemId, cancellationToken);
     return Results.NoContent();
   }
 

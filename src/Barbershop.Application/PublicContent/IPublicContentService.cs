@@ -6,6 +6,8 @@ public interface IPublicContentService
 
   Task<IReadOnlyList<BannerResponse>> GetPublicBannersAsync(CancellationToken cancellationToken = default);
 
+  Task<IReadOnlyList<TickerItemResponse>> GetPublicTickerItemsAsync(CancellationToken cancellationToken = default);
+
   Task<BrandingSettingsResponse> GetPublicBrandingAsync(CancellationToken cancellationToken = default);
 
   Task<BusinessScheduleResponse> GetPublicBusinessScheduleAsync(CancellationToken cancellationToken = default);

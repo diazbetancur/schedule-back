@@ -17,6 +17,10 @@ public static class PublicContentEndpoints
         .WithName("GetPublicBanners")
         .Produces<IReadOnlyList<BannerResponse>>(StatusCodes.Status200OK);
 
+    content.MapGet("/ticker-items", GetTickerItemsAsync)
+        .WithName("GetPublicTickerItems")
+        .Produces<IReadOnlyList<TickerItemResponse>>(StatusCodes.Status200OK);
+
     content.MapGet("/branding", GetBrandingAsync)
         .WithName("GetPublicBranding")
         .Produces<BrandingSettingsResponse>(StatusCodes.Status200OK);
@@ -33,6 +37,9 @@ public static class PublicContentEndpoints
 
   private static Task<IReadOnlyList<BannerResponse>> GetBannersAsync(IPublicContentService service, CancellationToken cancellationToken)
       => service.GetPublicBannersAsync(cancellationToken);
+
+  private static Task<IReadOnlyList<TickerItemResponse>> GetTickerItemsAsync(IPublicContentService service, CancellationToken cancellationToken)
+      => service.GetPublicTickerItemsAsync(cancellationToken);
 
   private static Task<BrandingSettingsResponse> GetBrandingAsync(IPublicContentService service, CancellationToken cancellationToken)
       => service.GetPublicBrandingAsync(cancellationToken);

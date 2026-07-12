@@ -170,6 +170,53 @@ public sealed class AdminContentTests : IDisposable
   }
 
   [Fact]
+  public async Task TickerItemCrudFlow_CreatesUpdatesReordersAndDeletes()
+  {
+    var first = await _adminContentService.CreateTickerItemAsync(new CreateTickerItemRequest(
+        Text: "El corte es oficio",
+        SortOrder: 5,
+        IsActive: true));
+
+    var second = await _adminContentService.CreateTickerItemAsync(new CreateTickerItemRequest(
+        Text: "Sin fila · Con cita",
+        SortOrder: 1,
+        IsActive: true));
+
+    var ordered = await _adminContentService.GetTickerItemsAsync();
+    Assert.Collection(
+        ordered,
+        firstItem => Assert.Equal(second.Id, firstItem.Id),
+        secondItem => Assert.Equal(first.Id, secondItem.Id));
+
+    var updated = await _adminContentService.UpdateTickerItemAsync(first.Id, new UpdateTickerItemRequest(
+        Text: "Fades · Barba · Navaja · Diseño",
+        SortOrder: 0,
+        IsActive: false));
+
+    Assert.Equal("Fades · Barba · Navaja · Diseño", updated.Text);
+    Assert.False(updated.IsActive);
+
+    await _adminContentService.DeleteTickerItemAsync(first.Id);
+
+    await Assert.ThrowsAsync<KeyNotFoundException>(() => _adminContentService.GetTickerItemByIdAsync(first.Id));
+    var remaining = await _adminContentService.GetTickerItemsAsync();
+    Assert.Single(remaining);
+    Assert.Equal(second.Id, remaining[0].Id);
+  }
+
+  [Fact]
+  public async Task CreateTickerItemAsync_RejectsEmptyText()
+  {
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _adminContentService.CreateTickerItemAsync(new CreateTickerItemRequest(
+            Text: "   ",
+            SortOrder: 0,
+            IsActive: true)));
+
+    Assert.Contains("text", exception.Errors.Keys);
+  }
+
+  [Fact]
   public async Task CreateBannerAsync_RejectsInvalidDateRange()
   {
     var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>

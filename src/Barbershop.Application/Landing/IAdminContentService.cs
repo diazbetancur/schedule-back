@@ -18,6 +18,16 @@ public interface IAdminContentService
 
   Task DeleteBannerAsync(Guid bannerId, CancellationToken cancellationToken = default);
 
+  Task<IReadOnlyList<TickerItemResponse>> GetTickerItemsAsync(CancellationToken cancellationToken = default);
+
+  Task<TickerItemResponse> GetTickerItemByIdAsync(Guid tickerItemId, CancellationToken cancellationToken = default);
+
+  Task<TickerItemResponse> CreateTickerItemAsync(CreateTickerItemRequest request, CancellationToken cancellationToken = default);
+
+  Task<TickerItemResponse> UpdateTickerItemAsync(Guid tickerItemId, UpdateTickerItemRequest request, CancellationToken cancellationToken = default);
+
+  Task DeleteTickerItemAsync(Guid tickerItemId, CancellationToken cancellationToken = default);
+
   Task<BrandingSettingsResponse> GetBrandingAsync(CancellationToken cancellationToken = default);
 
   Task<BrandingSettingsResponse> UpsertBrandingAsync(UpsertBrandingSettingsRequest request, CancellationToken cancellationToken = default);

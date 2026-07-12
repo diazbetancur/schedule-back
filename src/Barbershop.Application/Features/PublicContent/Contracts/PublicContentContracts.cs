@@ -84,3 +84,11 @@ public sealed record PublicStaffProfileResponse(
     string? TikTokUrl,
     string? YoutubeUrl,
     string? XUrl);
+
+public sealed record TickerItemResponse(
+    Guid Id,
+    string Text,
+    int SortOrder,
+    bool IsActive,
+    DateTime CreatedAtUtc,
+    DateTime? UpdatedAtUtc);

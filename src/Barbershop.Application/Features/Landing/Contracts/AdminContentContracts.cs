@@ -47,3 +47,13 @@ public sealed record BusinessScheduleDayRequest(
     bool IsOpen,
     string? OpenTime,
     string? CloseTime);
+
+public sealed record CreateTickerItemRequest(
+    string Text,
+    int SortOrder,
+    bool IsActive);
+
+public sealed record UpdateTickerItemRequest(
+    string Text,
+    int SortOrder,
+    bool IsActive);

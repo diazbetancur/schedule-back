@@ -247,6 +247,112 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
     await _dbContext.SaveChangesAsync(cancellationToken);
   }
 
+  public async Task<IReadOnlyList<TickerItemResponse>> GetTickerItemsAsync(CancellationToken cancellationToken = default)
+  {
+    var items = await _dbContext.TickerItems
+        .AsNoTracking()
+        .OrderBy(item => item.SortOrder)
+        .ThenBy(item => item.CreatedAt)
+        .ToListAsync(cancellationToken);
+
+    return items.Select(MapTickerItem).ToList();
+  }
+
+  public async Task<TickerItemResponse> GetTickerItemByIdAsync(Guid tickerItemId, CancellationToken cancellationToken = default)
+  {
+    if (tickerItemId == Guid.Empty)
+    {
+      throw new ValidationProblemException(new Dictionary<string, string[]>
+      {
+        ["tickerItemId"] = ["TickerItemId is required."]
+      });
+    }
+
+    var item = await _dbContext.TickerItems
+        .AsNoTracking()
+        .SingleOrDefaultAsync(candidate => candidate.Id == tickerItemId, cancellationToken)
+        ?? throw new KeyNotFoundException("The ticker item was not found.");
+
+    return MapTickerItem(item);
+  }
+
+  public async Task<TickerItemResponse> CreateTickerItemAsync(CreateTickerItemRequest request, CancellationToken cancellationToken = default)
+  {
+    ArgumentNullException.ThrowIfNull(request);
+
+    var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+    ValidateRequiredText(request.Text, "text", 1, 120, errors, "Text is required and must be 120 characters or fewer.");
+    ThrowIfAnyValidationErrors(errors);
+
+    var now = _timeProvider.GetUtcNow().UtcDateTime;
+
+    var item = new TickerItem(request.Text, request.SortOrder, now);
+    item.Update(request.Text, request.SortOrder, request.IsActive, now);
+
+    _dbContext.TickerItems.Add(item);
+    await _dbContext.SaveChangesAsync(cancellationToken);
+
+    return MapTickerItem(item);
+  }
+
+  public async Task<TickerItemResponse> UpdateTickerItemAsync(Guid tickerItemId, UpdateTickerItemRequest request, CancellationToken cancellationToken = default)
+  {
+    ArgumentNullException.ThrowIfNull(request);
+
+    if (tickerItemId == Guid.Empty)
+    {
+      throw new ValidationProblemException(new Dictionary<string, string[]>
+      {
+        ["tickerItemId"] = ["TickerItemId is required."]
+      });
+    }
+
+    var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+    ValidateRequiredText(request.Text, "text", 1, 120, errors, "Text is required and must be 120 characters or fewer.");
+    ThrowIfAnyValidationErrors(errors);
+
+    var item = await _dbContext.TickerItems
+        .SingleOrDefaultAsync(candidate => candidate.Id == tickerItemId, cancellationToken)
+        ?? throw new KeyNotFoundException("The ticker item was not found.");
+
+    var now = _timeProvider.GetUtcNow().UtcDateTime;
+    item.Update(request.Text, request.SortOrder, request.IsActive, now);
+
+    await _dbContext.SaveChangesAsync(cancellationToken);
+
+    return MapTickerItem(item);
+  }
+
+  public async Task DeleteTickerItemAsync(Guid tickerItemId, CancellationToken cancellationToken = default)
+  {
+    if (tickerItemId == Guid.Empty)
+    {
+      throw new ValidationProblemException(new Dictionary<string, string[]>
+      {
+        ["tickerItemId"] = ["TickerItemId is required."]
+      });
+    }
+
+    var item = await _dbContext.TickerItems
+        .SingleOrDefaultAsync(candidate => candidate.Id == tickerItemId, cancellationToken)
+        ?? throw new KeyNotFoundException("The ticker item was not found.");
+
+    _dbContext.TickerItems.Remove(item);
+    await _dbContext.SaveChangesAsync(cancellationToken);
+  }
+
+  public async Task<IReadOnlyList<TickerItemResponse>> GetPublicTickerItemsAsync(CancellationToken cancellationToken = default)
+  {
+    var items = await _dbContext.TickerItems
+        .AsNoTracking()
+        .Where(item => item.IsActive)
+        .OrderBy(item => item.SortOrder)
+        .ThenBy(item => item.CreatedAt)
+        .ToListAsync(cancellationToken);
+
+    return items.Select(MapTickerItem).ToList();
+  }
+
   public async Task<BrandingSettingsResponse> GetBrandingAsync(CancellationToken cancellationToken = default)
   {
     var branding = await _dbContext.AppBrandingSettings
@@ -442,6 +548,15 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
         banner.CreatedAt,
         banner.UpdatedAt);
   }
+
+  private static TickerItemResponse MapTickerItem(TickerItem item)
+      => new(
+          item.Id,
+          item.Text,
+          item.SortOrder,
+          item.IsActive,
+          item.CreatedAt,
+          item.UpdatedAt);
 
   private static BrandingSettingsResponse MapBranding(AppBrandingSettings branding, IReadOnlyDictionary<Guid, string?> mediaUrls)
       => new(

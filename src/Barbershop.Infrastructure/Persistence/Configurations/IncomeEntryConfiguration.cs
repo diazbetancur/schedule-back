@@ -18,12 +18,16 @@ internal sealed class IncomeEntryConfiguration : IEntityTypeConfiguration<Income
       tableBuilder.HasCheckConstraint(
               "ck_income_entries_base_price_non_negative",
               "\"BasePriceSnapshot\" >= 0");
+      tableBuilder.HasCheckConstraint(
+              "ck_income_entries_business_percentage_range",
+              "\"BusinessPercentageSnapshot\" >= 0 AND \"BusinessPercentageSnapshot\" <= 100");
     });
 
     builder.HasKey(x => x.Id);
 
     builder.Property(x => x.Id).ValueGeneratedNever();
     builder.Property(x => x.ServiceNameSnapshot).HasMaxLength(120).IsRequired();
+    builder.Property(x => x.BusinessPercentageSnapshot).IsRequired().HasDefaultValue(0);
     builder.Property(x => x.OccurredOn).HasColumnType("date");
     builder.Property(x => x.IsDeleted).HasDefaultValue(false);
     builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();

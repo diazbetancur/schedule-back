@@ -9,6 +9,9 @@ public sealed record IncomeEntryView(
     string StaffDisplayName,
     int Amount,
     bool IsPromo,
+    int BusinessPercentage,
+    int BusinessAmount,
+    int ProfessionalAmount,
     DateOnly OccurredOn,
     DateTime CreatedAt,
     DateTime? UpdatedAt);

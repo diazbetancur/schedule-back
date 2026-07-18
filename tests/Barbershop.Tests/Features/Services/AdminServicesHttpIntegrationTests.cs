@@ -40,12 +40,13 @@ public sealed class AdminServicesHttpIntegrationTests
     AuthenticateAs(context.Client, admin.AccessToken);
 
     using var createResponse = await context.Client.PostAsJsonAsync(
-        "/api/v1/admin/services", new ServiceCreateRequest("Corte de Cabello", 25000));
+        "/api/v1/admin/services", new ServiceCreateRequest("Corte de Cabello", 25000, BusinessPercentage: 20));
     Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
     var created = await createResponse.Content.ReadFromJsonAsync<ServiceView>();
     Assert.NotNull(created);
     Assert.Equal("Corte de Cabello", created!.Name);
     Assert.Equal(25000, created.BasePrice);
+    Assert.Equal(20, created.BusinessPercentage);
     Assert.True(created.IsActive);
 
     using var listResponse = await context.Client.GetAsync("/api/v1/admin/services");
@@ -54,11 +55,12 @@ public sealed class AdminServicesHttpIntegrationTests
     Assert.Contains(list!, s => s.Id == created.Id);
 
     using var updateResponse = await context.Client.PutAsJsonAsync(
-        $"/api/v1/admin/services/{created.Id}", new ServiceUpdateRequest("Corte Premium", 30000));
+        $"/api/v1/admin/services/{created.Id}", new ServiceUpdateRequest("Corte Premium", 30000, BusinessPercentage: 35));
     Assert.Equal(HttpStatusCode.OK, updateResponse.StatusCode);
     var updated = await updateResponse.Content.ReadFromJsonAsync<ServiceView>();
     Assert.Equal("Corte Premium", updated!.Name);
     Assert.Equal(30000, updated.BasePrice);
+    Assert.Equal(35, updated.BusinessPercentage);
 
     using var statusResponse = await context.Client.PatchAsJsonAsync(
         $"/api/v1/admin/services/{created.Id}/status", new ServiceStatusUpdateRequest(false));

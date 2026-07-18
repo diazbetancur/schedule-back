@@ -140,6 +140,27 @@ public sealed class ReportsQueryServiceTests : IDisposable
     Assert.Contains("range", exception.Errors.Keys);
   }
 
+  [Fact]
+  public async Task GetSummaryAsync_SplitsBusinessAndProfessionalTotals()
+  {
+    var alex = await AddStaffAsync("Alex");
+    var bianca = await AddStaffAsync("Bianca");
+    var day = new DateOnly(2026, 6, 10);
+
+    await AddIncomeAsync(alex.Id, 20000, false, day, businessPercentage: 40); // business 8000, professional 12000
+    await AddIncomeAsync(bianca.Id, 10000, false, day, businessPercentage: 10); // business 1000, professional 9000
+
+    var summary = await _service.GetSummaryAsync(new DateOnly(2026, 6, 1), new DateOnly(2026, 6, 30));
+
+    Assert.Equal(9000, summary.BusinessIncome);
+    Assert.Equal(21000, summary.ProfessionalIncome);
+    Assert.Equal(summary.TotalIncome, summary.BusinessIncome + summary.ProfessionalIncome);
+
+    var alexRow = summary.ByProfessional.Single(p => p.StaffProfileId == alex.Id);
+    Assert.Equal(8000, alexRow.BusinessTotal);
+    Assert.Equal(12000, alexRow.ProfessionalTotal);
+  }
+
   private async Task<StaffProfile> AddStaffAsync(string displayName)
   {
     var staff = new StaffProfile(Guid.NewGuid(), displayName, 30, DateTime.UtcNow);
@@ -148,9 +169,9 @@ public sealed class ReportsQueryServiceTests : IDisposable
     return staff;
   }
 
-  private async Task<IncomeEntry> AddIncomeAsync(Guid staffProfileId, int amount, bool isPromo, DateOnly occurredOn)
+  private async Task<IncomeEntry> AddIncomeAsync(Guid staffProfileId, int amount, bool isPromo, DateOnly occurredOn, int businessPercentage = 0)
   {
-    var entry = new IncomeEntry(Guid.NewGuid(), "Corte", 25000, staffProfileId, amount, isPromo, occurredOn, Guid.NewGuid(), DateTime.UtcNow);
+    var entry = new IncomeEntry(Guid.NewGuid(), "Corte", 25000, staffProfileId, amount, isPromo, occurredOn, Guid.NewGuid(), DateTime.UtcNow, businessPercentage);
     _dbContext.IncomeEntries.Add(entry);
     await _dbContext.SaveChangesAsync();
     return entry;

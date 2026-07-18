@@ -48,6 +48,8 @@ internal sealed class ReportsQueryService : IAdminReportsService
 
         var totalIncome = incomes.Sum(entry => (long)entry.Amount);
         var promoIncome = incomes.Where(entry => entry.IsPromo).Sum(entry => (long)entry.Amount);
+        var businessIncome = incomes.Sum(entry => (long)entry.BusinessAmount);
+        var professionalIncome = incomes.Sum(entry => (long)entry.ProfessionalAmount);
         var totalExpenses = expenses.Sum(entry => (long)entry.Amount);
 
         var staffIds = incomes.Select(entry => entry.StaffProfileId).Distinct().ToArray();
@@ -64,7 +66,9 @@ internal sealed class ReportsQueryService : IAdminReportsService
                 group.Key,
                 names.TryGetValue(group.Key, out var name) ? name : string.Empty,
                 group.Sum(entry => (long)entry.Amount),
-                group.Count()))
+                group.Count(),
+                group.Sum(entry => (long)entry.BusinessAmount),
+                group.Sum(entry => (long)entry.ProfessionalAmount)))
             .OrderByDescending(view => view.IncomeTotal)
             .ToArray();
 
@@ -85,6 +89,8 @@ internal sealed class ReportsQueryService : IAdminReportsService
             incomes.Count,
             promoIncome,
             totalIncome - promoIncome,
+            businessIncome,
+            professionalIncome,
             byProfessional,
             byExpenseConcept,
             trend);

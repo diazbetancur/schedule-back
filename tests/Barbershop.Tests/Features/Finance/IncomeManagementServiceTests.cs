@@ -149,9 +149,53 @@ public sealed class IncomeManagementServiceTests : IDisposable
     Assert.All(todayAlex, e => Assert.Equal(alex.Id, e.StaffProfileId));
   }
 
-  private async Task<Service> AddServiceAsync(string name, int basePrice)
+  [Fact]
+  public async Task CreateAsync_SnapshotsBusinessPercentageFromService()
   {
-    var service = new Service(name, basePrice, DateTime.UtcNow);
+    var service = await AddServiceAsync("Corte", 20000, businessPercentage: 30);
+    var staff = await AddStaffAsync("Alex");
+
+    var view = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+        service.Id, staff.Id, 20000, false, Today));
+
+    Assert.Equal(30, view.BusinessPercentage);
+    Assert.Equal(6000, view.BusinessAmount);
+    Assert.Equal(14000, view.ProfessionalAmount);
+  }
+
+  [Fact]
+  public async Task CreateAsync_TruncatesBusinessAmountAndGivesRemainderToProfessional()
+  {
+    var service = await AddServiceAsync("Corte", 100, businessPercentage: 33);
+    var staff = await AddStaffAsync("Alex");
+
+    var view = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+        service.Id, staff.Id, 100, false, Today));
+
+    Assert.Equal(33, view.BusinessAmount);
+    Assert.Equal(67, view.ProfessionalAmount);
+  }
+
+  [Fact]
+  public async Task UpdateAsync_ChangingService_ReSnapshotsBusinessPercentage()
+  {
+    var first = await AddServiceAsync("Corte", 20000, businessPercentage: 10);
+    var second = await AddServiceAsync("Tinte", 45000, businessPercentage: 50);
+    var staff = await AddStaffAsync("Alex");
+
+    var created = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+        first.Id, staff.Id, 20000, false, Today));
+    Assert.Equal(10, created.BusinessPercentage);
+
+    var updated = await _service.UpdateAsync(created.Id, new IncomeEntryUpdateRequest(
+        second.Id, staff.Id, 45000, false, Today));
+
+    Assert.Equal(50, updated.BusinessPercentage);
+  }
+
+  private async Task<Service> AddServiceAsync(string name, int basePrice, int businessPercentage = 0)
+  {
+    var service = new Service(name, basePrice, DateTime.UtcNow, businessPercentage);
     _dbContext.Services.Add(service);
     await _dbContext.SaveChangesAsync();
     return service;

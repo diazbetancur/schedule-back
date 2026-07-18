@@ -42,7 +42,7 @@ public sealed class AdminIncomeHttpIntegrationTests
     var admin = await RegisterAndPromoteAdminAsync(context, "income-crud");
     AuthenticateAs(context.Client, admin.AccessToken);
 
-    var serviceId = await SeedServiceAsync(context.Factory, "Corte", 25000);
+    var serviceId = await SeedServiceAsync(context.Factory, "Corte", 25000, businessPercentage: 40);
     var staffId = await SeedStaffAsync(context.Factory, "income-alex");
 
     using var createResponse = await context.Client.PostAsJsonAsync(
@@ -55,6 +55,9 @@ public sealed class AdminIncomeHttpIntegrationTests
     Assert.Equal("Corte", created.ServiceName);
     Assert.Equal(25000, created.BasePrice);
     Assert.True(created.IsPromo);
+    Assert.Equal(40, created.BusinessPercentage);
+    Assert.Equal(8000, created.BusinessAmount);
+    Assert.Equal(12000, created.ProfessionalAmount);
 
     using var listResponse = await context.Client.GetAsync($"/api/v1/admin/income?date={Today:yyyy-MM-dd}");
     Assert.Equal(HttpStatusCode.OK, listResponse.StatusCode);
@@ -108,11 +111,11 @@ public sealed class AdminIncomeHttpIntegrationTests
     Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
   }
 
-  private static async Task<Guid> SeedServiceAsync(IntegrationTestFactory factory, string name, int basePrice)
+  private static async Task<Guid> SeedServiceAsync(IntegrationTestFactory factory, string name, int basePrice, int businessPercentage = 0)
   {
     using var scope = factory.Services.CreateScope();
     var service = scope.ServiceProvider.GetRequiredService<IAdminServicesService>();
-    var created = await service.CreateAsync(new ServiceCreateRequest(name, basePrice));
+    var created = await service.CreateAsync(new ServiceCreateRequest(name, basePrice, businessPercentage));
     return created.Id;
   }
 

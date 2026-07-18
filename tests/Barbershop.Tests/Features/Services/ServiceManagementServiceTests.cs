@@ -123,4 +123,48 @@ public sealed class ServiceManagementServiceTests : IDisposable
 
     await Assert.ThrowsAsync<KeyNotFoundException>(() => _service.GetByIdAsync(created.Id));
   }
+
+  [Fact]
+  public async Task CreateAsync_DefaultsBusinessPercentageToZero()
+  {
+    var view = await _service.CreateAsync(new ServiceCreateRequest("Corte", 20000));
+
+    Assert.Equal(0, view.BusinessPercentage);
+  }
+
+  [Fact]
+  public async Task CreateAsync_StoresExplicitBusinessPercentage()
+  {
+    var view = await _service.CreateAsync(new ServiceCreateRequest("Corte", 20000, BusinessPercentage: 40));
+
+    Assert.Equal(40, view.BusinessPercentage);
+  }
+
+  [Fact]
+  public async Task CreateAsync_RejectsBusinessPercentageAboveHundred()
+  {
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _service.CreateAsync(new ServiceCreateRequest("Corte", 20000, BusinessPercentage: 101)));
+
+    Assert.Contains("businessPercentage", exception.Errors.Keys);
+  }
+
+  [Fact]
+  public async Task CreateAsync_RejectsNegativeBusinessPercentage()
+  {
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _service.CreateAsync(new ServiceCreateRequest("Corte", 20000, BusinessPercentage: -1)));
+
+    Assert.Contains("businessPercentage", exception.Errors.Keys);
+  }
+
+  [Fact]
+  public async Task UpdateAsync_ChangesBusinessPercentage()
+  {
+    var created = await _service.CreateAsync(new ServiceCreateRequest("Barba", 10000, BusinessPercentage: 10));
+
+    var updated = await _service.UpdateAsync(created.Id, new ServiceUpdateRequest("Barba", 10000, BusinessPercentage: 60));
+
+    Assert.Equal(60, updated.BusinessPercentage);
+  }
 }

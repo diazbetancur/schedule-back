@@ -43,7 +43,7 @@ public sealed class AdminReportsHttpIntegrationTests
     AuthenticateAs(context.Client, admin.AccessToken);
 
     var staffId = await SeedStaffAsync(context.Factory, "rep-alex");
-    await SeedIncomeAsync(context.Factory, staffId, 25000, Today);
+    await SeedIncomeAsync(context.Factory, staffId, 25000, Today, businessPercentage: 20);
 
     var first = new DateOnly(Today.Year, Today.Month, 1);
     var last = first.AddMonths(1).AddDays(-1);
@@ -55,6 +55,8 @@ public sealed class AdminReportsHttpIntegrationTests
     Assert.NotNull(summary);
     Assert.True(summary!.TotalIncome >= 25000);
     Assert.Contains(summary.ByProfessional, p => p.StaffProfileId == staffId);
+    Assert.Equal(5000, summary.BusinessIncome);
+    Assert.Equal(20000, summary.ProfessionalIncome);
   }
 
   [Fact]
@@ -121,13 +123,13 @@ public sealed class AdminReportsHttpIntegrationTests
     return created.StaffProfileId;
   }
 
-  private static async Task SeedIncomeAsync(IntegrationTestFactory factory, Guid staffProfileId, int amount, DateOnly occurredOn)
+  private static async Task SeedIncomeAsync(IntegrationTestFactory factory, Guid staffProfileId, int amount, DateOnly occurredOn, int businessPercentage = 0)
   {
     using var scope = factory.Services.CreateScope();
     var income = scope.ServiceProvider.GetRequiredService<IAdminIncomeService>();
     // Income needs a service; create one first.
     var services = scope.ServiceProvider.GetRequiredService<IAdminServicesService>();
-    var service = await services.CreateAsync(new ServiceCreateRequest("Corte", 25000));
+    var service = await services.CreateAsync(new ServiceCreateRequest("Corte", 25000, businessPercentage));
     await income.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, staffProfileId, amount, false, occurredOn));
   }
 

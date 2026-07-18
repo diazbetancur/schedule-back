@@ -4,7 +4,9 @@ public sealed record ReportProfessionalIncomeView(
     Guid StaffProfileId,
     string DisplayName,
     long IncomeTotal,
-    int IncomeCount);
+    int IncomeCount,
+    long BusinessTotal,
+    long ProfessionalTotal);
 
 public sealed record ReportExpenseConceptView(string Name, long Total);
 
@@ -19,6 +21,8 @@ public sealed record ReportSummaryView(
     int IncomeCount,
     long PromoIncome,
     long NormalIncome,
+    long BusinessIncome,
+    long ProfessionalIncome,
     IReadOnlyList<ReportProfessionalIncomeView> ByProfessional,
     IReadOnlyList<ReportExpenseConceptView> ByExpenseConcept,
     IReadOnlyList<ReportTrendPointView> Trend);

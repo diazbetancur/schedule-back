@@ -56,7 +56,8 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             request.IsPromo,
             request.OccurredOn,
             currentUserId,
-            utcNow);
+            utcNow,
+            service.BusinessPercentage);
 
         _dbContext.IncomeEntries.Add(entry);
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -78,7 +79,8 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             request.Amount,
             request.IsPromo,
             request.OccurredOn,
-            _timeProvider.GetUtcNow().UtcDateTime);
+            _timeProvider.GetUtcNow().UtcDateTime,
+            service.BusinessPercentage);
 
         await _dbContext.SaveChangesAsync(cancellationToken);
         return await MapAsync(entry, cancellationToken);
@@ -187,6 +189,9 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             staffDisplayName,
             entry.Amount,
             entry.IsPromo,
+            entry.BusinessPercentageSnapshot,
+            entry.BusinessAmount,
+            entry.ProfessionalAmount,
             entry.OccurredOn,
             entry.CreatedAt,
             entry.UpdatedAt);

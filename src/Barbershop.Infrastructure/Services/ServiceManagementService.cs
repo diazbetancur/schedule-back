@@ -38,11 +38,11 @@ internal sealed class ServiceManagementService : IAdminServicesService
 
     public async Task<ServiceView> CreateAsync(ServiceCreateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateRequest(request.Name, request.BasePrice);
+        ValidateRequest(request.Name, request.BasePrice, request.BusinessPercentage);
         await EnsureNameIsUniqueAsync(request.Name, null, cancellationToken);
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var service = new Service(request.Name, request.BasePrice, utcNow);
+        var service = new Service(request.Name, request.BasePrice, utcNow, request.BusinessPercentage);
 
         _dbContext.Services.Add(service);
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -51,11 +51,11 @@ internal sealed class ServiceManagementService : IAdminServicesService
 
     public async Task<ServiceView> UpdateAsync(Guid serviceId, ServiceUpdateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateRequest(request.Name, request.BasePrice);
+        ValidateRequest(request.Name, request.BasePrice, request.BusinessPercentage);
         var service = await LoadAsync(serviceId, cancellationToken);
         await EnsureNameIsUniqueAsync(request.Name, serviceId, cancellationToken);
 
-        service.Update(request.Name, request.BasePrice, _timeProvider.GetUtcNow().UtcDateTime);
+        service.Update(request.Name, request.BasePrice, _timeProvider.GetUtcNow().UtcDateTime, request.BusinessPercentage);
         await _dbContext.SaveChangesAsync(cancellationToken);
         return Map(service);
     }
@@ -107,7 +107,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
         }
     }
 
-    private static void ValidateRequest(string name, int basePrice)
+    private static void ValidateRequest(string name, int basePrice, int businessPercentage)
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 
@@ -121,6 +121,11 @@ internal sealed class ServiceManagementService : IAdminServicesService
             errors["basePrice"] = ["BasePrice must be zero or greater."];
         }
 
+        if (businessPercentage is < 0 or > 100)
+        {
+            errors["businessPercentage"] = ["BusinessPercentage must be between 0 and 100."];
+        }
+
         if (errors.Count > 0)
         {
             throw new ValidationProblemException(errors);
@@ -128,5 +133,5 @@ internal sealed class ServiceManagementService : IAdminServicesService
     }
 
     private static ServiceView Map(Service service)
-        => new(service.Id, service.Name, service.BasePrice, service.IsActive, service.CreatedAt, service.UpdatedAt);
+        => new(service.Id, service.Name, service.BasePrice, service.BusinessPercentage, service.IsActive, service.CreatedAt, service.UpdatedAt);
 }

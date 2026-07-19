@@ -3,6 +3,7 @@ using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Staff;
 using Barbershop.Application.Staff.Admin;
 using Barbershop.Domain.Appointments;
+using Barbershop.Domain.Common;
 using Barbershop.Infrastructure.Availability;
 using Barbershop.Infrastructure.Configuration;
 using Barbershop.Infrastructure.Identity;
@@ -18,7 +19,8 @@ namespace Barbershop.Tests.Features.Availability;
 
 public sealed class AvailabilityServicesTests : IDisposable
 {
-  private static readonly DateTimeOffset CurrentUtc = new(2026, 1, 5, 10, 15, 0, TimeSpan.Zero);
+  // 10:15 AM Bogota local time -> 15:15 UTC (Bogota is UTC-5).
+  private static readonly DateTimeOffset CurrentUtc = new(2026, 1, 5, 15, 15, 0, TimeSpan.Zero);
 
   private readonly AppDbContext _dbContext;
   private readonly IAdminStaffService _adminStaffService;
@@ -256,6 +258,25 @@ public sealed class AvailabilityServicesTests : IDisposable
   }
 
   [Fact]
+  public async Task GetSlotsAsync_ConvertsLocalScheduleToUtcWithBogotaOffset()
+  {
+    var staff = await CreateStaffAsync("slot-offset@example.com", "Slot Offset", "Slot Offset");
+    var nextDay = CurrentDate.AddDays(1);
+
+    await _staffAvailabilityService.ReplaceRulesAsync(staff.UserId, [Rule(nextDay.DayOfWeek, 9, 0, 9, 30)]);
+
+    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay);
+
+    // Bogota (UTC-5) 09:00 local must be stored as 14:00 UTC, not 09:00 UTC.
+    var expectedStartUtc = new DateTime(nextDay.Year, nextDay.Month, nextDay.Day, 14, 0, 0, DateTimeKind.Utc);
+    var expectedEndUtc = new DateTime(nextDay.Year, nextDay.Month, nextDay.Day, 14, 30, 0, DateTimeKind.Utc);
+
+    var slot = Assert.Single(response.Slots);
+    Assert.Equal(expectedStartUtc, slot.StartAtUtc);
+    Assert.Equal(expectedEndUtc, slot.EndAtUtc);
+  }
+
+  [Fact]
   public async Task GetSlotsAsync_RejectsRangesLongerThanThirtyOneDays()
   {
     var staff = await CreateStaffAsync("slot-range@example.com", "Slot Range", "Slot Range");
@@ -344,7 +365,7 @@ public sealed class AvailabilityServicesTests : IDisposable
   private static DateOnly CurrentDate => DateOnly.FromDateTime(CurrentUtc.UtcDateTime);
 
   private static DateTime ToUtc(DateOnly date, int hour, int minute)
-      => DateTime.SpecifyKind(date.ToDateTime(new TimeOnly(hour, minute)), DateTimeKind.Utc);
+      => BogotaClock.ToUtc(date, new TimeOnly(hour, minute));
 
   private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
   {

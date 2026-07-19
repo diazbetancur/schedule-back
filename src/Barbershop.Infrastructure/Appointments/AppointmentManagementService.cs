@@ -3,6 +3,7 @@ using Barbershop.Application.Appointments;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Notifications;
 using Barbershop.Domain.Appointments;
+using Barbershop.Domain.Common;
 using Barbershop.Domain.Staff;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Persistence;
@@ -424,19 +425,24 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       Guid? excludedAppointmentId,
       CancellationToken cancellationToken)
   {
-    if (startsAtUtc.Date != endsAtUtc.Date)
+    // Availability rules are stored as Bogota wall-clock TimeOnly values, so the UTC
+    // instant must be converted to local time before comparing against them.
+    var startsAtLocal = BogotaClock.ToLocal(startsAtUtc);
+    var endsAtLocal = BogotaClock.ToLocal(endsAtUtc);
+
+    if (startsAtLocal.Date != endsAtLocal.Date)
     {
       throw new ConflictException("The selected slot is not available.");
     }
 
-    var startTime = TimeOnly.FromDateTime(startsAtUtc);
-    var endTime = TimeOnly.FromDateTime(endsAtUtc);
+    var startTime = TimeOnly.FromDateTime(startsAtLocal);
+    var endTime = TimeOnly.FromDateTime(endsAtLocal);
 
     var coveredByRule = await _dbContext.StaffAvailabilityRules
         .AnyAsync(
             rule => rule.StaffProfileId == staffProfileId
                 && rule.IsActive
-                && rule.DayOfWeek == startsAtUtc.DayOfWeek
+                && rule.DayOfWeek == startsAtLocal.DayOfWeek
                 && rule.StartTime <= startTime
                 && endTime <= rule.EndTime,
             cancellationToken);

@@ -1,11 +1,11 @@
 using System.Globalization;
 using Barbershop.Application.Notifications;
+using Barbershop.Domain.Common;
 
 namespace Barbershop.Infrastructure.Notifications;
 
 internal sealed class AppointmentNotificationService : IAppointmentNotificationService
 {
-  private static readonly TimeSpan DisplayUtcOffset = TimeSpan.FromHours(-5);
   private static readonly CultureInfo DisplayCulture = CultureInfo.GetCultureInfo("es-CO");
 
   private readonly IPushNotificationSender _sender;
@@ -82,7 +82,7 @@ internal sealed class AppointmentNotificationService : IAppointmentNotificationS
 
   private static string FormatDateTime(DateTime startsAtUtc)
   {
-    var local = DateTime.SpecifyKind(startsAtUtc.Add(DisplayUtcOffset), DateTimeKind.Unspecified);
+    var local = BogotaClock.ToLocal(startsAtUtc);
     return local.ToString("dddd d 'de' MMMM 'a las' HH:mm", DisplayCulture);
   }
 }

@@ -1,6 +1,7 @@
 using Barbershop.Application.Availability;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Domain.Appointments;
+using Barbershop.Domain.Common;
 using Barbershop.Domain.Scheduling;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -37,8 +38,8 @@ internal sealed class PublicAvailabilityService : IPublicAvailabilityService
     }
 
     var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-    var rangeStart = ToUtc(from, TimeOnly.MinValue);
-    var rangeEndExclusive = ToUtc(to.AddDays(1), TimeOnly.MinValue);
+    var rangeStart = BogotaClock.ToUtc(from, TimeOnly.MinValue);
+    var rangeEndExclusive = BogotaClock.ToUtc(to.AddDays(1), TimeOnly.MinValue);
 
     var rules = await _dbContext.StaffAvailabilityRules
         .Where(rule => rule.StaffProfileId == staffProfileId && rule.IsActive)
@@ -71,8 +72,8 @@ internal sealed class PublicAvailabilityService : IPublicAvailabilityService
 
       foreach (var rule in dayRules)
       {
-        var slotStart = ToUtc(date, rule.StartTime);
-        var ruleEnd = ToUtc(date, rule.EndTime);
+        var slotStart = BogotaClock.ToUtc(date, rule.StartTime);
+        var ruleEnd = BogotaClock.ToUtc(date, rule.EndTime);
 
         while (slotStart.AddMinutes(staffProfile.DefaultAppointmentDurationMinutes) <= ruleEnd)
         {
@@ -126,7 +127,4 @@ internal sealed class PublicAvailabilityService : IPublicAvailabilityService
       throw new ValidationProblemException(errors);
     }
   }
-
-  private static DateTime ToUtc(DateOnly date, TimeOnly time)
-      => DateTime.SpecifyKind(date.ToDateTime(time), DateTimeKind.Utc);
 }

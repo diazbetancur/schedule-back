@@ -9,8 +9,8 @@ namespace Api.Barbershop.Features.Staff.Profile;
 
 public static class StaffProfileEndpoints
 {
-    private const long MaxPhotoBytes = 1_048_576; // 1 MB
-    private const long MaxQrBytes = 1_048_576;    // 1 MB
+    private const long MaxPhotoBytes = 10_485_760; // 10 MB
+    private const long MaxQrBytes = 10_485_760;    // 10 MB
 
     public static RouteGroupBuilder MapStaffProfileEndpoints(this RouteGroupBuilder api)
     {

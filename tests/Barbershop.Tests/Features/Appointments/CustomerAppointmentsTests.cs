@@ -5,6 +5,7 @@ using Barbershop.Application.Notifications;
 using Barbershop.Application.Staff;
 using Barbershop.Application.Staff.Admin;
 using Barbershop.Domain.Appointments;
+using Barbershop.Domain.Common;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Appointments;
 using Barbershop.Infrastructure.Availability;
@@ -22,7 +23,8 @@ namespace Barbershop.Tests.Features.Appointments;
 
 public sealed class CustomerAppointmentsTests : IDisposable
 {
-    private static readonly DateTimeOffset CurrentUtc = new(2026, 1, 5, 10, 15, 0, TimeSpan.Zero);
+    // 10:15 AM Bogota local time -> 15:15 UTC (Bogota is UTC-5).
+    private static readonly DateTimeOffset CurrentUtc = new(2026, 1, 5, 15, 15, 0, TimeSpan.Zero);
 
     private readonly AppDbContext _dbContext;
     private readonly IPasswordHasher<object> _passwordHasher;
@@ -252,7 +254,7 @@ public sealed class CustomerAppointmentsTests : IDisposable
     private static DateOnly CurrentDate => DateOnly.FromDateTime(CurrentUtc.UtcDateTime);
 
     private static DateTime ToUtc(DateOnly date, int hour, int minute)
-        => DateTime.SpecifyKind(date.ToDateTime(new TimeOnly(hour, minute)), DateTimeKind.Utc);
+        => BogotaClock.ToUtc(date, new TimeOnly(hour, minute));
 
     private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
     {

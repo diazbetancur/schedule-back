@@ -8,7 +8,7 @@ namespace Api.Barbershop.Features.Customer.Profile;
 
 public static class CustomerProfileEndpoints
 {
-    private const long MaxPhotoBytes = 1_048_576; // 1 MB
+    private const long MaxPhotoBytes = 10_485_760; // 10 MB
 
     public static RouteGroupBuilder MapCustomerProfileEndpoints(this RouteGroupBuilder api)
     {

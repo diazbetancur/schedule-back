@@ -14,6 +14,21 @@ public sealed class IntegrationTestFactory : WebApplicationFactory<Program>
     public IntegrationTestFactory(string connectionString)
     {
         _connectionString = connectionString;
+
+        // Program.cs reads builder.Configuration synchronously (AddApiFoundation validates
+        // Jwt options) before builder.Build() runs. WebApplicationFactory's ConfigureAppConfiguration
+        // hook is only merged into configuration AT Build() time, via the deferred IHostBuilder
+        // bridge - too late for that eager read. Real process environment variables are read by
+        // WebApplication.CreateBuilder(args) immediately, so they're the only override that's
+        // visible in time. The IntegrationTestCollection disables parallelization, so mutating
+        // process-wide env vars here is safe (tests never run concurrently against each other).
+        Environment.SetEnvironmentVariable("Database__ConnectionString", _connectionString);
+        Environment.SetEnvironmentVariable("Jwt__Enabled", "true");
+        Environment.SetEnvironmentVariable("Jwt__Issuer", "Barbershop.Tests");
+        Environment.SetEnvironmentVariable("Jwt__Audience", "Barbershop.Tests.Client");
+        Environment.SetEnvironmentVariable("Jwt__SigningKey", "12345678901234567890123456789012-auth-tests-key");
+        Environment.SetEnvironmentVariable("Jwt__RequireHttpsMetadata", "false");
+        Environment.SetEnvironmentVariable("SeedAdmin__Enabled", "false");
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)

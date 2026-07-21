@@ -33,7 +33,7 @@ internal sealed class MagickImageTranscoder : IImageTranscoder
 
       return new TranscodedImage(output, output.Length);
     }
-    catch (MagickException exception)
+    catch (Exception exception) when (exception is not OperationCanceledException)
     {
       _logger.LogWarning(
           exception,

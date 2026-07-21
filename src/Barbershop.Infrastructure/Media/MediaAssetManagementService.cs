@@ -57,12 +57,14 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
   private readonly TimeProvider _timeProvider;
   private readonly FileStorageOptions _fileStorageOptions;
   private readonly HashSet<string> _allowedContentTypes;
+  private readonly IImageTranscoder _imageTranscoder;
 
   public MediaAssetManagementService(
       AppDbContext dbContext,
       IFileStorageService fileStorageService,
       TimeProvider timeProvider,
-      IOptions<FileStorageOptions> fileStorageOptions)
+      IOptions<FileStorageOptions> fileStorageOptions,
+      IImageTranscoder imageTranscoder)
   {
     _dbContext = dbContext;
     _fileStorageService = fileStorageService;
@@ -72,6 +74,7 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
         .Select(NormalizeContentType)
         .Where(value => !string.IsNullOrWhiteSpace(value))
         .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    _imageTranscoder = imageTranscoder;
   }
 
   public async Task<MediaAssetView> UploadAsync(
@@ -80,6 +83,10 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
       MediaAssetUploadRequest request,
       CancellationToken cancellationToken = default)
   {
+    var originalContent = request.Content;
+    request = await TryTranscodeToJpegAsync(request, cancellationToken);
+    using var transcodedContent = !ReferenceEquals(request.Content, originalContent) ? request.Content : null;
+
     ValidateUploadRequest(currentUserId, roles, request);
     await EnsureActiveUserExistsAsync(currentUserId, cancellationToken);
 
@@ -115,6 +122,45 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
       await _dbContext.SaveChangesAsync(cancellationToken);
       throw new ServiceUnavailableException("The media storage service is temporarily unavailable.");
     }
+  }
+
+  private async Task<MediaAssetUploadRequest> TryTranscodeToJpegAsync(
+      MediaAssetUploadRequest request, CancellationToken cancellationToken)
+  {
+    var normalizedContentType = NormalizeContentType(request.ContentType);
+
+    if (ImageContentTypes.Contains(normalizedContentType))
+    {
+      return request;
+    }
+
+    if (!normalizedContentType.StartsWith("image/", StringComparison.Ordinal))
+    {
+      return request;
+    }
+
+    if (request.SizeBytes <= 0 || request.SizeBytes > _fileStorageOptions.MaxUploadBytes)
+    {
+      return request;
+    }
+
+    var converted = await _imageTranscoder.TryConvertToJpegAsync(request.Content, request.ContentType, cancellationToken);
+    if (converted is null)
+    {
+      return request;
+    }
+
+    var newFileName = string.IsNullOrWhiteSpace(request.FileName)
+        ? "upload.jpg"
+        : Path.ChangeExtension(request.FileName, ".jpg");
+
+    return request with
+    {
+      FileName = newFileName,
+      ContentType = "image/jpeg",
+      SizeBytes = converted.SizeBytes,
+      Content = converted.Content
+    };
   }
 
   public async Task<IReadOnlyList<MediaAssetView>> GetAllAsync(CancellationToken cancellationToken = default)

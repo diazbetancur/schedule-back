@@ -16,6 +16,7 @@ public sealed class MediaAssetUploadTests : IDisposable
 {
   private readonly AppDbContext _dbContext;
   private readonly FakeFileStorageService _fileStorageService;
+  private readonly FakeImageTranscoder _imageTranscoder;
   private readonly IMediaAssetsService _mediaAssetsService;
   private readonly Guid _currentUserId;
 
@@ -27,6 +28,7 @@ public sealed class MediaAssetUploadTests : IDisposable
 
     _dbContext = new AppDbContext(dbOptions);
     _fileStorageService = new FakeFileStorageService();
+    _imageTranscoder = new FakeImageTranscoder();
 
     var fileStorageOptions = Options.Create(new FileStorageOptions
     {
@@ -45,7 +47,8 @@ public sealed class MediaAssetUploadTests : IDisposable
         _dbContext,
         _fileStorageService,
         TimeProvider.System,
-        fileStorageOptions);
+        fileStorageOptions,
+        _imageTranscoder);
 
     var now = DateTime.UtcNow;
     var currentUser = new User("Media Admin", "media-admin@example.com", "hashed-password", now);
@@ -149,6 +152,52 @@ public sealed class MediaAssetUploadTests : IDisposable
   }
 
   [Fact]
+  public async Task UploadAsync_SkipsTranscodingForAlreadySupportedContentType()
+  {
+    _imageTranscoder.ThrowIfCalled = true;
+    using var stream = CreateStream();
+
+    var response = await _mediaAssetsService.UploadAsync(
+        _currentUserId,
+        [RoleNames.Staff],
+        new MediaAssetUploadRequest("photo.png", "image/png", stream.Length, MediaAssetPurpose.StaffPhoto, stream));
+
+    Assert.Equal("image/png", response.ContentType);
+  }
+
+  [Fact]
+  public async Task UploadAsync_ConvertsUnsupportedImageContentTypeToJpeg()
+  {
+    var convertedBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 };
+    _imageTranscoder.Result = new TranscodedImage(new MemoryStream(convertedBytes), convertedBytes.Length);
+    using var stream = CreateStream();
+
+    var response = await _mediaAssetsService.UploadAsync(
+        _currentUserId,
+        [RoleNames.Staff],
+        new MediaAssetUploadRequest("photo.heic", "image/heic", stream.Length, MediaAssetPurpose.StaffPhoto, stream));
+
+    Assert.Equal("image/jpeg", response.ContentType);
+    Assert.Equal("photo.jpg", response.FileName);
+    Assert.Equal(convertedBytes.Length, response.SizeBytes);
+  }
+
+  [Fact]
+  public async Task UploadAsync_WhenTranscodeFails_FallsBackToContentTypeValidationError()
+  {
+    _imageTranscoder.Result = null;
+    using var stream = CreateStream();
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _mediaAssetsService.UploadAsync(
+            _currentUserId,
+            [RoleNames.Staff],
+            new MediaAssetUploadRequest("photo.heic", "image/heic", stream.Length, MediaAssetPurpose.StaffPhoto, stream)));
+
+    Assert.Contains("contentType", exception.Errors.Keys);
+  }
+
+  [Fact]
   public async Task DeleteAsync_ArchivesReadyAssetAndDeletesObject()
   {
     var uploaded = await UploadValidAssetAsync();
@@ -228,5 +277,23 @@ public sealed class MediaAssetUploadTests : IDisposable
     }
 
     public string? GetPublicUrl(string storageKey) => $"https://assets.example.com/{storageKey}";
+  }
+
+  private sealed class FakeImageTranscoder : IImageTranscoder
+  {
+    public bool ThrowIfCalled { get; set; }
+
+    public TranscodedImage? Result { get; set; }
+
+    public Task<TranscodedImage?> TryConvertToJpegAsync(
+        Stream content, string contentType, CancellationToken cancellationToken = default)
+    {
+      if (ThrowIfCalled)
+      {
+        throw new InvalidOperationException("Transcoder should not have been called for this content type.");
+      }
+
+      return Task.FromResult(Result);
+    }
   }
 }

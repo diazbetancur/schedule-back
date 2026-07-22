@@ -6,4 +6,9 @@ public sealed class ServiceUnavailableException : Exception
       : base(message)
   {
   }
+
+  public ServiceUnavailableException(string message, Exception innerException)
+      : base(message, innerException)
+  {
+  }
 }

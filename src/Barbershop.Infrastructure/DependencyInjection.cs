@@ -106,6 +106,7 @@ public static class DependencyInjection
         services.AddScoped<IPushNotificationSender, WebPushNotificationSender>();
         services.AddScoped<IAppointmentNotificationService, AppointmentNotificationService>();
         services.AddScoped<IAdminNotificationsService, AdminNotificationsService>();
+        services.AddScoped<IImageTranscoder, MagickImageTranscoder>();
         services.AddScoped<IMediaAssetsService, MediaAssetManagementService>();
         services.AddScoped<ContentManagementService>();
         services.AddScoped<IPublicContentService>(serviceProvider => serviceProvider.GetRequiredService<ContentManagementService>());

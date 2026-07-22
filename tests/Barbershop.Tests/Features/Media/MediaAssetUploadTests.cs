@@ -8,6 +8,7 @@ using Barbershop.Infrastructure.Configuration;
 using Barbershop.Infrastructure.Media;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Barbershop.Tests.Features.Media;
@@ -48,7 +49,8 @@ public sealed class MediaAssetUploadTests : IDisposable
         _fileStorageService,
         TimeProvider.System,
         fileStorageOptions,
-        _imageTranscoder);
+        _imageTranscoder,
+        NullLogger<MediaAssetManagementService>.Instance);
 
     var now = DateTime.UtcNow;
     var currentUser = new User("Media Admin", "media-admin@example.com", "hashed-password", now);

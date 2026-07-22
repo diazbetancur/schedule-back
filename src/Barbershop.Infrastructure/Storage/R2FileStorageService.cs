@@ -98,12 +98,38 @@ public sealed class R2FileStorageService : IFileStorageService
 
     private void EnsureConfigured()
     {
-        if (!OptionsValidationHelpers.IsConfigured(_storageOptions.BucketName)
-            || !OptionsValidationHelpers.IsConfigured(_storageOptions.AccessKeyId)
-            || !OptionsValidationHelpers.IsConfigured(_storageOptions.SecretAccessKey)
-            || !OptionsValidationHelpers.IsConfigured(_storageOptions.Endpoint))
+        var missingSettings = new List<string>();
+
+        if (!OptionsValidationHelpers.IsConfigured(_storageOptions.BucketName))
         {
-            throw new InvalidOperationException("R2 storage is not fully configured. Check R2Storage secrets.");
+            missingSettings.Add($"{R2StorageOptions.SectionName}:BucketName");
+        }
+
+        if (!OptionsValidationHelpers.IsConfigured(_storageOptions.AccessKeyId))
+        {
+            missingSettings.Add($"{R2StorageOptions.SectionName}:AccessKeyId");
+        }
+
+        if (!OptionsValidationHelpers.IsConfigured(_storageOptions.SecretAccessKey))
+        {
+            missingSettings.Add($"{R2StorageOptions.SectionName}:SecretAccessKey");
+        }
+
+        if (!OptionsValidationHelpers.IsConfigured(_storageOptions.Endpoint))
+        {
+            missingSettings.Add($"{R2StorageOptions.SectionName}:Endpoint");
+        }
+
+        if (!OptionsValidationHelpers.IsConfigured(_storageOptions.PublicBaseUrl))
+        {
+            missingSettings.Add($"{R2StorageOptions.SectionName}:PublicBaseUrl");
+        }
+
+        if (missingSettings.Count > 0)
+        {
+            var message = $"R2 storage is not fully configured. Missing settings: {string.Join(", ", missingSettings)}.";
+            _logger.LogError(message);
+            throw new InvalidOperationException(message);
         }
     }
 

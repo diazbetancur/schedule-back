@@ -1,6 +1,6 @@
 using Api.Barbershop.Features.Auth;
+using Api.Barbershop.Features.Uploads;
 using Barbershop.Application.Auth;
-using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Customer;
 using System.Security.Claims;
 
@@ -72,9 +72,15 @@ public static class CustomerProfileEndpoints
         ClaimsPrincipal user,
         HttpRequest request,
         ICustomerProfileService service,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var file = await ReadSingleFileAsync(request, "photo", MaxPhotoBytes, cancellationToken);
+        var file = await MultipartFileReader.ReadSingleFileAsync(
+            request,
+            "photo",
+            MaxPhotoBytes,
+            loggerFactory.CreateLogger("Api.Barbershop.Uploads.CustomerProfilePhoto"),
+            cancellationToken);
         using var stream = file.OpenReadStream();
         var result = await service.UploadPhotoAsync(
             user.GetRequiredUserId(),
@@ -100,37 +106,5 @@ public static class CustomerProfileEndpoints
     {
         await service.ChangePasswordAsync(user.GetRequiredUserId(), request, cancellationToken);
         return Results.NoContent();
-    }
-
-    private static async Task<IFormFile> ReadSingleFileAsync(HttpRequest request, string fieldName, long maxBytes, CancellationToken cancellationToken)
-    {
-        if (!request.HasFormContentType)
-        {
-            throw new ValidationProblemException(new Dictionary<string, string[]>
-            {
-                [fieldName] = ["Multipart form-data content is required."]
-            });
-        }
-
-        var form = await request.ReadFormAsync(cancellationToken);
-        var file = form.Files.GetFile(fieldName);
-
-        if (file is null || file.Length == 0)
-        {
-            throw new ValidationProblemException(new Dictionary<string, string[]>
-            {
-                [fieldName] = ["A file is required."]
-            });
-        }
-
-        if (file.Length > maxBytes)
-        {
-            throw new ValidationProblemException(new Dictionary<string, string[]>
-            {
-                [fieldName] = [$"File size must not exceed {maxBytes / 1024 / 1024} MB."]
-            });
-        }
-
-        return file;
     }
 }

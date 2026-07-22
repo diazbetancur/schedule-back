@@ -1,6 +1,6 @@
 using Api.Barbershop.Features.Auth;
+using Api.Barbershop.Features.Uploads;
 using Barbershop.Application.Auth;
-using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Staff;
 using Barbershop.Application.Staff.SelfService;
 using System.Security.Claims;
@@ -68,9 +68,19 @@ public static class StaffProfileEndpoints
     private static Task<StaffManagementView> UpdateCurrentAsync(ClaimsPrincipal user, StaffProfileUpdateRequest request, IStaffProfileService service, CancellationToken cancellationToken)
         => service.UpdateCurrentAsync(user.GetRequiredUserId(), request, cancellationToken);
 
-    private static async Task<IResult> UploadPhotoAsync(ClaimsPrincipal user, HttpRequest request, IStaffProfileService service, CancellationToken cancellationToken)
+    private static async Task<IResult> UploadPhotoAsync(
+        ClaimsPrincipal user,
+        HttpRequest request,
+        IStaffProfileService service,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken)
     {
-        var file = await ReadSingleFileAsync(request, "photo", MaxPhotoBytes, cancellationToken);
+        var file = await MultipartFileReader.ReadSingleFileAsync(
+            request,
+            "photo",
+            MaxPhotoBytes,
+            loggerFactory.CreateLogger("Api.Barbershop.Uploads.StaffProfilePhoto"),
+            cancellationToken);
         using var stream = file.OpenReadStream();
         var result = await service.UploadPhotoAsync(
             user.GetRequiredUserId(),
@@ -85,9 +95,19 @@ public static class StaffProfileEndpoints
         return Results.Ok(result);
     }
 
-    private static async Task<IResult> UploadTipsQrAsync(ClaimsPrincipal user, HttpRequest request, IStaffProfileService service, CancellationToken cancellationToken)
+    private static async Task<IResult> UploadTipsQrAsync(
+        ClaimsPrincipal user,
+        HttpRequest request,
+        IStaffProfileService service,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken)
     {
-        var file = await ReadSingleFileAsync(request, "file", MaxQrBytes, cancellationToken);
+        var file = await MultipartFileReader.ReadSingleFileAsync(
+            request,
+            "file",
+            MaxQrBytes,
+            loggerFactory.CreateLogger("Api.Barbershop.Uploads.StaffTipsQr"),
+            cancellationToken);
         using var stream = file.OpenReadStream();
         var result = await service.UploadTipsQrAsync(
             user.GetRequiredUserId(),
@@ -100,37 +120,5 @@ public static class StaffProfileEndpoints
     {
         var result = await service.RemoveTipsQrAsync(user.GetRequiredUserId(), cancellationToken);
         return Results.Ok(result);
-    }
-
-    private static async Task<IFormFile> ReadSingleFileAsync(HttpRequest request, string fieldName, long maxBytes, CancellationToken cancellationToken)
-    {
-        if (!request.HasFormContentType)
-        {
-            throw new ValidationProblemException(new Dictionary<string, string[]>
-            {
-                [fieldName] = ["Multipart form-data content is required."]
-            });
-        }
-
-        var form = await request.ReadFormAsync(cancellationToken);
-        var file = form.Files.GetFile(fieldName);
-
-        if (file is null || file.Length == 0)
-        {
-            throw new ValidationProblemException(new Dictionary<string, string[]>
-            {
-                [fieldName] = ["A file is required."]
-            });
-        }
-
-        if (file.Length > maxBytes)
-        {
-            throw new ValidationProblemException(new Dictionary<string, string[]>
-            {
-                [fieldName] = [$"File size must not exceed {maxBytes / 1024 / 1024} MB."]
-            });
-        }
-
-        return file;
     }
 }

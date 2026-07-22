@@ -17,6 +17,10 @@ RUN dotnet publish src/Api.Barbershop/Api.Barbershop.csproj -c Release -o /app/p
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends libgssapi-krb5-2 wget \
+  && rm -rf /var/lib/apt/lists/*
+
 ENV ASPNETCORE_URLS=http://+:5000
 # Default environment is Production; override at runtime with -e ASPNETCORE_ENVIRONMENT=QA
 ENV ASPNETCORE_ENVIRONMENT=Production

@@ -6,6 +6,7 @@ using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Configuration;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Barbershop.Infrastructure.Media;
@@ -58,13 +59,15 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
   private readonly FileStorageOptions _fileStorageOptions;
   private readonly HashSet<string> _allowedContentTypes;
   private readonly IImageTranscoder _imageTranscoder;
+  private readonly ILogger<MediaAssetManagementService> _logger;
 
   public MediaAssetManagementService(
       AppDbContext dbContext,
       IFileStorageService fileStorageService,
       TimeProvider timeProvider,
       IOptions<FileStorageOptions> fileStorageOptions,
-      IImageTranscoder imageTranscoder)
+      IImageTranscoder imageTranscoder,
+      ILogger<MediaAssetManagementService> logger)
   {
     _dbContext = dbContext;
     _fileStorageService = fileStorageService;
@@ -75,6 +78,7 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
         .Where(value => !string.IsNullOrWhiteSpace(value))
         .ToHashSet(StringComparer.OrdinalIgnoreCase);
     _imageTranscoder = imageTranscoder;
+    _logger = logger;
   }
 
   public async Task<MediaAssetView> UploadAsync(
@@ -120,7 +124,16 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     {
       mediaAsset.MarkFailed(BuildFailureReason(exception), _timeProvider.GetUtcNow().UtcDateTime);
       await _dbContext.SaveChangesAsync(cancellationToken);
-      throw new ServiceUnavailableException("The media storage service is temporarily unavailable.");
+
+      _logger.LogError(
+          exception,
+          "Media upload failed for asset {MediaAssetId}, key {StorageKey}, purpose {Purpose}, content type {ContentType}.",
+          mediaAsset.Id,
+          mediaAsset.StorageKey,
+          mediaAsset.Purpose,
+          mediaAsset.ContentType);
+
+      throw new ServiceUnavailableException("The media storage service is temporarily unavailable.", exception);
     }
   }
 

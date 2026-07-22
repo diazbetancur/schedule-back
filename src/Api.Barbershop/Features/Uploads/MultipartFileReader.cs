@@ -14,10 +14,12 @@ internal static class MultipartFileReader
     if (!request.HasFormContentType)
     {
       logger.LogWarning(
-          "Upload request for {Path} was not multipart form-data. ContentType={ContentType}; ContentLength={ContentLength}.",
+          "Upload request for {Path} was not multipart form-data. ContentType={ContentType}; ContentLength={ContentLength}; ClientFileSize={ClientFileSize}; ClientFileType={ClientFileType}.",
           request.Path,
           request.ContentType,
-          request.ContentLength);
+          request.ContentLength,
+          request.Headers["X-Upload-File-Size"].ToString(),
+          request.Headers["X-Upload-File-Type"].ToString());
 
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
@@ -44,11 +46,13 @@ internal static class MultipartFileReader
     if (file is null || file.Length == 0)
     {
       logger.LogWarning(
-          "Upload request for {Path} did not include a non-empty file in field {ExpectedFieldName}. ContentType={ContentType}; ContentLength={ContentLength}; FormFields={FormFields}; FileFields={FileFields}.",
+          "Upload request for {Path} did not include a non-empty file in field {ExpectedFieldName}. ContentType={ContentType}; ContentLength={ContentLength}; ClientFileSize={ClientFileSize}; ClientFileType={ClientFileType}; FormFields={FormFields}; FileFields={FileFields}.",
           request.Path,
           fieldName,
           request.ContentType,
           request.ContentLength,
+          request.Headers["X-Upload-File-Size"].ToString(),
+          request.Headers["X-Upload-File-Type"].ToString(),
           DescribeFormFields(form),
           DescribeFileFields(form.Files));
 

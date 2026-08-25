@@ -1,38 +1,46 @@
 using System.Globalization;
 using Barbershop.Application.Notifications;
 using Barbershop.Domain.Common;
+using Barbershop.Domain.Users;
+using Barbershop.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 
 namespace Barbershop.Infrastructure.Notifications;
 
 internal sealed class AppointmentNotificationService : IAppointmentNotificationService
 {
   private static readonly CultureInfo DisplayCulture = CultureInfo.GetCultureInfo("es-CO");
+  private static readonly string NormalizedAdminRole = RoleNames.Admin.ToUpperInvariant();
 
   private readonly IPushNotificationSender _sender;
+  private readonly AppDbContext _dbContext;
 
-  public AppointmentNotificationService(IPushNotificationSender sender)
+  public AppointmentNotificationService(IPushNotificationSender sender, AppDbContext dbContext)
   {
     _sender = sender;
+    _dbContext = dbContext;
   }
 
-  public Task NotifyStaffOfNewAppointmentAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
+  public async Task NotifyStaffOfNewAppointmentAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
   {
     var message = new PushNotificationMessage(
         "Nueva cita agendada",
         $"{context.CustomerName} agendó una cita para el {FormatDateTime(context.StartsAtUtc)}.",
         "/staff/appointments");
 
-    return _sender.SendToUsersAsync([context.StaffUserId], message, cancellationToken);
+    var recipients = await ResolveStaffAndAdminRecipientsAsync(context.StaffUserId, cancellationToken);
+    await _sender.SendToUsersAsync(recipients, message, cancellationToken);
   }
 
-  public Task NotifyStaffOfCustomerCancellationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
+  public async Task NotifyStaffOfCustomerCancellationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
   {
     var message = new PushNotificationMessage(
         "Cita cancelada",
         $"{context.CustomerName} canceló su cita del {FormatDateTime(context.StartsAtUtc)}.",
         "/staff/appointments");
 
-    return _sender.SendToUsersAsync([context.StaffUserId], message, cancellationToken);
+    var recipients = await ResolveStaffAndAdminRecipientsAsync(context.StaffUserId, cancellationToken);
+    await _sender.SendToUsersAsync(recipients, message, cancellationToken);
   }
 
   public Task NotifyCustomerOfAppointmentUpdateAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
@@ -78,6 +86,16 @@ internal sealed class AppointmentNotificationService : IAppointmentNotificationS
         "/customer/appointments");
 
     return _sender.SendToUsersAsync([customerUserId], message, cancellationToken);
+  }
+
+  private async Task<IReadOnlyCollection<Guid>> ResolveStaffAndAdminRecipientsAsync(Guid staffUserId, CancellationToken cancellationToken)
+  {
+    var adminUserIds = await _dbContext.Users
+        .Where(user => user.IsActive && user.UserRoles.Any(userRole => userRole.Role.NormalizedName == NormalizedAdminRole))
+        .Select(user => user.Id)
+        .ToListAsync(cancellationToken);
+
+    return adminUserIds.Append(staffUserId).Distinct().ToArray();
   }
 
   private static string FormatDateTime(DateTime startsAtUtc)

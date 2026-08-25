@@ -295,6 +295,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         }
 
         staffProfile.SetPhoto(mediaView.Id, utcNow);
+        staffProfile.User.SetProfilePhoto(mediaView.Id, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
@@ -310,6 +311,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         var assetId = staffProfile.PhotoMediaAssetId.Value;
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         staffProfile.SetPhoto(null, utcNow);
+        staffProfile.User.SetProfilePhoto(null, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
         await TryDeleteMediaAssetAsync(assetId, "Removed by staff from profile", cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
@@ -371,6 +373,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         }
 
         staffProfile.SetPhoto(mediaView.Id, utcNow);
+        staffProfile.User.SetProfilePhoto(mediaView.Id, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
@@ -386,6 +389,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         var assetId = staffProfile.PhotoMediaAssetId.Value;
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         staffProfile.SetPhoto(null, utcNow);
+        staffProfile.User.SetProfilePhoto(null, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
         await TryDeleteMediaAssetAsync(assetId, "Removed by admin from staff profile", cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);

@@ -321,6 +321,60 @@ public sealed class StaffManagementServiceTests : IDisposable
   }
 
   [Fact]
+  public async Task UploadPhotoAsync_Admin_AlsoSyncsUserProfilePhoto()
+  {
+    var staff = await CreateStaffAsync("photo-user-sync@example.com", "Photo User Sync", "Photo User Sync");
+
+    using var content = new MemoryStream(new byte[] { 1, 2, 3 });
+    var result = await _adminStaffService.UploadPhotoAsync(
+        staff.StaffProfileId, Guid.NewGuid(), new StaffMediaUploadRequest("photo.jpg", "image/jpeg", 3, content));
+
+    var user = await _dbContext.Users.SingleAsync(candidate => candidate.Id == staff.UserId);
+    Assert.Equal(result.PhotoMediaAssetId, user.ProfilePhotoMediaAssetId);
+  }
+
+  [Fact]
+  public async Task RemovePhotoAsync_Admin_AlsoClearsUserProfilePhoto()
+  {
+    var staff = await CreateStaffAsync("photo-user-sync-remove@example.com", "Photo User Sync Remove", "Photo User Sync Remove");
+    using var content = new MemoryStream(new byte[] { 1 });
+    await _adminStaffService.UploadPhotoAsync(
+        staff.StaffProfileId, Guid.NewGuid(), new StaffMediaUploadRequest("photo.jpg", "image/jpeg", 1, content));
+
+    await _adminStaffService.RemovePhotoAsync(staff.StaffProfileId);
+
+    var user = await _dbContext.Users.SingleAsync(candidate => candidate.Id == staff.UserId);
+    Assert.Null(user.ProfilePhotoMediaAssetId);
+  }
+
+  [Fact]
+  public async Task UploadPhotoAsync_SelfService_AlsoSyncsUserProfilePhoto()
+  {
+    var staff = await CreateStaffAsync("photo-self-user-sync@example.com", "Photo Self User Sync", "Photo Self User Sync");
+
+    using var content = new MemoryStream(new byte[] { 1, 2, 3 });
+    var result = await _staffProfileService.UploadPhotoAsync(
+        staff.UserId, new StaffMediaUploadRequest("photo.jpg", "image/jpeg", 3, content));
+
+    var user = await _dbContext.Users.SingleAsync(candidate => candidate.Id == staff.UserId);
+    Assert.Equal(result.PhotoMediaAssetId, user.ProfilePhotoMediaAssetId);
+  }
+
+  [Fact]
+  public async Task RemovePhotoAsync_SelfService_AlsoClearsUserProfilePhoto()
+  {
+    var staff = await CreateStaffAsync("photo-self-user-sync-remove@example.com", "Photo Self User Sync Remove", "Photo Self User Sync Remove");
+    using var content = new MemoryStream(new byte[] { 1 });
+    await _staffProfileService.UploadPhotoAsync(
+        staff.UserId, new StaffMediaUploadRequest("photo.jpg", "image/jpeg", 1, content));
+
+    await _staffProfileService.RemovePhotoAsync(staff.UserId);
+
+    var user = await _dbContext.Users.SingleAsync(candidate => candidate.Id == staff.UserId);
+    Assert.Null(user.ProfilePhotoMediaAssetId);
+  }
+
+  [Fact]
   public async Task UploadPhotoAsync_Admin_UnknownStaffProfileId_ThrowsKeyNotFound()
   {
     using var content = new MemoryStream(new byte[] { 1 });

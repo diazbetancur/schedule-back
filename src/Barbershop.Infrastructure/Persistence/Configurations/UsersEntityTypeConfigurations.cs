@@ -69,20 +69,55 @@ internal sealed class RoleConfiguration : IEntityTypeConfiguration<Role>
 {
   public void Configure(EntityTypeBuilder<Role> builder)
   {
-    builder.ToTable("roles", tableBuilder =>
-    {
-      tableBuilder.HasCheckConstraint(
-              "ck_roles_supported_names",
-              "\"NormalizedName\" IN ('ADMIN', 'STAFF', 'CUSTOMER')");
-    });
+    builder.ToTable("roles");
 
     builder.HasKey(x => x.Id);
 
     builder.Property(x => x.Id).ValueGeneratedNever();
     builder.Property(x => x.Name).HasMaxLength(50).IsRequired();
     builder.Property(x => x.NormalizedName).HasMaxLength(50).IsRequired();
+    builder.Property(x => x.IsSystemRole).HasDefaultValue(false).IsRequired();
 
     builder.HasIndex(x => x.NormalizedName).IsUnique();
+  }
+}
+
+internal sealed class PermissionConfiguration : IEntityTypeConfiguration<Permission>
+{
+  public void Configure(EntityTypeBuilder<Permission> builder)
+  {
+    builder.ToTable("permissions");
+
+    builder.HasKey(x => x.Id);
+
+    builder.Property(x => x.Id).ValueGeneratedNever();
+    builder.Property(x => x.Code).HasMaxLength(100).IsRequired();
+    builder.Property(x => x.Description).HasMaxLength(500).IsRequired();
+    builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
+
+    builder.HasIndex(x => x.Code).IsUnique();
+  }
+}
+
+internal sealed class RolePermissionConfiguration : IEntityTypeConfiguration<RolePermission>
+{
+  public void Configure(EntityTypeBuilder<RolePermission> builder)
+  {
+    builder.ToTable("role_permissions");
+
+    builder.HasKey(x => new { x.RoleId, x.PermissionId });
+
+    builder.Property(x => x.AssignedAt).HasColumnType("timestamp with time zone").IsRequired();
+
+    builder.HasOne(x => x.Role)
+        .WithMany(x => x.RolePermissions)
+        .HasForeignKey(x => x.RoleId)
+        .OnDelete(DeleteBehavior.Cascade);
+
+    builder.HasOne(x => x.Permission)
+        .WithMany(x => x.RolePermissions)
+        .HasForeignKey(x => x.PermissionId)
+        .OnDelete(DeleteBehavior.Cascade);
   }
 }
 

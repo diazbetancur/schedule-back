@@ -112,7 +112,7 @@ internal sealed class RolesManagementService : IAdminRolesService
 
     private async Task<List<Permission>> LoadPermissionsAsync(IReadOnlyList<Guid> permissionIds, CancellationToken cancellationToken)
     {
-        var uniqueIds = permissionIds.Distinct().ToArray();
+        var uniqueIds = (permissionIds ?? []).Distinct().ToArray();
         if (uniqueIds.Length == 0)
         {
             return [];

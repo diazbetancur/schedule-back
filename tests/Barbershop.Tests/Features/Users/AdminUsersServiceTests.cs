@@ -130,4 +130,26 @@ public sealed class AdminUsersServiceTests : IDisposable
     await Assert.ThrowsAsync<ArgumentException>(() =>
         _service.UpdateCustomRolesAsync(user.Id, new AdminUserRolesUpdateRequest([Guid.NewGuid()])));
   }
+
+  [Fact]
+  public async Task UpdateCustomRolesAsync_RoleKeptAcrossCalls_PreservesAssignedAt()
+  {
+    var user = await CreateUserAsync();
+    var sellerRole = await CreateCustomRoleAsync("Vendedor");
+    var supportRole = await CreateCustomRoleAsync("Soporte");
+
+    await _service.UpdateCustomRolesAsync(user.Id, new AdminUserRolesUpdateRequest([sellerRole.Id]));
+    var firstAssignedAt = await _dbContext.UserRoles
+        .Where(ur => ur.UserId == user.Id && ur.RoleId == sellerRole.Id)
+        .Select(ur => ur.AssignedAt)
+        .SingleAsync();
+
+    await _service.UpdateCustomRolesAsync(user.Id, new AdminUserRolesUpdateRequest([sellerRole.Id, supportRole.Id]));
+    var secondAssignedAt = await _dbContext.UserRoles
+        .Where(ur => ur.UserId == user.Id && ur.RoleId == sellerRole.Id)
+        .Select(ur => ur.AssignedAt)
+        .SingleAsync();
+
+    Assert.Equal(firstAssignedAt, secondAssignedAt);
+  }
 }

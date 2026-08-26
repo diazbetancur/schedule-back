@@ -24,9 +24,8 @@ using Api.Barbershop.Middleware;
 using Barbershop.Application;
 using Barbershop.Infrastructure;
 using Barbershop.Infrastructure.Configuration;
-using Barbershop.Infrastructure.Persistence;
+using Barbershop.Infrastructure.Identity;
 using Microsoft.AspNetCore.HttpOverrides;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -41,8 +40,17 @@ var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
 {
-    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await db.Database.MigrateAsync();
+    // IIdentitySeedService.EnsureSeededAsync internally runs the pending-migrations
+    // check/migration (EnsureDatabaseAsync) before seeding roles/permissions, so it
+    // replaces the separate Database.MigrateAsync() call that used to live here.
+    // Running it on every startup (not just on first login) keeps the permission
+    // catalog and the Admin role's full-catalog grant in sync from the moment the
+    // app comes up — see the plan's Global Constraint #3 ("el seed sincroniza en
+    // cada arranque"). It is idempotent and safe to call unconditionally in every
+    // environment (the admin-user-creation part stays gated behind
+    // SeedAdmin__Enabled/Development/Testing).
+    var identitySeedService = scope.ServiceProvider.GetRequiredService<IIdentitySeedService>();
+    await identitySeedService.EnsureSeededAsync();
 }
 
 // Cuando el backend corre detrás de un proxy HTTPS (Vercel, Railway, Render, etc.)

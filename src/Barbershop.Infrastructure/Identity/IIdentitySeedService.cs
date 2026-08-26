@@ -1,6 +1,6 @@
 namespace Barbershop.Infrastructure.Identity;
 
-internal interface IIdentitySeedService
+public interface IIdentitySeedService
 {
   Task EnsureSeededAsync(CancellationToken cancellationToken = default);
 }

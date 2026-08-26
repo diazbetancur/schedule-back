@@ -1,6 +1,9 @@
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Media;
 using Barbershop.Application.Staff.Admin;
 using Barbershop.Application.Staff.SelfService;
+using Barbershop.Application.Storage;
+using Barbershop.Domain.Media;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Configuration;
 using Barbershop.Infrastructure.Identity;
@@ -45,8 +48,8 @@ public sealed class StaffManagementServiceTests : IDisposable
         seedService,
         passwordHasher,
         timeProvider,
-        null!,
-        null!);
+        new FakeMediaAssetsService(_dbContext),
+        new FakeFileStorageService());
 
     _adminStaffService = staffManagementService;
     _staffProfileService = staffManagementService;
@@ -261,6 +264,147 @@ public sealed class StaffManagementServiceTests : IDisposable
     Assert.Equal("The professional profile is already active.", exception.Message);
   }
 
+  [Fact]
+  public async Task UploadPhotoAsync_Admin_SetsPhotoForAnotherStaff()
+  {
+    var staff = await CreateStaffAsync("photo-upload@example.com", "Photo Upload", "Photo Upload");
+
+    using var content = new MemoryStream(new byte[] { 1, 2, 3 });
+    var result = await _adminStaffService.UploadPhotoAsync(
+        staff.StaffProfileId,
+        Guid.NewGuid(),
+        new StaffMediaUploadRequest("photo.jpg", "image/jpeg", 3, content));
+
+    Assert.NotNull(result.PhotoMediaAssetId);
+  }
+
+  [Fact]
+  public async Task UploadPhotoAsync_Admin_ReplacingExistingPhoto_ArchivesThePreviousAsset()
+  {
+    var staff = await CreateStaffAsync("photo-replace@example.com", "Photo Replace", "Photo Replace");
+
+    using var firstContent = new MemoryStream(new byte[] { 1 });
+    var afterFirst = await _adminStaffService.UploadPhotoAsync(
+        staff.StaffProfileId, Guid.NewGuid(), new StaffMediaUploadRequest("first.jpg", "image/jpeg", 1, firstContent));
+    var firstAssetId = afterFirst.PhotoMediaAssetId!.Value;
+
+    using var secondContent = new MemoryStream(new byte[] { 2 });
+    var afterSecond = await _adminStaffService.UploadPhotoAsync(
+        staff.StaffProfileId, Guid.NewGuid(), new StaffMediaUploadRequest("second.jpg", "image/jpeg", 1, secondContent));
+
+    Assert.NotEqual(firstAssetId, afterSecond.PhotoMediaAssetId);
+    var archivedAsset = await _dbContext.MediaAssets.SingleAsync(asset => asset.Id == firstAssetId);
+    Assert.Equal(MediaAssetStatus.Archived, archivedAsset.Status);
+  }
+
+  [Fact]
+  public async Task RemovePhotoAsync_Admin_WhenNoPhotoExists_ReturnsUnchangedProfile()
+  {
+    var staff = await CreateStaffAsync("photo-remove-noop@example.com", "Photo Remove", "Photo Remove");
+
+    var result = await _adminStaffService.RemovePhotoAsync(staff.StaffProfileId);
+
+    Assert.Null(result.PhotoMediaAssetId);
+  }
+
+  [Fact]
+  public async Task RemovePhotoAsync_Admin_ClearsExistingPhoto()
+  {
+    var staff = await CreateStaffAsync("photo-remove@example.com", "Photo Remove", "Photo Remove");
+    using var content = new MemoryStream(new byte[] { 1 });
+    await _adminStaffService.UploadPhotoAsync(
+        staff.StaffProfileId, Guid.NewGuid(), new StaffMediaUploadRequest("photo.jpg", "image/jpeg", 1, content));
+
+    var result = await _adminStaffService.RemovePhotoAsync(staff.StaffProfileId);
+
+    Assert.Null(result.PhotoMediaAssetId);
+  }
+
+  [Fact]
+  public async Task UploadPhotoAsync_Admin_AlsoSyncsUserProfilePhoto()
+  {
+    var staff = await CreateStaffAsync("photo-user-sync@example.com", "Photo User Sync", "Photo User Sync");
+
+    using var content = new MemoryStream(new byte[] { 1, 2, 3 });
+    var result = await _adminStaffService.UploadPhotoAsync(
+        staff.StaffProfileId, Guid.NewGuid(), new StaffMediaUploadRequest("photo.jpg", "image/jpeg", 3, content));
+
+    var user = await _dbContext.Users.SingleAsync(candidate => candidate.Id == staff.UserId);
+    Assert.Equal(result.PhotoMediaAssetId, user.ProfilePhotoMediaAssetId);
+  }
+
+  [Fact]
+  public async Task RemovePhotoAsync_Admin_AlsoClearsUserProfilePhoto()
+  {
+    var staff = await CreateStaffAsync("photo-user-sync-remove@example.com", "Photo User Sync Remove", "Photo User Sync Remove");
+    using var content = new MemoryStream(new byte[] { 1 });
+    await _adminStaffService.UploadPhotoAsync(
+        staff.StaffProfileId, Guid.NewGuid(), new StaffMediaUploadRequest("photo.jpg", "image/jpeg", 1, content));
+
+    await _adminStaffService.RemovePhotoAsync(staff.StaffProfileId);
+
+    var user = await _dbContext.Users.SingleAsync(candidate => candidate.Id == staff.UserId);
+    Assert.Null(user.ProfilePhotoMediaAssetId);
+  }
+
+  [Fact]
+  public async Task UploadPhotoAsync_SelfService_AlsoSyncsUserProfilePhoto()
+  {
+    var staff = await CreateStaffAsync("photo-self-user-sync@example.com", "Photo Self User Sync", "Photo Self User Sync");
+
+    using var content = new MemoryStream(new byte[] { 1, 2, 3 });
+    var result = await _staffProfileService.UploadPhotoAsync(
+        staff.UserId, new StaffMediaUploadRequest("photo.jpg", "image/jpeg", 3, content));
+
+    var user = await _dbContext.Users.SingleAsync(candidate => candidate.Id == staff.UserId);
+    Assert.Equal(result.PhotoMediaAssetId, user.ProfilePhotoMediaAssetId);
+  }
+
+  [Fact]
+  public async Task RemovePhotoAsync_SelfService_AlsoClearsUserProfilePhoto()
+  {
+    var staff = await CreateStaffAsync("photo-self-user-sync-remove@example.com", "Photo Self User Sync Remove", "Photo Self User Sync Remove");
+    using var content = new MemoryStream(new byte[] { 1 });
+    await _staffProfileService.UploadPhotoAsync(
+        staff.UserId, new StaffMediaUploadRequest("photo.jpg", "image/jpeg", 1, content));
+
+    await _staffProfileService.RemovePhotoAsync(staff.UserId);
+
+    var user = await _dbContext.Users.SingleAsync(candidate => candidate.Id == staff.UserId);
+    Assert.Null(user.ProfilePhotoMediaAssetId);
+  }
+
+  [Fact]
+  public async Task UploadPhotoAsync_Admin_UnknownStaffProfileId_ThrowsKeyNotFound()
+  {
+    using var content = new MemoryStream(new byte[] { 1 });
+    await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+        _adminStaffService.UploadPhotoAsync(
+            Guid.NewGuid(), Guid.NewGuid(), new StaffMediaUploadRequest("photo.jpg", "image/jpeg", 1, content)));
+  }
+
+  [Fact]
+  public async Task UploadTipsQrAsync_Admin_SetsTipsQrForAnotherStaff()
+  {
+    var staff = await CreateStaffAsync("qr-upload@example.com", "Qr Upload", "Qr Upload");
+
+    using var content = new MemoryStream(new byte[] { 1 });
+    var result = await _adminStaffService.UploadTipsQrAsync(
+        staff.StaffProfileId, Guid.NewGuid(), new StaffMediaUploadRequest("qr.png", "image/png", 1, content));
+
+    Assert.NotNull(result.TipsQrMediaAssetId);
+  }
+
+  [Fact]
+  public async Task RemoveTipsQrAsync_Admin_WhenNoQrExists_ReturnsUnchangedProfile()
+  {
+    var staff = await CreateStaffAsync("qr-remove-noop@example.com", "Qr Remove", "Qr Remove");
+
+    var result = await _adminStaffService.RemoveTipsQrAsync(staff.StaffProfileId);
+
+    Assert.Null(result.TipsQrMediaAssetId);
+  }
+
   private static AdminStaffCreateRequest CreateRequest(string email, string fullName, string displayName)
       => new(
           fullName,
@@ -301,5 +445,70 @@ public sealed class StaffManagementServiceTests : IDisposable
     public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
 
     public IFileProvider ContentRootFileProvider { get; set; } = new PhysicalFileProvider(AppContext.BaseDirectory);
+  }
+
+  private sealed class FakeMediaAssetsService : IMediaAssetsService
+  {
+    private readonly AppDbContext _dbContext;
+
+    public FakeMediaAssetsService(AppDbContext dbContext)
+    {
+      _dbContext = dbContext;
+    }
+
+    public async Task<MediaAssetView> UploadAsync(
+        Guid currentUserId,
+        IReadOnlyCollection<string> roles,
+        MediaAssetUploadRequest request,
+        CancellationToken cancellationToken = default)
+    {
+      var now = DateTime.UtcNow;
+      var mediaAsset = new MediaAsset(
+          request.FileName,
+          request.ContentType,
+          request.SizeBytes,
+          $"fake/{Guid.NewGuid()}",
+          request.Purpose,
+          currentUserId,
+          now);
+      mediaAsset.MarkReady("https://fake.example.com/file", now);
+
+      _dbContext.MediaAssets.Add(mediaAsset);
+      await _dbContext.SaveChangesAsync(cancellationToken);
+
+      return new MediaAssetView(
+          mediaAsset.Id,
+          mediaAsset.FileName,
+          mediaAsset.ContentType,
+          mediaAsset.SizeBytes,
+          mediaAsset.StorageKey,
+          mediaAsset.PublicUrl,
+          mediaAsset.Purpose,
+          mediaAsset.Status,
+          mediaAsset.UploadedByUserId,
+          mediaAsset.FailureReason,
+          mediaAsset.CreatedAt,
+          mediaAsset.UpdatedAt);
+    }
+
+    public Task<IReadOnlyList<MediaAssetView>> GetAllAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task<MediaAssetView> GetByIdAsync(Guid mediaAssetId, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+
+    public Task DeleteAsync(Guid mediaAssetId, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException();
+  }
+
+  private sealed class FakeFileStorageService : IFileStorageService
+  {
+    public Task<StoredFileResult> UploadAsync(FileStorageObject file, CancellationToken cancellationToken = default)
+        => Task.FromResult(new StoredFileResult(file.ObjectKey, null));
+
+    public Task DeleteAsync(string objectKey, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    public string? GetPublicUrl(string storageKey) => null;
   }
 }

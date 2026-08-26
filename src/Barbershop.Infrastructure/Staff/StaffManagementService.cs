@@ -295,6 +295,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         }
 
         staffProfile.SetPhoto(mediaView.Id, utcNow);
+        staffProfile.User.SetProfilePhoto(mediaView.Id, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
@@ -310,6 +311,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         var assetId = staffProfile.PhotoMediaAssetId.Value;
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         staffProfile.SetPhoto(null, utcNow);
+        staffProfile.User.SetProfilePhoto(null, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
         await TryDeleteMediaAssetAsync(assetId, "Removed by staff from profile", cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
@@ -350,6 +352,84 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         staffProfile.SetTipsQr(null, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
         await TryDeleteMediaAssetAsync(assetId, "Removed by staff from profile", cancellationToken);
+        return await MapAsync(staffProfile, cancellationToken);
+    }
+
+    public async Task<StaffManagementView> UploadPhotoAsync(Guid staffProfileId, Guid uploadedByUserId, StaffMediaUploadRequest request, CancellationToken cancellationToken = default)
+    {
+        var staffProfile = await LoadStaffProfileAsync(staffProfileId, cancellationToken);
+        var roles = new[] { RoleNames.Admin };
+        var mediaView = await _mediaAssetsService.UploadAsync(
+            uploadedByUserId, roles,
+            new Barbershop.Application.Media.MediaAssetUploadRequest(
+                request.FileName, request.ContentType, request.SizeBytes,
+                MediaAssetPurpose.StaffPhoto, request.Content),
+            cancellationToken);
+
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        if (staffProfile.PhotoMediaAssetId.HasValue)
+        {
+            await TryDeleteMediaAssetAsync(staffProfile.PhotoMediaAssetId.Value, "Replaced by admin-uploaded staff photo", cancellationToken);
+        }
+
+        staffProfile.SetPhoto(mediaView.Id, utcNow);
+        staffProfile.User.SetProfilePhoto(mediaView.Id, utcNow);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        return await MapAsync(staffProfile, cancellationToken);
+    }
+
+    async Task<StaffManagementView> IAdminStaffService.RemovePhotoAsync(Guid staffProfileId, CancellationToken cancellationToken)
+    {
+        var staffProfile = await LoadStaffProfileAsync(staffProfileId, cancellationToken);
+        if (!staffProfile.PhotoMediaAssetId.HasValue)
+        {
+            return await MapAsync(staffProfile, cancellationToken);
+        }
+
+        var assetId = staffProfile.PhotoMediaAssetId.Value;
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        staffProfile.SetPhoto(null, utcNow);
+        staffProfile.User.SetProfilePhoto(null, utcNow);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await TryDeleteMediaAssetAsync(assetId, "Removed by admin from staff profile", cancellationToken);
+        return await MapAsync(staffProfile, cancellationToken);
+    }
+
+    public async Task<StaffManagementView> UploadTipsQrAsync(Guid staffProfileId, Guid uploadedByUserId, StaffMediaUploadRequest request, CancellationToken cancellationToken = default)
+    {
+        var staffProfile = await LoadStaffProfileAsync(staffProfileId, cancellationToken);
+        var roles = new[] { RoleNames.Admin };
+        var mediaView = await _mediaAssetsService.UploadAsync(
+            uploadedByUserId, roles,
+            new Barbershop.Application.Media.MediaAssetUploadRequest(
+                request.FileName, request.ContentType, request.SizeBytes,
+                MediaAssetPurpose.TipsQr, request.Content),
+            cancellationToken);
+
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        if (staffProfile.TipsQrMediaAssetId.HasValue)
+        {
+            await TryDeleteMediaAssetAsync(staffProfile.TipsQrMediaAssetId.Value, "Replaced by admin-uploaded tips QR", cancellationToken);
+        }
+
+        staffProfile.SetTipsQr(mediaView.Id, utcNow);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        return await MapAsync(staffProfile, cancellationToken);
+    }
+
+    async Task<StaffManagementView> IAdminStaffService.RemoveTipsQrAsync(Guid staffProfileId, CancellationToken cancellationToken)
+    {
+        var staffProfile = await LoadStaffProfileAsync(staffProfileId, cancellationToken);
+        if (!staffProfile.TipsQrMediaAssetId.HasValue)
+        {
+            return await MapAsync(staffProfile, cancellationToken);
+        }
+
+        var assetId = staffProfile.TipsQrMediaAssetId.Value;
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        staffProfile.SetTipsQr(null, utcNow);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        await TryDeleteMediaAssetAsync(assetId, "Removed by admin from staff profile", cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
 

@@ -90,7 +90,7 @@ internal sealed class AuthService : IAuthService
 
         await _dbContext.SaveChangesAsync(cancellationToken);
 
-        return CreateTokenResponse(user, [RoleNames.Customer], refreshToken.RawToken, null);
+        return CreateTokenResponse(user, [RoleNames.Customer], [], refreshToken.RawToken, null);
     }
 
     public async Task<TokenResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
@@ -104,6 +104,8 @@ internal sealed class AuthService : IAuthService
         var user = await _dbContext.Users
             .Include(candidate => candidate.UserRoles)
             .ThenInclude(userRole => userRole.Role)
+            .ThenInclude(role => role.RolePermissions)
+            .ThenInclude(rolePermission => rolePermission.Permission)
             .SingleOrDefaultAsync(candidate => candidate.NormalizedEmail == normalizedEmail, cancellationToken);
 
         if (user is null || !user.IsActive)
@@ -138,9 +140,10 @@ internal sealed class AuthService : IAuthService
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         var roles = GetRoleNames(user);
+        var permissions = GetPermissionCodes(user);
         var profilePhotoUrl = await GetProfilePhotoUrlAsync(user.ProfilePhotoMediaAssetId, cancellationToken);
 
-        return CreateTokenResponse(user, roles, refreshToken.RawToken, profilePhotoUrl);
+        return CreateTokenResponse(user, roles, permissions, refreshToken.RawToken, profilePhotoUrl);
     }
 
     public async Task<TokenResponse> RefreshAsync(RefreshRequest request, CancellationToken cancellationToken = default)
@@ -155,6 +158,8 @@ internal sealed class AuthService : IAuthService
             .Include(token => token.User)
             .ThenInclude(user => user.UserRoles)
             .ThenInclude(userRole => userRole.Role)
+            .ThenInclude(role => role.RolePermissions)
+            .ThenInclude(rolePermission => rolePermission.Permission)
             .SingleOrDefaultAsync(token => token.TokenHash == refreshTokenHash, cancellationToken);
 
         if (existingToken is null
@@ -172,9 +177,10 @@ internal sealed class AuthService : IAuthService
         await _dbContext.SaveChangesAsync(cancellationToken);
 
         var roles = GetRoleNames(existingToken.User);
+        var permissions = GetPermissionCodes(existingToken.User);
         var profilePhotoUrl = await GetProfilePhotoUrlAsync(existingToken.User.ProfilePhotoMediaAssetId, cancellationToken);
 
-        return CreateTokenResponse(existingToken.User, roles, rotatedToken.RawToken, profilePhotoUrl);
+        return CreateTokenResponse(existingToken.User, roles, permissions, rotatedToken.RawToken, profilePhotoUrl);
     }
 
     public async Task LogoutAsync(Guid currentUserId, LogoutRequest request, CancellationToken cancellationToken = default)
@@ -339,7 +345,7 @@ internal sealed class AuthService : IAuthService
         </html>
         """;
 
-    private TokenResponse CreateTokenResponse(User user, IReadOnlyList<string> roles, string refreshToken, string? profilePhotoUrl)
+    private TokenResponse CreateTokenResponse(User user, IReadOnlyList<string> roles, IReadOnlyList<string> permissions, string refreshToken, string? profilePhotoUrl)
     {
         var jwtOptions = _jwtOptions.Value;
         var expiresAt = _timeProvider.GetUtcNow().UtcDateTime.AddMinutes(jwtOptions.AccessTokenMinutes);
@@ -355,6 +361,7 @@ internal sealed class AuthService : IAuthService
         };
 
         claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
+        claims.AddRange(permissions.Select(code => new Claim(PermissionClaimTypes.Permission, code)));
 
         var credentials = new SigningCredentials(
             new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SigningKey)),
@@ -371,6 +378,13 @@ internal sealed class AuthService : IAuthService
         var accessToken = new JwtSecurityTokenHandler().WriteToken(securityToken);
         return new TokenResponse(accessToken, (int)TimeSpan.FromMinutes(jwtOptions.AccessTokenMinutes).TotalSeconds, refreshToken, CreateUserResponse(user, roles, profilePhotoUrl));
     }
+
+    private static IReadOnlyList<string> GetPermissionCodes(User user)
+        => user.UserRoles
+            .SelectMany(userRole => userRole.Role.RolePermissions.Select(rolePermission => rolePermission.Permission.Code))
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(code => code, StringComparer.Ordinal)
+            .ToArray();
 
     private AuthUserResponse CreateUserResponse(User user, IReadOnlyList<string> roles, string? profilePhotoUrl)
         => new(

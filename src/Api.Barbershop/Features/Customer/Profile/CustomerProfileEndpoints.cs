@@ -75,16 +75,20 @@ public static class CustomerProfileEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var file = await MultipartFileReader.ReadSingleFileAsync(
+        using var uploadedFile = await MultipartFileReader.ReadSingleFileAsync(
             request,
             "photo",
+            "profile-photo",
             MaxPhotoBytes,
             loggerFactory.CreateLogger("Api.Barbershop.Uploads.CustomerProfilePhoto"),
             cancellationToken);
-        using var stream = file.OpenReadStream();
         var result = await service.UploadPhotoAsync(
             user.GetRequiredUserId(),
-            new CustomerPhotoUploadRequest(file.FileName, file.ContentType, file.Length, stream),
+            new CustomerPhotoUploadRequest(
+                uploadedFile.FileName,
+                uploadedFile.ContentType,
+                uploadedFile.Length,
+                uploadedFile.Content),
             cancellationToken);
         return Results.Ok(result);
     }

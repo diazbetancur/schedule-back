@@ -1,5 +1,6 @@
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Users.Admin;
+using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -74,6 +75,49 @@ internal sealed class AdminUsersService : IAdminUsersService
         await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task<AdminUserListItem> UpdateCustomRolesAsync(Guid userId, AdminUserRolesUpdateRequest request, CancellationToken cancellationToken = default)
+    {
+        var user = await _dbContext.Users
+            .Where(u => u.Id == userId && u.IsActive)
+            .Include(u => u.UserRoles)
+            .ThenInclude(ur => ur.Role)
+            .SingleOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException($"User {userId} not found.");
+
+        var uniqueRoleIds = (request.RoleIds ?? []).Distinct().ToArray();
+        var targetRoles = uniqueRoleIds.Length == 0
+            ? []
+            : await _dbContext.Roles.Where(r => uniqueRoleIds.Contains(r.Id)).ToListAsync(cancellationToken);
+
+        if (targetRoles.Count != uniqueRoleIds.Length)
+        {
+            throw new ArgumentException("One or more role ids do not exist.");
+        }
+
+        if (targetRoles.Any(r => r.IsSystemRole))
+        {
+            throw new ArgumentException("System roles cannot be assigned through this endpoint.");
+        }
+
+        var targetRoleIds = targetRoles.Select(r => r.Id).ToHashSet();
+        var currentCustomRoleAssignments = user.UserRoles.Where(ur => !ur.Role.IsSystemRole).ToList();
+        var currentCustomRoleIds = currentCustomRoleAssignments.Select(ur => ur.RoleId).ToHashSet();
+
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        foreach (var assignment in currentCustomRoleAssignments.Where(ur => !targetRoleIds.Contains(ur.RoleId)))
+        {
+            user.UserRoles.Remove(assignment);
+        }
+
+        foreach (var roleId in targetRoleIds.Except(currentCustomRoleIds))
+        {
+            user.UserRoles.Add(new UserRole(user.Id, roleId, utcNow));
+        }
+
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        return ToListItem(user);
+    }
+
     private static AdminUserListItem ToListItem(Barbershop.Domain.Users.User u) =>
         new(
             u.Id,
@@ -81,6 +125,7 @@ internal sealed class AdminUsersService : IAdminUsersService
             u.Email,
             u.PhoneNumber,
             u.UserRoles.Select(ur => ur.Role.Name).OrderBy(r => r).ToArray(),
+            u.UserRoles.Where(ur => !ur.Role.IsSystemRole).Select(ur => ur.RoleId).ToArray(),
             u.IsActive,
             u.CreatedAt);
 }

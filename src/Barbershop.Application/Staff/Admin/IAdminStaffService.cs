@@ -1,3 +1,5 @@
+using Barbershop.Application.Staff.SelfService;
+
 namespace Barbershop.Application.Staff.Admin;
 
 public interface IAdminStaffService
@@ -16,4 +18,20 @@ public interface IAdminStaffService
         Guid currentUserId,
         EnableProfessionalProfileRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<StaffManagementView> UploadPhotoAsync(
+        Guid staffProfileId,
+        Guid uploadedByUserId,
+        StaffMediaUploadRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<StaffManagementView> RemovePhotoAsync(Guid staffProfileId, CancellationToken cancellationToken = default);
+
+    Task<StaffManagementView> UploadTipsQrAsync(
+        Guid staffProfileId,
+        Guid uploadedByUserId,
+        StaffMediaUploadRequest request,
+        CancellationToken cancellationToken = default);
+
+    Task<StaffManagementView> RemoveTipsQrAsync(Guid staffProfileId, CancellationToken cancellationToken = default);
 }

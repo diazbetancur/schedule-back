@@ -1,3 +1,4 @@
+using System.IdentityModel.Tokens.Jwt;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Email;
 using Barbershop.Domain.Users;
@@ -152,6 +153,50 @@ public sealed class AuthServiceTests : IDisposable
         await _authService.RegisterAsync(new RegisterRequest("Second User", "roles-2@example.com", "Secret123!", null));
 
         Assert.Equal(3, await _dbContext.Roles.CountAsync());
+    }
+
+    [Fact]
+    public async Task Login_IncludesPermissionClaim_ForUserWithCustomRolePermission()
+    {
+        var registration = await _authService.RegisterAsync(new RegisterRequest("Vendedor User", "vendedor@example.com", "Secret123!", null));
+
+        var salesPermission = await _dbContext.Permissions.SingleAsync(p => p.Code == PermissionCodes.SalesRegister);
+        var sellerRole = new Role("Vendedor");
+        sellerRole.AddPermission(salesPermission.Id, DateTime.UtcNow);
+        _dbContext.Roles.Add(sellerRole);
+        _dbContext.UserRoles.Add(new UserRole(registration.User.Id, sellerRole.Id, DateTime.UtcNow));
+        await _dbContext.SaveChangesAsync();
+
+        var login = await _authService.LoginAsync(new LoginRequest("vendedor@example.com", "Secret123!"));
+
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(login.AccessToken);
+        var permissionClaims = jwt.Claims.Where(c => c.Type == PermissionClaimTypes.Permission).Select(c => c.Value).ToList();
+        Assert.Contains(PermissionCodes.SalesRegister, permissionClaims);
+    }
+
+    [Fact]
+    public async Task Login_AdminUser_IncludesEveryPermissionInCatalog()
+    {
+        var registration = await _authService.RegisterAsync(new RegisterRequest("Admin User", "admin-perm@example.com", "Secret123!", null));
+
+        var adminRole = await _dbContext.Roles.SingleAsync(r => r.NormalizedName == RoleNames.Admin.ToUpperInvariant());
+        _dbContext.UserRoles.Add(new UserRole(registration.User.Id, adminRole.Id, DateTime.UtcNow));
+        await _dbContext.SaveChangesAsync();
+
+        var login = await _authService.LoginAsync(new LoginRequest("admin-perm@example.com", "Secret123!"));
+
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(login.AccessToken);
+        var permissionClaims = jwt.Claims.Where(c => c.Type == PermissionClaimTypes.Permission).Select(c => c.Value).ToList();
+        Assert.Equal(PermissionCodes.All.OrderBy(c => c), permissionClaims.OrderBy(c => c));
+    }
+
+    [Fact]
+    public async Task Register_PlainCustomer_HasNoPermissionClaims()
+    {
+        var registration = await _authService.RegisterAsync(new RegisterRequest("Plain Customer", "plain@example.com", "Secret123!", null));
+
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(registration.AccessToken);
+        Assert.DoesNotContain(jwt.Claims, c => c.Type == PermissionClaimTypes.Permission);
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

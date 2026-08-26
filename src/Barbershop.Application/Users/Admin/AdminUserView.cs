@@ -6,9 +6,12 @@ public sealed record AdminUserListItem(
     string Email,
     string? PhoneNumber,
     IReadOnlyList<string> Roles,
+    IReadOnlyList<Guid> CustomRoleIds,
     bool IsActive,
     DateTime CreatedAt);
 
 public sealed record AdminUserUpdateRequest(
     string FullName,
     string? PhoneNumber);
+
+public sealed record AdminUserRolesUpdateRequest(IReadOnlyList<Guid> RoleIds);

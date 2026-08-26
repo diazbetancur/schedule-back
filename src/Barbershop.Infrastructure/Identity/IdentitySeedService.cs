@@ -13,6 +13,12 @@ internal sealed class IdentitySeedService : IIdentitySeedService
   private static readonly SemaphoreSlim DatabaseEnsureLock = new(1, 1);
   private static volatile bool _databaseEnsured;
 
+  private static readonly IReadOnlyDictionary<string, string> PermissionDescriptions =
+      new Dictionary<string, string>(StringComparer.Ordinal)
+      {
+        [PermissionCodes.SalesRegister] = "Registrar ventas"
+      };
+
   private readonly AppDbContext _dbContext;
   private readonly IPasswordHasher<object> _passwordHasher;
   private readonly IOptions<SeedAdminOptions> _seedAdminOptions;
@@ -39,6 +45,18 @@ internal sealed class IdentitySeedService : IIdentitySeedService
 
     var rolesChanged = await EnsureRolesAsync(cancellationToken);
     if (rolesChanged)
+    {
+      await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    var permissionsChanged = await EnsurePermissionsAsync(cancellationToken);
+    if (permissionsChanged)
+    {
+      await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    var adminPermissionsChanged = await EnsureAdminPermissionsAsync(cancellationToken);
+    if (adminPermissionsChanged)
     {
       await _dbContext.SaveChangesAsync(cancellationToken);
     }
@@ -97,7 +115,58 @@ internal sealed class IdentitySeedService : IIdentitySeedService
         continue;
       }
 
-      _dbContext.Roles.Add(new Role(roleName));
+      _dbContext.Roles.Add(new Role(roleName, isSystemRole: true));
+      changed = true;
+    }
+
+    return changed;
+  }
+
+  private async Task<bool> EnsurePermissionsAsync(CancellationToken cancellationToken)
+  {
+    var existingCodes = await _dbContext.Permissions
+        .Select(permission => permission.Code)
+        .ToListAsync(cancellationToken);
+
+    var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+    var changed = false;
+    foreach (var code in PermissionCodes.All)
+    {
+      if (existingCodes.Contains(code, StringComparer.Ordinal))
+      {
+        continue;
+      }
+
+      _dbContext.Permissions.Add(new Permission(code, PermissionDescriptions[code], utcNow));
+      changed = true;
+    }
+
+    return changed;
+  }
+
+  private async Task<bool> EnsureAdminPermissionsAsync(CancellationToken cancellationToken)
+  {
+    var adminRole = await _dbContext.Roles
+        .Include(role => role.RolePermissions)
+        .SingleAsync(role => role.NormalizedName == RoleNames.Admin.ToUpperInvariant(), cancellationToken);
+
+    var allPermissions = await _dbContext.Permissions.ToListAsync(cancellationToken);
+    var grantedPermissionIds = adminRole.RolePermissions.Select(rp => rp.PermissionId).ToHashSet();
+
+    var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+    var changed = false;
+    foreach (var permission in allPermissions)
+    {
+      if (grantedPermissionIds.Contains(permission.Id))
+      {
+        continue;
+      }
+
+      // Bypass Role.AddPermission a propósito: ese método rechaza IsSystemRole por diseño
+      // (protege el flujo admin de /admin/roles), pero el seed es quien mantiene a Admin
+      // sincronizado con el 100% del catálogo — mismo patrón que EnsureAdminAsync, que ya
+      // manipula UserRoles directamente sin pasar por un método de dominio guardado.
+      adminRole.RolePermissions.Add(new RolePermission(adminRole.Id, permission.Id, utcNow));
       changed = true;
     }
 

@@ -39,6 +39,14 @@ public static class AdminUsersEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
+        adminUsers.MapPatch("/{userId:guid}/roles", UpdateCustomRolesAsync)
+            .WithName("UpdateAdminUserCustomRoles")
+            .Produces<AdminUserListItem>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
+
         return api;
     }
 
@@ -60,4 +68,8 @@ public static class AdminUsersEndpoints
         await service.DeactivateAsync(userId, cancellationToken);
         return Results.NoContent();
     }
+
+    private static Task<AdminUserListItem> UpdateCustomRolesAsync(
+        Guid userId, AdminUserRolesUpdateRequest request, IAdminUsersService service, CancellationToken cancellationToken)
+        => service.UpdateCustomRolesAsync(userId, request, cancellationToken);
 }

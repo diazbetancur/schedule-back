@@ -75,16 +75,20 @@ public static class StaffProfileEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var file = await MultipartFileReader.ReadSingleFileAsync(
+        using var uploadedFile = await MultipartFileReader.ReadSingleFileAsync(
             request,
             "photo",
+            "staff-photo",
             MaxPhotoBytes,
             loggerFactory.CreateLogger("Api.Barbershop.Uploads.StaffProfilePhoto"),
             cancellationToken);
-        using var stream = file.OpenReadStream();
         var result = await service.UploadPhotoAsync(
             user.GetRequiredUserId(),
-            new StaffMediaUploadRequest(file.FileName, file.ContentType, file.Length, stream),
+            new StaffMediaUploadRequest(
+                uploadedFile.FileName,
+                uploadedFile.ContentType,
+                uploadedFile.Length,
+                uploadedFile.Content),
             cancellationToken);
         return Results.Ok(result);
     }
@@ -102,16 +106,20 @@ public static class StaffProfileEndpoints
         ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
-        var file = await MultipartFileReader.ReadSingleFileAsync(
+        using var uploadedFile = await MultipartFileReader.ReadSingleFileAsync(
             request,
             "file",
+            "tips-qr",
             MaxQrBytes,
             loggerFactory.CreateLogger("Api.Barbershop.Uploads.StaffTipsQr"),
             cancellationToken);
-        using var stream = file.OpenReadStream();
         var result = await service.UploadTipsQrAsync(
             user.GetRequiredUserId(),
-            new StaffMediaUploadRequest(file.FileName, file.ContentType, file.Length, stream),
+            new StaffMediaUploadRequest(
+                uploadedFile.FileName,
+                uploadedFile.ContentType,
+                uploadedFile.Length,
+                uploadedFile.Content),
             cancellationToken);
         return Results.Ok(result);
     }

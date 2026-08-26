@@ -97,7 +97,7 @@ internal sealed class IdentitySeedService : IIdentitySeedService
         continue;
       }
 
-      _dbContext.Roles.Add(new Role(roleName));
+      _dbContext.Roles.Add(new Role(roleName, isSystemRole: true));
       changed = true;
     }
 

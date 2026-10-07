@@ -242,6 +242,86 @@ public sealed class MediaAssetUploadTests : IDisposable
         new MediaAssetUploadRequest("banner.png", "image/png", stream.Length, MediaAssetPurpose.Banner, stream));
   }
 
+  [Fact]
+  public async Task UploadAsync_RawNonSeekableBody_IsBufferedBeforeReachingStorage()
+  {
+    bool? storageGotSeekableStream = null;
+    long? storageContentLength = null;
+    _fileStorageService.OnUploadAsync = file =>
+    {
+      storageGotSeekableStream = file.Content.CanSeek;
+      storageContentLength = file.ContentLength;
+      return Task.CompletedTask;
+    };
+
+    var payload = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10 };
+    using var body = new NonSeekableStream(payload);
+
+    // The declared size (from Content-Length) is wrong on purpose: the real length must win.
+    var response = await _mediaAssetsService.UploadAsync(
+        _currentUserId,
+        [RoleNames.Admin],
+        new MediaAssetUploadRequest("photo.jpg", "image/jpeg", 999, MediaAssetPurpose.CustomerReference, body));
+
+    Assert.True(storageGotSeekableStream);
+    Assert.Equal(payload.Length, storageContentLength);
+    Assert.Equal(payload.Length, response.SizeBytes);
+  }
+
+  [Fact]
+  public async Task UploadAsync_RawBodyLargerThanTheLimit_IsRejected()
+  {
+    using var body = new NonSeekableStream(new byte[(5 * 1024 * 1024) + 1]);
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _mediaAssetsService.UploadAsync(
+            _currentUserId,
+            [RoleNames.Admin],
+            new MediaAssetUploadRequest("photo.jpg", "image/jpeg", 100, MediaAssetPurpose.CustomerReference, body)));
+
+    Assert.Contains("sizeBytes", exception.Errors.Keys);
+    Assert.Empty(await _dbContext.MediaAssets.ToListAsync());
+  }
+
+  /// <summary>Behaves like HttpRequest.Body: forward-only, no Length.</summary>
+  private sealed class NonSeekableStream(byte[] payload) : Stream
+  {
+    private readonly MemoryStream _inner = new(payload);
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+
+    public override long Position
+    {
+      get => throw new NotSupportedException();
+      set => throw new NotSupportedException();
+    }
+
+    public override void Flush()
+    {
+    }
+
+    public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+
+    public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+    public override void SetLength(long value) => throw new NotSupportedException();
+
+    public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+    protected override void Dispose(bool disposing)
+    {
+      if (disposing)
+      {
+        _inner.Dispose();
+      }
+
+      base.Dispose(disposing);
+    }
+  }
+
   private static MemoryStream CreateStream()
   {
     var payload = new byte[] { 0x50, 0x4B, 0x03, 0x04, 0x10, 0x20 };

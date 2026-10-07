@@ -88,8 +88,12 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
       CancellationToken cancellationToken = default)
   {
     var originalContent = request.Content;
+    request = await EnsureSeekableContentAsync(request, cancellationToken);
+    using var bufferedContent = !ReferenceEquals(request.Content, originalContent) ? request.Content : null;
+
+    var contentBeforeTranscode = request.Content;
     request = await TryTranscodeToJpegAsync(request, cancellationToken);
-    using var transcodedContent = !ReferenceEquals(request.Content, originalContent) ? request.Content : null;
+    using var transcodedContent = !ReferenceEquals(request.Content, contentBeforeTranscode) ? request.Content : null;
 
     ValidateUploadRequest(currentUserId, roles, request);
     await EnsureActiveUserExistsAsync(currentUserId, cancellationToken);
@@ -137,6 +141,42 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     }
   }
 
+  /// <summary>
+  /// Profile photos arrive as the raw request body, which is forward-only. The S3 client used for R2
+  /// has to read the payload to sign it (and the transcoder reads it too), so a non-seekable stream
+  /// made every raw upload fail. Buffer it once, bounded by MaxUploadBytes, and use the real length.
+  /// </summary>
+  private async Task<MediaAssetUploadRequest> EnsureSeekableContentAsync(
+      MediaAssetUploadRequest request, CancellationToken cancellationToken)
+  {
+    if (request.Content is null || request.Content.CanSeek)
+    {
+      return request;
+    }
+
+    var maxBytes = _fileStorageOptions.MaxUploadBytes;
+    var buffer = new MemoryStream();
+    var chunk = new byte[81920];
+    int read;
+
+    while ((read = await request.Content.ReadAsync(chunk, cancellationToken)) > 0)
+    {
+      if (buffer.Length + read > maxBytes)
+      {
+        await buffer.DisposeAsync();
+        throw new ValidationProblemException(new Dictionary<string, string[]>
+        {
+          ["sizeBytes"] = [$"SizeBytes must be less than or equal to {maxBytes} bytes."]
+        });
+      }
+
+      buffer.Write(chunk, 0, read);
+    }
+
+    buffer.Position = 0;
+    return request with { Content = buffer, SizeBytes = buffer.Length };
+  }
+
   private async Task<MediaAssetUploadRequest> TryTranscodeToJpegAsync(
       MediaAssetUploadRequest request, CancellationToken cancellationToken)
   {
@@ -160,6 +200,12 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     var converted = await _imageTranscoder.TryConvertToJpegAsync(request.Content, request.ContentType, cancellationToken);
     if (converted is null)
     {
+      // The transcoder consumed the stream; rewind so validation and storage see the original bytes.
+      if (request.Content.CanSeek)
+      {
+        request.Content.Position = 0;
+      }
+
       return request;
     }
 

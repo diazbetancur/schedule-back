@@ -74,14 +74,18 @@ internal sealed class CustomerProfileService : ICustomerProfileService
             cancellationToken);
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        var previousPhotoId = user.ProfilePhotoMediaAssetId;
 
-        if (user.ProfilePhotoMediaAssetId.HasValue)
-        {
-            await TryDeleteMediaAssetAsync(user.ProfilePhotoMediaAssetId.Value, "Replaced by new customer photo", cancellationToken);
-        }
-
+        // Point the profile to the new photo first; only then delete the old file, so a failure in
+        // between never leaves the customer pointing to a photo that no longer exists.
         user.SetProfilePhoto(mediaView.Id, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
+
+        if (previousPhotoId is { } oldPhotoId && oldPhotoId != mediaView.Id)
+        {
+            await TryDeleteMediaAssetAsync(oldPhotoId, "Replaced by new customer photo", cancellationToken);
+        }
+
         return await MapAsync(user, cancellationToken);
     }
 

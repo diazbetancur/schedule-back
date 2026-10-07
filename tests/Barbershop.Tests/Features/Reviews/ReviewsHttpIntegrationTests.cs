@@ -9,6 +9,7 @@ using Barbershop.Application.Reviews;
 using Barbershop.Application.Staff;
 using Barbershop.Application.Staff.Admin;
 using Barbershop.Domain.Appointments;
+using Barbershop.Domain.Common;
 using Barbershop.Tests.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
@@ -498,7 +499,8 @@ public sealed class ReviewsHttpIntegrationTests
       var rules = new[]
           {
                 new AvailabilityRuleRequest(
-                    DayOfWeek: (int)startsAtUtc.DayOfWeek,
+                    // Rules are Bogotá wall-clock values, so use the local day of the slot.
+                    DayOfWeek: (int)BogotaClock.ToLocal(startsAtUtc).DayOfWeek,
                     StartTime: new TimeOnly(9, 0),
                     EndTime: new TimeOnly(18, 0),
                     IsActive: true),
@@ -571,10 +573,11 @@ public sealed class ReviewsHttpIntegrationTests
     client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
   }
 
+  // hour/minute are Bogotá wall-clock time (the availability window is 09:00-18:00 local).
   private static DateTime SlotOnNextDay(int hour, int minute)
   {
-    var value = DateTime.UtcNow.Date.AddDays(1).AddHours(hour).AddMinutes(minute);
-    return DateTime.SpecifyKind(value, DateTimeKind.Utc);
+    var tomorrowLocal = DateOnly.FromDateTime(BogotaClock.ToLocal(DateTime.UtcNow)).AddDays(1);
+    return BogotaClock.ToUtc(tomorrowLocal, new TimeOnly(hour, minute));
   }
 
   private static string UniqueEmail(string prefix)

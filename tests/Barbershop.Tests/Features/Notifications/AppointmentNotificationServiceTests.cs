@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Barbershop.Tests.Features.Notifications;
@@ -26,7 +27,8 @@ public sealed class AppointmentNotificationServiceTests : IDisposable
 
     _dbContext = new AppDbContext(options);
     _sender = new FakePushNotificationSender();
-    _service = new AppointmentNotificationService(_sender, _dbContext);
+    var dispatcher = new NotificationDispatcher(_dbContext, _sender, TimeProvider.System, NullLogger<NotificationDispatcher>.Instance);
+    _service = new AppointmentNotificationService(dispatcher, _dbContext);
 
     var seedService = new IdentitySeedService(
         _dbContext,
@@ -105,6 +107,41 @@ public sealed class AppointmentNotificationServiceTests : IDisposable
 
     var call = Assert.Single(_sender.Calls);
     Assert.Equal(new[] { customer.Id }, call.UserIds);
+  }
+
+  [Fact]
+  public async Task NotifyCustomerOfAppointmentConfirmationAsync_TagsMessageWithAppointmentId()
+  {
+    var customer = await CreateUserAsync("customer5@example.com", "Customer Five", RoleNames.Customer);
+    var appointmentId = Guid.NewGuid();
+
+    await _service.NotifyCustomerOfAppointmentConfirmationAsync(
+        new AppointmentNotificationContext(Guid.NewGuid(), "Staff Display", customer.Id, "Customer Five", DateTime.UtcNow.AddDays(1), appointmentId));
+
+    var call = Assert.Single(_sender.Calls);
+    Assert.Equal($"appointment-{appointmentId:N}", call.Message.Tag);
+    Assert.Equal("/customer/appointments", call.Message.Url);
+  }
+
+  [Fact]
+  public async Task NotifyStaffOfNewAppointmentAsync_SavesOneInboxEntryPerRecipient()
+  {
+    var staff = await CreateUserAsync("staff6@example.com", "Staff Six", RoleNames.Staff);
+    var admin = await CreateUserAsync("admin6@example.com", "Admin Six", RoleNames.Admin);
+
+    await _service.NotifyStaffOfNewAppointmentAsync(Context(staff.Id));
+
+    var inbox = await _dbContext.UserNotifications.ToListAsync();
+    Assert.Equal(2, inbox.Count);
+    Assert.Contains(inbox, notification => notification.UserId == staff.Id);
+    Assert.Contains(inbox, notification => notification.UserId == admin.Id);
+    Assert.All(inbox, notification =>
+    {
+      Assert.Equal(UserNotificationTypes.AppointmentCreated, notification.Type);
+      Assert.Equal("Nueva cita agendada", notification.Title);
+      Assert.Equal("/staff/appointments", notification.Url);
+      Assert.Null(notification.ReadAt);
+    });
   }
 
   private static AppointmentNotificationContext Context(Guid staffUserId)

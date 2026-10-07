@@ -105,7 +105,11 @@ public static class DependencyInjection
         services.AddScoped<IEmailSender, ResendEmailSender>();
         services.AddScoped<IPushSubscriptionService, PushSubscriptionService>();
         services.AddSingleton<WebPush.WebPushClient>();
-        services.AddScoped<IPushNotificationSender, WebPushNotificationSender>();
+        services.AddScoped<WebPushNotificationSender>();
+        services.AddScoped<IPushNotificationSender>(serviceProvider => serviceProvider.GetRequiredService<WebPushNotificationSender>());
+        services.AddScoped<IPushDiagnosticsService>(serviceProvider => serviceProvider.GetRequiredService<WebPushNotificationSender>());
+        services.AddScoped<INotificationDispatcher, NotificationDispatcher>();
+        services.AddScoped<IUserNotificationsService, UserNotificationsService>();
         services.AddScoped<IAppointmentNotificationService, AppointmentNotificationService>();
         services.AddScoped<IAdminNotificationsService, AdminNotificationsService>();
         services.AddScoped<IImageTranscoder, MagickImageTranscoder>();

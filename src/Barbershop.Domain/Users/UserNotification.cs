@@ -9,7 +9,14 @@ public sealed class UserNotification
   {
   }
 
-  public UserNotification(Guid userId, string type, string title, string body, string? url, DateTime createdAt)
+  public UserNotification(
+      Guid userId,
+      string type,
+      string title,
+      string body,
+      string? url,
+      DateTime createdAt,
+      string? dedupKey = null)
   {
     UserId = userId;
     Type = DomainValidation.Required(type, nameof(type), 64);
@@ -17,6 +24,7 @@ public sealed class UserNotification
     Body = DomainValidation.Required(body, nameof(body), 1000);
     Url = DomainValidation.Optional(url, 512);
     CreatedAt = DomainValidation.EnsureUtc(createdAt, nameof(createdAt));
+    DedupKey = DomainValidation.Optional(dedupKey, 200);
   }
 
   public Guid Id { get; private set; } = Guid.NewGuid();
@@ -27,6 +35,9 @@ public sealed class UserNotification
   public string? Url { get; private set; }
   public DateTime CreatedAt { get; private set; }
   public DateTime? ReadAt { get; private set; }
+
+  /// <summary>Unique per user when set (e.g. "reminder-24h:{appointment}:{start}:{user}"), so scheduled notifications are created once.</summary>
+  public string? DedupKey { get; private set; }
 
   public void MarkAsRead(DateTime readAt)
   {

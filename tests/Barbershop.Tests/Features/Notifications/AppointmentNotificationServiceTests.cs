@@ -8,7 +8,6 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace Barbershop.Tests.Features.Notifications;
@@ -16,7 +15,7 @@ namespace Barbershop.Tests.Features.Notifications;
 public sealed class AppointmentNotificationServiceTests : IDisposable
 {
   private readonly AppDbContext _dbContext;
-  private readonly FakePushNotificationSender _sender;
+  private readonly RecordingNotificationDispatcher _dispatcher;
   private readonly IAppointmentNotificationService _service;
 
   public AppointmentNotificationServiceTests()
@@ -26,9 +25,8 @@ public sealed class AppointmentNotificationServiceTests : IDisposable
         .Options;
 
     _dbContext = new AppDbContext(options);
-    _sender = new FakePushNotificationSender();
-    var dispatcher = new NotificationDispatcher(_dbContext, _sender, TimeProvider.System, NullLogger<NotificationDispatcher>.Instance);
-    _service = new AppointmentNotificationService(dispatcher, _dbContext);
+    _dispatcher = new RecordingNotificationDispatcher();
+    _service = new AppointmentNotificationService(_dispatcher, _dbContext);
 
     var seedService = new IdentitySeedService(
         _dbContext,
@@ -49,10 +47,11 @@ public sealed class AppointmentNotificationServiceTests : IDisposable
 
     await _service.NotifyStaffOfNewAppointmentAsync(Context(staff.Id));
 
-    var call = Assert.Single(_sender.Calls);
+    var call = Assert.Single(_dispatcher.Calls);
     Assert.Contains(staff.Id, call.UserIds);
     Assert.Contains(admin.Id, call.UserIds);
     Assert.Equal(2, call.UserIds.Count);
+    Assert.Equal(UserNotificationTypes.AppointmentCreated, call.Type);
   }
 
   [Fact]
@@ -63,10 +62,11 @@ public sealed class AppointmentNotificationServiceTests : IDisposable
 
     await _service.NotifyStaffOfCustomerCancellationAsync(Context(staff.Id));
 
-    var call = Assert.Single(_sender.Calls);
+    var call = Assert.Single(_dispatcher.Calls);
     Assert.Contains(staff.Id, call.UserIds);
     Assert.Contains(admin.Id, call.UserIds);
     Assert.Equal(2, call.UserIds.Count);
+    Assert.Equal(UserNotificationTypes.AppointmentCancelledByCustomer, call.Type);
   }
 
   [Fact]
@@ -76,7 +76,7 @@ public sealed class AppointmentNotificationServiceTests : IDisposable
 
     await _service.NotifyStaffOfNewAppointmentAsync(Context(staffAdmin.Id));
 
-    var call = Assert.Single(_sender.Calls);
+    var call = Assert.Single(_dispatcher.Calls);
     Assert.Single(call.UserIds);
     Assert.Equal(staffAdmin.Id, call.UserIds.Single());
   }
@@ -91,7 +91,7 @@ public sealed class AppointmentNotificationServiceTests : IDisposable
 
     await _service.NotifyStaffOfNewAppointmentAsync(Context(staff.Id));
 
-    var call = Assert.Single(_sender.Calls);
+    var call = Assert.Single(_dispatcher.Calls);
     Assert.Single(call.UserIds);
     Assert.Equal(staff.Id, call.UserIds.Single());
   }
@@ -105,8 +105,9 @@ public sealed class AppointmentNotificationServiceTests : IDisposable
     await _service.NotifyCustomerOfAppointmentCancellationAsync(
         new AppointmentNotificationContext(Guid.NewGuid(), "Staff Display", customer.Id, "Customer One", DateTime.UtcNow.AddDays(1)));
 
-    var call = Assert.Single(_sender.Calls);
+    var call = Assert.Single(_dispatcher.Calls);
     Assert.Equal(new[] { customer.Id }, call.UserIds);
+    Assert.Equal(UserNotificationTypes.AppointmentCancelled, call.Type);
   }
 
   [Fact]
@@ -118,30 +119,19 @@ public sealed class AppointmentNotificationServiceTests : IDisposable
     await _service.NotifyCustomerOfAppointmentConfirmationAsync(
         new AppointmentNotificationContext(Guid.NewGuid(), "Staff Display", customer.Id, "Customer Five", DateTime.UtcNow.AddDays(1), appointmentId));
 
-    var call = Assert.Single(_sender.Calls);
+    var call = Assert.Single(_dispatcher.Calls);
     Assert.Equal($"appointment-{appointmentId:N}", call.Message.Tag);
     Assert.Equal("/customer/appointments", call.Message.Url);
+    Assert.Equal(UserNotificationTypes.AppointmentConfirmed, call.Type);
   }
 
   [Fact]
-  public async Task NotifyStaffOfNewAppointmentAsync_SavesOneInboxEntryPerRecipient()
+  public async Task NotifyCustomer_WithoutCustomerAccount_DoesNothing()
   {
-    var staff = await CreateUserAsync("staff6@example.com", "Staff Six", RoleNames.Staff);
-    var admin = await CreateUserAsync("admin6@example.com", "Admin Six", RoleNames.Admin);
+    await _service.NotifyCustomerOfAppointmentUpdateAsync(
+        new AppointmentNotificationContext(Guid.NewGuid(), "Staff Display", null, "Walk-in", DateTime.UtcNow.AddDays(1)));
 
-    await _service.NotifyStaffOfNewAppointmentAsync(Context(staff.Id));
-
-    var inbox = await _dbContext.UserNotifications.ToListAsync();
-    Assert.Equal(2, inbox.Count);
-    Assert.Contains(inbox, notification => notification.UserId == staff.Id);
-    Assert.Contains(inbox, notification => notification.UserId == admin.Id);
-    Assert.All(inbox, notification =>
-    {
-      Assert.Equal(UserNotificationTypes.AppointmentCreated, notification.Type);
-      Assert.Equal("Nueva cita agendada", notification.Title);
-      Assert.Equal("/staff/appointments", notification.Url);
-      Assert.Null(notification.ReadAt);
-    });
+    Assert.Empty(_dispatcher.Calls);
   }
 
   private static AppointmentNotificationContext Context(Guid staffUserId)
@@ -169,16 +159,5 @@ public sealed class AppointmentNotificationServiceTests : IDisposable
     public string ApplicationName { get; set; } = "Barbershop.Tests";
     public string ContentRootPath { get; set; } = AppContext.BaseDirectory;
     public IFileProvider ContentRootFileProvider { get; set; } = new PhysicalFileProvider(AppContext.BaseDirectory);
-  }
-
-  private sealed class FakePushNotificationSender : IPushNotificationSender
-  {
-    public List<(IReadOnlyCollection<Guid> UserIds, PushNotificationMessage Message)> Calls { get; } = [];
-
-    public Task SendToUsersAsync(IReadOnlyCollection<Guid> userIds, PushNotificationMessage message, CancellationToken cancellationToken = default)
-    {
-      Calls.Add((userIds, message));
-      return Task.CompletedTask;
-    }
   }
 }

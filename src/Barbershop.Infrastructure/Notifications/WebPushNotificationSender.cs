@@ -11,7 +11,7 @@ using WebPushSubscription = WebPush.PushSubscription;
 
 namespace Barbershop.Infrastructure.Notifications;
 
-internal sealed class WebPushNotificationSender : IPushNotificationSender, IPushDiagnosticsService
+internal sealed class WebPushNotificationSender : IPushNotificationSender, IPushDiagnosticsService, IPushDeliveryChannel
 {
   private const string NotificationIconPath = "/icons/icon-192x192.png";
   private const string NotificationBadgePath = "/icons/badge-96x96.png";
@@ -56,6 +56,38 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender, IPush
     }
 
     await DeliverAsync(subscriptions, message, cancellationToken);
+  }
+
+  public async Task<PushChannelResult> SendToUserAsync(
+      Guid userId,
+      PushNotificationMessage message,
+      IReadOnlyCollection<Guid> skipSubscriptionIds,
+      CancellationToken cancellationToken = default)
+  {
+    if (!_options.Enabled)
+    {
+      return new PushChannelResult(false, 0, [], 0, 0, null);
+    }
+
+    var subscriptions = await _dbContext.PushSubscriptions
+        .Where(subscription => subscription.UserId == userId && !skipSubscriptionIds.Contains(subscription.Id))
+        .ToListAsync(cancellationToken);
+
+    if (subscriptions.Count == 0)
+    {
+      return new PushChannelResult(true, 0, [], 0, 0, null);
+    }
+
+    var attempts = await DeliverCoreAsync(subscriptions, message, cancellationToken);
+    var failures = attempts.Where(attempt => !attempt.View.Delivered && !attempt.View.Removed).ToList();
+
+    return new PushChannelResult(
+        true,
+        attempts.Count,
+        attempts.Where(attempt => attempt.View.Delivered).Select(attempt => attempt.View.SubscriptionId).ToArray(),
+        failures.Count(attempt => attempt.IsTransient),
+        failures.Count(attempt => !attempt.IsTransient),
+        failures.Select(attempt => attempt.View.Error).LastOrDefault(error => error is not null));
   }
 
   public PushClientConfigView GetClientConfig()
@@ -143,6 +175,15 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender, IPush
       PushNotificationMessage message,
       CancellationToken cancellationToken)
   {
+    var attempts = await DeliverCoreAsync(subscriptions, message, cancellationToken);
+    return attempts.Select(attempt => attempt.View).ToArray();
+  }
+
+  private async Task<List<DeviceAttempt>> DeliverCoreAsync(
+      IReadOnlyList<DomainPushSubscription> subscriptions,
+      PushNotificationMessage message,
+      CancellationToken cancellationToken)
+  {
     LogConfigurationWarningsOnce();
 
     var vapidDetails = new VapidDetails(
@@ -163,7 +204,7 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender, IPush
       },
     };
 
-    var results = new List<PushDeviceResultView>(subscriptions.Count);
+    var results = new List<DeviceAttempt>(subscriptions.Count);
     var staleSubscriptionIds = new List<Guid>();
 
     foreach (var subscription in subscriptions)
@@ -174,20 +215,24 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender, IPush
       try
       {
         await _client.SendNotificationAsync(target, payload, sendOptions, cancellationToken);
-        results.Add(new PushDeviceResultView(subscription.Id, pushService, subscription.UserAgent, true, null, null, false));
+        results.Add(new DeviceAttempt(
+            new PushDeviceResultView(subscription.Id, pushService, subscription.UserAgent, true, null, null, false),
+            false));
       }
       catch (WebPushException webPushException)
           when (webPushException.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Gone)
       {
         staleSubscriptionIds.Add(subscription.Id);
-        results.Add(new PushDeviceResultView(
-            subscription.Id,
-            pushService,
-            subscription.UserAgent,
-            false,
-            (int)webPushException.StatusCode,
-            "La suscripción expiró en el navegador y se eliminó.",
-            true));
+        results.Add(new DeviceAttempt(
+            new PushDeviceResultView(
+                subscription.Id,
+                pushService,
+                subscription.UserAgent,
+                false,
+                (int)webPushException.StatusCode,
+                "La suscripción expiró en el navegador y se eliminó.",
+                true),
+            false));
       }
       catch (WebPushException webPushException)
       {
@@ -201,24 +246,24 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender, IPush
             (int)webPushException.StatusCode,
             detail);
 
-        results.Add(new PushDeviceResultView(
-            subscription.Id,
-            pushService,
-            subscription.UserAgent,
-            false,
-            (int)webPushException.StatusCode,
-            detail,
-            false));
+        var statusCode = (int)webPushException.StatusCode;
+        results.Add(new DeviceAttempt(
+            new PushDeviceResultView(subscription.Id, pushService, subscription.UserAgent, false, statusCode, detail, false),
+            IsTransientStatus(statusCode)));
       }
-      catch (Exception ex) when (ex is not OperationCanceledException)
+      catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
       {
+        // Includes HTTP timeouts (TaskCanceledException without our token being cancelled).
         _logger.LogWarning(
             ex,
             "Unexpected error delivering push to subscription {SubscriptionId} ({PushService}).",
             subscription.Id,
             pushService);
 
-        results.Add(new PushDeviceResultView(subscription.Id, pushService, subscription.UserAgent, false, null, Truncate(ex.Message), false));
+        // Network errors and timeouts: worth retrying.
+        results.Add(new DeviceAttempt(
+            new PushDeviceResultView(subscription.Id, pushService, subscription.UserAgent, false, null, Truncate(ex.Message), false),
+            true));
       }
     }
 
@@ -231,6 +276,9 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender, IPush
 
     return results;
   }
+
+  private static bool IsTransientStatus(int statusCode)
+      => statusCode == 429 || statusCode >= 500;
 
   private void LogConfigurationWarningsOnce()
   {
@@ -287,4 +335,6 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender, IPush
 
   private static string Truncate(string value)
       => value.Length <= MaxErrorLength ? value : value[..MaxErrorLength];
+
+  private sealed record DeviceAttempt(PushDeviceResultView View, bool IsTransient);
 }

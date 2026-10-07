@@ -19,10 +19,12 @@ internal sealed class UserNotificationConfiguration : IEntityTypeConfiguration<U
     builder.Property(x => x.Url).HasMaxLength(512);
     builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
     builder.Property(x => x.ReadAt).HasColumnType("timestamp with time zone");
+    builder.Property(x => x.DedupKey).HasMaxLength(200);
 
     // Bell queries: latest N per user, and unread count per user.
     builder.HasIndex(x => new { x.UserId, x.CreatedAt });
     builder.HasIndex(x => new { x.UserId, x.ReadAt });
+    builder.HasIndex(x => x.DedupKey).IsUnique();
 
     builder.HasOne<User>()
         .WithMany()

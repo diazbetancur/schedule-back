@@ -8,6 +8,8 @@ public static class UserNotificationTypes
   public const string AppointmentCancelled = "appointment.cancelled";
   public const string AppointmentConfirmed = "appointment.confirmed";
   public const string Campaign = "campaign";
+  public const string AppointmentReminder = "appointment.reminder";
+  public const string StaffHourlyAgenda = "staff.hourly_agenda";
 }
 
 public sealed record UserNotificationView(

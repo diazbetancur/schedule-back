@@ -64,7 +64,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     await _dbContext.SaveChangesAsync(cancellationToken);
 
     await _notificationService.NotifyStaffOfNewAppointmentAsync(
-        new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, currentUser.Id, currentUser.FullName, appointment.StartsAt),
+        new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, currentUser.Id, currentUser.FullName, appointment.StartsAt, appointment.Id),
         cancellationToken);
 
     return Map(appointment);
@@ -115,7 +115,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     await _dbContext.SaveChangesAsync(cancellationToken);
 
     await _notificationService.NotifyStaffOfCustomerCancellationAsync(
-        new AppointmentNotificationContext(appointment.StaffProfile.UserId, appointment.StaffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt),
+        new AppointmentNotificationContext(appointment.StaffProfile.UserId, appointment.StaffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt, appointment.Id),
         cancellationToken);
 
     return Map(appointment);
@@ -249,7 +249,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     await _dbContext.SaveChangesAsync(cancellationToken);
 
     await _notificationService.NotifyStaffOfNewAppointmentAsync(
-        new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, null, appointment.CustomerName, appointment.StartsAt),
+        new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, null, appointment.CustomerName, appointment.StartsAt, appointment.Id),
         cancellationToken);
 
     return Map(appointment);
@@ -320,7 +320,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     await _dbContext.SaveChangesAsync(cancellationToken);
 
     await _notificationService.NotifyCustomerOfAppointmentUpdateAsync(
-        new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt),
+        new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt, appointment.Id),
         cancellationToken);
 
     return Map(appointment);
@@ -367,14 +367,14 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     if (request.Status == AppointmentStatus.Cancelled)
     {
       await _notificationService.NotifyCustomerOfAppointmentCancellationAsync(
-          new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt),
+          new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt, appointment.Id),
           cancellationToken);
     }
 
     if (request.Status == AppointmentStatus.Confirmed)
     {
       await _notificationService.NotifyCustomerOfAppointmentConfirmationAsync(
-          new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt),
+          new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt, appointment.Id),
           cancellationToken);
     }
 

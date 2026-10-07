@@ -11,13 +11,13 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
   private static readonly string NormalizedCustomerRole = RoleNames.Customer.ToUpperInvariant();
 
   private readonly AppDbContext _dbContext;
-  private readonly IPushNotificationSender _sender;
+  private readonly INotificationDispatcher _dispatcher;
   private readonly TimeProvider _timeProvider;
 
-  public AdminNotificationsService(AppDbContext dbContext, IPushNotificationSender sender, TimeProvider timeProvider)
+  public AdminNotificationsService(AppDbContext dbContext, INotificationDispatcher dispatcher, TimeProvider timeProvider)
   {
     _dbContext = dbContext;
-    _sender = sender;
+    _dispatcher = dispatcher;
     _timeProvider = timeProvider;
   }
 
@@ -46,7 +46,15 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
     _dbContext.NotificationCampaigns.Add(campaign);
     await _dbContext.SaveChangesAsync(cancellationToken);
 
-    await _sender.SendToUsersAsync(recipientUserIds, new PushNotificationMessage(request.Title, request.Body), cancellationToken);
+    var message = new PushNotificationMessage(
+        request.Title,
+        request.Body,
+        Url: "/",
+        Tag: $"campaign-{campaign.Id:N}",
+        IsTimeSensitive: false,
+        TimeToLive: TimeSpan.FromDays(3));
+
+    await _dispatcher.DispatchAsync(recipientUserIds, UserNotificationTypes.Campaign, message, cancellationToken);
 
     return Map(campaign, sentByUser.FullName);
   }

@@ -29,6 +29,8 @@ public sealed class IntegrationTestFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("Jwt__SigningKey", "12345678901234567890123456789012-auth-tests-key");
         Environment.SetEnvironmentVariable("Jwt__RequireHttpsMetadata", "false");
         Environment.SetEnvironmentVariable("SeedAdmin__Enabled", "false");
+        // The background notification worker would race ResetDatabaseAsync (which drops the database).
+        Environment.SetEnvironmentVariable("NotificationWorker__Enabled", "false");
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -44,7 +46,8 @@ public sealed class IntegrationTestFactory : WebApplicationFactory<Program>
                 ["Jwt:Audience"] = "Barbershop.Tests.Client",
                 ["Jwt:SigningKey"] = "12345678901234567890123456789012-auth-tests-key",
                 ["Jwt:RequireHttpsMetadata"] = "false",
-                ["SeedAdmin:Enabled"] = "false"
+                ["SeedAdmin:Enabled"] = "false",
+                ["NotificationWorker:Enabled"] = "false"
             });
         });
     }

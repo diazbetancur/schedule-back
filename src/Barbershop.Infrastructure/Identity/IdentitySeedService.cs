@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Configuration;
 using Barbershop.Infrastructure.Persistence;
@@ -11,7 +12,10 @@ namespace Barbershop.Infrastructure.Identity;
 internal sealed class IdentitySeedService : IIdentitySeedService
 {
   private static readonly SemaphoreSlim DatabaseEnsureLock = new(1, 1);
-  private static volatile bool _databaseEnsured;
+
+  // Keyed by connection string: one process can talk to more than one database (integration tests
+  // run against a fresh Testcontainers database), so "already migrated" must be tracked per database.
+  private static readonly ConcurrentDictionary<string, bool> MigratedDatabases = new(StringComparer.Ordinal);
 
   private static readonly IReadOnlyDictionary<string, string> PermissionDescriptions =
       new Dictionary<string, string>(StringComparer.Ordinal)
@@ -70,7 +74,16 @@ internal sealed class IdentitySeedService : IIdentitySeedService
 
   private async Task EnsureDatabaseAsync(CancellationToken cancellationToken)
   {
-    if (_databaseEnsured)
+    if (!_dbContext.Database.IsRelational())
+    {
+      // EF InMemory (unit tests): cheap and per-context, so never cached. Caching it used to flip a
+      // process-wide flag that made the next real PostgreSQL database skip its migrations.
+      await _dbContext.Database.EnsureCreatedAsync(cancellationToken);
+      return;
+    }
+
+    var databaseKey = _dbContext.Database.GetConnectionString() ?? string.Empty;
+    if (MigratedDatabases.ContainsKey(databaseKey))
     {
       return;
     }
@@ -78,21 +91,13 @@ internal sealed class IdentitySeedService : IIdentitySeedService
     await DatabaseEnsureLock.WaitAsync(cancellationToken);
     try
     {
-      if (_databaseEnsured)
+      if (MigratedDatabases.ContainsKey(databaseKey))
       {
         return;
       }
 
-      if (_dbContext.Database.IsRelational())
-      {
-        await _dbContext.Database.MigrateAsync(cancellationToken);
-      }
-      else
-      {
-        await _dbContext.Database.EnsureCreatedAsync(cancellationToken);
-      }
-
-      _databaseEnsured = true;
+      await _dbContext.Database.MigrateAsync(cancellationToken);
+      MigratedDatabases[databaseKey] = true;
     }
     finally
     {

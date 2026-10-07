@@ -1,6 +1,4 @@
 using System.Net;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using Barbershop.Application.Notifications;
 using Barbershop.Infrastructure.Configuration;
 using Barbershop.Infrastructure.Persistence;
@@ -8,13 +6,21 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using WebPush;
+using DomainPushSubscription = Barbershop.Domain.Users.PushSubscription;
+using WebPushSubscription = WebPush.PushSubscription;
 
 namespace Barbershop.Infrastructure.Notifications;
 
-internal sealed class WebPushNotificationSender : IPushNotificationSender
+internal sealed class WebPushNotificationSender : IPushNotificationSender, IPushDiagnosticsService, IPushDeliveryChannel
 {
   private const string NotificationIconPath = "/icons/icon-192x192.png";
-  private const string NotificationBadgePath = "/icons/icon-72x72.png";
+  private const string NotificationBadgePath = "/icons/badge-96x96.png";
+  private const int MaxErrorLength = 300;
+  private const int MaxTimeToLiveSeconds = 2_419_200; // 28 days, the Web Push maximum most services accept.
+
+  private static readonly TimeSpan DefaultTimeToLive = TimeSpan.FromHours(24);
+  private static readonly string[] PlaceholderDomains = ["localhost", "example.com", "example.org", "example.net"];
+  private static int _configurationWarningsLogged;
 
   private readonly AppDbContext _dbContext;
   private readonly WebPushOptions _options;
@@ -49,52 +55,215 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender
       return;
     }
 
-    var vapidDetails = new VapidDetails(
-        $"mailto:{_options.ContactEmail}",
-        _options.PublicKey,
-        _options.PrivateKey);
+    await DeliverAsync(subscriptions, message, cancellationToken);
+  }
 
-    var payload = JsonSerializer.Serialize(new
+  public async Task<PushChannelResult> SendToUserAsync(
+      Guid userId,
+      PushNotificationMessage message,
+      IReadOnlyCollection<Guid> skipSubscriptionIds,
+      CancellationToken cancellationToken = default)
+  {
+    if (!_options.Enabled)
     {
-      notification = new
-      {
-        title = message.Title,
-        body = message.Body,
-        icon = NotificationIconPath,
-        badge = NotificationBadgePath,
-        data = message.Url is not null ? new { url = message.Url } : (object?)null,
-      },
-    }, new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull });
+      return new PushChannelResult(false, 0, [], 0, 0, null);
+    }
 
+    var subscriptions = await _dbContext.PushSubscriptions
+        .Where(subscription => subscription.UserId == userId && !skipSubscriptionIds.Contains(subscription.Id))
+        .ToListAsync(cancellationToken);
+
+    if (subscriptions.Count == 0)
+    {
+      return new PushChannelResult(true, 0, [], 0, 0, null);
+    }
+
+    var attempts = await DeliverCoreAsync(subscriptions, message, cancellationToken);
+    var failures = attempts.Where(attempt => !attempt.View.Delivered && !attempt.View.Removed).ToList();
+
+    return new PushChannelResult(
+        true,
+        attempts.Count,
+        attempts.Where(attempt => attempt.View.Delivered).Select(attempt => attempt.View.SubscriptionId).ToArray(),
+        failures.Count(attempt => attempt.IsTransient),
+        failures.Count(attempt => !attempt.IsTransient),
+        failures.Select(attempt => attempt.View.Error).LastOrDefault(error => error is not null));
+  }
+
+  public PushClientConfigView GetClientConfig()
+      => _options.Enabled && !string.IsNullOrWhiteSpace(_options.PublicKey)
+          ? new PushClientConfigView(true, _options.PublicKey.Trim())
+          : new PushClientConfigView(false, null);
+
+  public async Task<PushTestResultView> SendTestAsync(Guid currentUserId, CancellationToken cancellationToken = default)
+  {
+    var warnings = GetConfigurationWarnings(_options).ToList();
+
+    if (!_options.Enabled)
+    {
+      warnings.Add("Las notificaciones push están desactivadas en el servidor (WebPush:Enabled = false).");
+      return new PushTestResultView(false, 0, 0, [], warnings);
+    }
+
+    var subscriptions = await _dbContext.PushSubscriptions
+        .Where(subscription => subscription.UserId == currentUserId)
+        .ToListAsync(cancellationToken);
+
+    if (subscriptions.Count == 0)
+    {
+      warnings.Add("Tu cuenta no tiene dispositivos registrados. Activa las notificaciones en este dispositivo y vuelve a intentar.");
+      return new PushTestResultView(true, 0, 0, [], warnings);
+    }
+
+    var message = new PushNotificationMessage(
+        "Notificación de prueba",
+        "Si ves esto, las notificaciones funcionan en este dispositivo.",
+        "/account/notifications",
+        "push-test",
+        IsTimeSensitive: true,
+        TimeToLive: TimeSpan.FromMinutes(10));
+
+    var results = await DeliverAsync(subscriptions, message, cancellationToken);
+    return new PushTestResultView(true, results.Count, results.Count(result => result.Delivered), results, warnings);
+  }
+
+  internal static string BuildSubject(string contact)
+  {
+    var value = (contact ?? string.Empty).Trim();
+
+    return value.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)
+        || value.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+        ? value
+        : $"mailto:{value}";
+  }
+
+  /// <summary>
+  /// Apple's push service validates the VAPID "sub" claim and rejects placeholder domains (BadJwtToken),
+  /// which silently breaks delivery to iPhones. Flag them so they show up in logs and in the test endpoint.
+  /// </summary>
+  internal static IReadOnlyList<string> GetConfigurationWarnings(WebPushOptions options)
+  {
+    if (!options.Enabled)
+    {
+      return [];
+    }
+
+    var subject = BuildSubject(options.ContactEmail);
+    var host = subject.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase)
+        ? subject[(subject.IndexOf('@') + 1)..]
+        : Uri.TryCreate(subject, UriKind.Absolute, out var uri) ? uri.Host : string.Empty;
+
+    host = host.Trim().TrimEnd('>').ToLowerInvariant();
+
+    var isMailtoWithoutAddress = subject.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase) && !subject.Contains('@');
+
+    var looksInvalid = string.IsNullOrWhiteSpace(host)
+        || isMailtoWithoutAddress
+        || host.EndsWith(".local", StringComparison.Ordinal)
+        || PlaceholderDomains.Any(domain => host == domain || host.EndsWith($".{domain}", StringComparison.Ordinal));
+
+    if (!looksInvalid)
+    {
+      return [];
+    }
+
+    return [$"WebPush:ContactEmail ('{options.ContactEmail}') no es un correo o URL real. Apple puede rechazar los envíos a iPhone (BadJwtToken). Configura WebPush__ContactEmail con un correo real del negocio."];
+  }
+
+  private async Task<IReadOnlyList<PushDeviceResultView>> DeliverAsync(
+      IReadOnlyList<DomainPushSubscription> subscriptions,
+      PushNotificationMessage message,
+      CancellationToken cancellationToken)
+  {
+    var attempts = await DeliverCoreAsync(subscriptions, message, cancellationToken);
+    return attempts.Select(attempt => attempt.View).ToArray();
+  }
+
+  private async Task<List<DeviceAttempt>> DeliverCoreAsync(
+      IReadOnlyList<DomainPushSubscription> subscriptions,
+      PushNotificationMessage message,
+      CancellationToken cancellationToken)
+  {
+    LogConfigurationWarningsOnce();
+
+    var vapidDetails = new VapidDetails(
+        BuildSubject(_options.ContactEmail),
+        _options.PublicKey.Trim(),
+        _options.PrivateKey.Trim());
+
+    var payload = WebPushPayloadBuilder.Build(message, NotificationIconPath, NotificationBadgePath);
+    var timeToLive = (int)Math.Clamp((message.TimeToLive ?? DefaultTimeToLive).TotalSeconds, 0, MaxTimeToLiveSeconds);
+
+    var sendOptions = new Dictionary<string, object>
+    {
+      ["vapidDetails"] = vapidDetails,
+      ["TTL"] = timeToLive,
+      ["headers"] = new Dictionary<string, object>
+      {
+        ["Urgency"] = message.IsTimeSensitive ? "high" : "normal",
+      },
+    };
+
+    var results = new List<DeviceAttempt>(subscriptions.Count);
     var staleSubscriptionIds = new List<Guid>();
 
     foreach (var subscription in subscriptions)
     {
-      var pushSubscription = new PushSubscription(subscription.Endpoint, subscription.P256dhKey, subscription.AuthKey);
+      var target = new WebPushSubscription(subscription.Endpoint, subscription.P256dhKey, subscription.AuthKey);
+      var pushService = DescribePushService(subscription.Endpoint);
 
       try
       {
-        await _client.SendNotificationAsync(pushSubscription, payload, vapidDetails, cancellationToken);
+        await _client.SendNotificationAsync(target, payload, sendOptions, cancellationToken);
+        results.Add(new DeviceAttempt(
+            new PushDeviceResultView(subscription.Id, pushService, subscription.UserAgent, true, null, null, false),
+            false));
       }
       catch (WebPushException webPushException)
           when (webPushException.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Gone)
       {
         staleSubscriptionIds.Add(subscription.Id);
+        results.Add(new DeviceAttempt(
+            new PushDeviceResultView(
+                subscription.Id,
+                pushService,
+                subscription.UserAgent,
+                false,
+                (int)webPushException.StatusCode,
+                "La suscripción expiró en el navegador y se eliminó.",
+                true),
+            false));
       }
       catch (WebPushException webPushException)
       {
+        var detail = await ReadErrorDetailAsync(webPushException);
+
         _logger.LogWarning(
             webPushException,
-            "Push delivery failed for subscription {SubscriptionId} with status {StatusCode}.",
+            "Push delivery failed for subscription {SubscriptionId} ({PushService}) with status {StatusCode}: {Detail}",
             subscription.Id,
-            webPushException.StatusCode);
+            pushService,
+            (int)webPushException.StatusCode,
+            detail);
+
+        var statusCode = (int)webPushException.StatusCode;
+        results.Add(new DeviceAttempt(
+            new PushDeviceResultView(subscription.Id, pushService, subscription.UserAgent, false, statusCode, detail, false),
+            IsTransientStatus(statusCode)));
       }
-      catch (Exception ex) when (ex is not OperationCanceledException)
+      catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
       {
+        // Includes HTTP timeouts (TaskCanceledException without our token being cancelled).
         _logger.LogWarning(
             ex,
-            "Unexpected error delivering push to subscription {SubscriptionId}.",
-            subscription.Id);
+            "Unexpected error delivering push to subscription {SubscriptionId} ({PushService}).",
+            subscription.Id,
+            pushService);
+
+        // Network errors and timeouts: worth retrying.
+        results.Add(new DeviceAttempt(
+            new PushDeviceResultView(subscription.Id, pushService, subscription.UserAgent, false, null, Truncate(ex.Message), false),
+            true));
       }
     }
 
@@ -104,5 +273,68 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender
           .Where(subscription => staleSubscriptionIds.Contains(subscription.Id))
           .ExecuteDeleteAsync(cancellationToken);
     }
+
+    return results;
   }
+
+  private static bool IsTransientStatus(int statusCode)
+      => statusCode == 429 || statusCode >= 500;
+
+  private void LogConfigurationWarningsOnce()
+  {
+    if (Interlocked.Exchange(ref _configurationWarningsLogged, 1) == 1)
+    {
+      return;
+    }
+
+    foreach (var warning in GetConfigurationWarnings(_options))
+    {
+      _logger.LogWarning("WebPush configuration: {Warning}", warning);
+    }
+  }
+
+  private static async Task<string> ReadErrorDetailAsync(WebPushException exception)
+  {
+    try
+    {
+      if (exception.HttpResponseMessage?.Content is { } content)
+      {
+        var body = await content.ReadAsStringAsync();
+        if (!string.IsNullOrWhiteSpace(body))
+        {
+          return Truncate(body.Trim());
+        }
+      }
+    }
+    catch (Exception)
+    {
+      // Diagnostics only: fall back to the exception message.
+    }
+
+    return Truncate(exception.Message);
+  }
+
+  private static string DescribePushService(string endpoint)
+  {
+    if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri))
+    {
+      return "desconocido";
+    }
+
+    var host = uri.Host.ToLowerInvariant();
+
+    return host switch
+    {
+      "fcm.googleapis.com" => "Google (Chrome / Android)",
+      "web.push.apple.com" => "Apple (Safari / iPhone)",
+      "updates.push.services.mozilla.com" => "Mozilla (Firefox)",
+      _ when host.EndsWith(".notify.windows.com", StringComparison.Ordinal) => "Microsoft (Edge / Windows)",
+      _ => host,
+    };
+  }
+
+  private static string Truncate(string value)
+      => value.Length <= MaxErrorLength ? value : value[..MaxErrorLength];
+
+  private sealed record DeviceAttempt(PushDeviceResultView View, bool IsTransient);
 }

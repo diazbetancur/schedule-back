@@ -5,7 +5,8 @@ public sealed record AppointmentNotificationContext(
     string StaffDisplayName,
     Guid? CustomerUserId,
     string CustomerName,
-    DateTime StartsAtUtc);
+    DateTime StartsAtUtc,
+    Guid? AppointmentId = null);
 
 public interface IAppointmentNotificationService
 {

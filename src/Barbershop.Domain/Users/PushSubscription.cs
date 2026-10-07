@@ -18,6 +18,15 @@ public sealed class PushSubscription
     CreatedAt = DomainValidation.EnsureUtc(createdAt, nameof(createdAt));
   }
 
+  /// <summary>Re-binds this browser endpoint to <paramref name="userId"/> and refreshes its keys.</summary>
+  public void Refresh(Guid userId, string p256dhKey, string authKey, string? userAgent)
+  {
+    UserId = userId;
+    P256dhKey = DomainValidation.Required(p256dhKey, nameof(p256dhKey), 256);
+    AuthKey = DomainValidation.Required(authKey, nameof(authKey), 256);
+    UserAgent = DomainValidation.Optional(userAgent, 256);
+  }
+
   public Guid Id { get; private set; } = Guid.NewGuid();
   public Guid UserId { get; private set; }
   public string Endpoint { get; private set; } = string.Empty;

@@ -62,13 +62,18 @@ internal sealed class AppointmentNotificationService : IAppointmentNotificationS
   public Task NotifyStaffOfAppointmentRescheduledAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
   {
     var when = FormatDateTime(context.StartsAtUtc);
+    var movedByCustomer = context.CustomerUserId is { } customerUserId && _currentUser.UserId == customerUserId;
 
     return NotifyStaffSideAsync(
         context,
         UserNotificationTypes.AppointmentUpdated,
         "Cita reprogramada",
-        staffBody: $"La cita de {context.CustomerName} ahora es el {when}.",
-        adminBody: $"La cita de {context.CustomerName} con {context.StaffDisplayName} ahora es el {when}.",
+        staffBody: movedByCustomer
+            ? $"{context.CustomerName} reprogramó su cita para el {when}."
+            : $"La cita de {context.CustomerName} ahora es el {when}.",
+        adminBody: movedByCustomer
+            ? $"{context.CustomerName} reprogramó su cita con {context.StaffDisplayName} para el {when}."
+            : $"La cita de {context.CustomerName} con {context.StaffDisplayName} ahora es el {when}.",
         cancellationToken);
   }
 

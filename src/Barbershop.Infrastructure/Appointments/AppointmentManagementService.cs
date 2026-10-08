@@ -121,6 +121,84 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     return Map(appointment);
   }
 
+  async Task<AppointmentView> ICustomerAppointmentsService.RescheduleAsync(
+      Guid currentUserId,
+      Guid appointmentId,
+      CustomerAppointmentRescheduleRequest request,
+      CancellationToken cancellationToken)
+  {
+    var appointment = await _dbContext.Appointments
+        .Include(candidate => candidate.StaffProfile)
+        .SingleOrDefaultAsync(
+            candidate => candidate.Id == appointmentId && candidate.CustomerUserId == currentUserId,
+            cancellationToken)
+        ?? throw new KeyNotFoundException("The appointment was not found.");
+
+    var nowUtc = _timeProvider.GetUtcNow().UtcDateTime;
+    var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+
+    if (appointment.Status is not (AppointmentStatus.Pending or AppointmentStatus.Confirmed))
+    {
+      errors["appointmentId"] = ["Only pending or confirmed appointments can be rescheduled."];
+    }
+    else if (appointment.StartsAt <= nowUtc)
+    {
+      errors["appointmentId"] = ["Appointments can only be rescheduled before the start time."];
+    }
+
+    if (request.StartsAtUtc == default)
+    {
+      errors["startsAtUtc"] = ["StartsAtUtc is required."];
+    }
+    else if (request.StartsAtUtc.Kind != DateTimeKind.Utc)
+    {
+      errors["startsAtUtc"] = ["StartsAtUtc must be provided in UTC."];
+    }
+    else if (request.StartsAtUtc <= nowUtc)
+    {
+      errors["startsAtUtc"] = ["StartsAtUtc must be in the future."];
+    }
+
+    ThrowIfAnyErrors(errors);
+
+    if (request.StartsAtUtc == appointment.StartsAt)
+    {
+      return Map(appointment, appointment.StaffProfile.DisplayName);
+    }
+
+    if (!appointment.StaffProfile.IsActive)
+    {
+      throw new ConflictException("The selected slot is not available.");
+    }
+
+    // Same barber, same length as the original booking.
+    var endsAtUtc = request.StartsAtUtc + (appointment.EndsAt - appointment.StartsAt);
+    await EnsureSlotIsAvailableAsync(appointment.StaffProfileId, request.StartsAtUtc, endsAtUtc, appointment.Id, cancellationToken);
+
+    appointment.UpdateDetails(
+        appointment.CustomerName,
+        appointment.CustomerEmail,
+        appointment.CustomerPhone,
+        request.StartsAtUtc,
+        endsAtUtc,
+        appointment.Notes,
+        nowUtc);
+
+    // The barber has not agreed to the new time yet: it goes back to pending, like a new booking.
+    if (appointment.Status == AppointmentStatus.Confirmed)
+    {
+      appointment.UpdateStatus(AppointmentStatus.Pending, nowUtc);
+    }
+
+    await _dbContext.SaveChangesAsync(cancellationToken);
+
+    await _notificationService.NotifyStaffOfAppointmentRescheduledAsync(
+        new AppointmentNotificationContext(appointment.StaffProfile.UserId, appointment.StaffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt, appointment.Id),
+        cancellationToken);
+
+    return Map(appointment, appointment.StaffProfile.DisplayName);
+  }
+
   async Task<IReadOnlyList<AppointmentView>> IStaffAppointmentsService.GetForCurrentStaffAsync(Guid currentUserId, CancellationToken cancellationToken)
   {
     var staffProfile = await LoadActiveStaffProfileByUserIdAsync(currentUserId, cancellationToken);

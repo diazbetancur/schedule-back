@@ -2,6 +2,7 @@ using System.Globalization;
 using Barbershop.Application.Notifications;
 using Barbershop.Domain.Appointments;
 using Barbershop.Domain.Common;
+using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -12,6 +13,7 @@ namespace Barbershop.Infrastructure.Notifications;
 /// <list type="bullet">
 /// <item>Customers: reminder 24 h and 2 h before their appointment (pending or confirmed).</item>
 /// <item>Staff: at the start of each hour, a summary of their appointments in the following hour.</item>
+/// <item>Admins: the same summary, but for the whole shop (every barber) in a single notification.</item>
 /// </list>
 /// Idempotent: each reminder has a dedup key, so running it again never duplicates notifications.
 /// </summary>
@@ -23,7 +25,10 @@ internal sealed class AppointmentReminderService
   /// <summary>The hourly staff summary is only created during the first minutes of each hour.</summary>
   internal const int HourlyAgendaSendWindowMinutes = 20;
 
+  private const int MaxBodyLength = 1000;
+
   private static readonly CultureInfo DisplayCulture = CultureInfo.GetCultureInfo("es-CO");
+  private static readonly string NormalizedAdminRole = RoleNames.Admin.ToUpperInvariant();
 
   private readonly AppDbContext _dbContext;
   private readonly INotificationDispatcher _dispatcher;
@@ -136,16 +141,43 @@ internal sealed class AppointmentReminderService
         .OrderBy(appointment => appointment.StartsAt)
         .ToListAsync(cancellationToken);
 
+    if (appointments.Count == 0)
+    {
+      return 0;
+    }
+
+    var adminUserIds = await _dbContext.Users
+        .AsNoTracking()
+        .Where(user => user.IsActive && user.UserRoles.Any(userRole => userRole.Role.NormalizedName == NormalizedAdminRole))
+        .Select(user => user.Id)
+        .ToListAsync(cancellationToken);
+
+    var expiresAtUtc = windowStartUtc.AddMinutes(30);
     var created = 0;
+
     foreach (var staffAppointments in appointments.GroupBy(appointment => appointment.StaffProfile.UserId))
     {
+      // A barber who is also admin gets the shop-wide summary below, which already includes their appointments.
+      if (adminUserIds.Contains(staffAppointments.Key))
+      {
+        continue;
+      }
+
       created += await _dispatcher.DispatchAsync(
           [staffAppointments.Key],
           UserNotificationTypes.StaffHourlyAgenda,
           BuildStaffAgenda(staffAppointments.ToList()),
-          new NotificationDispatchOptions(
-              $"staff-agenda:{windowStartLocal:yyyyMMddHH}",
-              windowStartUtc.AddMinutes(30)),
+          new NotificationDispatchOptions($"staff-agenda:{windowStartLocal:yyyyMMddHH}", expiresAtUtc),
+          cancellationToken);
+    }
+
+    if (adminUserIds.Count > 0)
+    {
+      created += await _dispatcher.DispatchAsync(
+          adminUserIds,
+          UserNotificationTypes.StaffHourlyAgenda,
+          BuildAdminAgenda(appointments),
+          new NotificationDispatchOptions($"admin-agenda:{windowStartLocal:yyyyMMddHH}", expiresAtUtc),
           cancellationToken);
     }
 
@@ -176,8 +208,6 @@ internal sealed class AppointmentReminderService
 
   private static PushNotificationMessage BuildStaffAgenda(IReadOnlyList<Appointment> appointments)
   {
-    var title = appointments.Count == 1 ? "Próxima hora: 1 cita" : $"Próxima hora: {appointments.Count} citas";
-
     var body = string.Join(
         " · ",
         appointments.Select(appointment =>
@@ -186,13 +216,38 @@ internal sealed class AppointmentReminderService
           return $"{FormatTime(BogotaClock.ToLocal(appointment.StartsAt))} {appointment.CustomerName}{pending}";
         }));
 
-    if (body.Length > 1000)
-    {
-      body = body[..997] + "...";
-    }
-
-    return new PushNotificationMessage(title, body, "/staff/appointments", "staff-agenda", IsTimeSensitive: true);
+    return new PushNotificationMessage(
+        AgendaTitle(appointments.Count),
+        Truncate(body),
+        AppointmentNotificationService.StaffAppointmentsUrl,
+        "staff-agenda",
+        IsTimeSensitive: true);
   }
+
+  /// <summary>Shop-wide summary for admins: "10:00 Ana (Carlos) · 10:30 Luis (Andrés, pendiente)".</summary>
+  private static PushNotificationMessage BuildAdminAgenda(IReadOnlyList<Appointment> appointments)
+  {
+    var body = string.Join(
+        " · ",
+        appointments.Select(appointment =>
+        {
+          var details = appointment.Status == AppointmentStatus.Pending
+              ? $"{appointment.StaffProfile.DisplayName}, pendiente"
+              : appointment.StaffProfile.DisplayName;
+          return $"{FormatTime(BogotaClock.ToLocal(appointment.StartsAt))} {appointment.CustomerName} ({details})";
+        }));
+
+    return new PushNotificationMessage(
+        AgendaTitle(appointments.Count),
+        Truncate(body),
+        AppointmentNotificationService.AdminAppointmentsUrl,
+        "admin-agenda",
+        IsTimeSensitive: true);
+  }
+
+  private static string AgendaTitle(int count) => count == 1 ? "Próxima hora: 1 cita" : $"Próxima hora: {count} citas";
+
+  private static string Truncate(string body) => body.Length > MaxBodyLength ? body[..(MaxBodyLength - 3)] + "..." : body;
 
   private static string DescribeDay(DateTime localStart, DateTime localNow)
   {

@@ -140,6 +140,68 @@ public sealed class AppointmentReminderServiceTests : IDisposable
     Assert.Empty(await _dbContext.UserNotifications.Where(entry => entry.Type == UserNotificationTypes.StaffHourlyAgenda).ToListAsync());
   }
 
+  [Fact]
+  public async Task AdminHourlyAgenda_CombinesEveryBarberInOneNotification()
+  {
+    var admin = await CreateAdminAsync("admin@example.com");
+    var andres = new StaffProfile(Guid.NewGuid(), "Andrés", 30, NowUtc.AddMonths(-1));
+    _dbContext.StaffProfiles.Add(andres);
+    await _dbContext.SaveChangesAsync();
+
+    await AddAppointmentAsync(NowUtc.AddMinutes(55), AppointmentStatus.Confirmed, NowUtc.AddDays(-1), _customerId, "Ana Gómez");
+    await AddAppointmentAsync(NowUtc.AddMinutes(85), AppointmentStatus.Pending, NowUtc.AddMinutes(-10), customerUserId: null, "Luis Pérez", andres);
+
+    await _service.RunAsync();
+    await _service.RunAsync();
+
+    var agendas = await _dbContext.UserNotifications
+        .Where(entry => entry.Type == UserNotificationTypes.StaffHourlyAgenda)
+        .ToListAsync();
+
+    var adminAgenda = Assert.Single(agendas, entry => entry.UserId == admin.Id);
+    Assert.Equal("Próxima hora: 2 citas", adminAgenda.Title);
+    Assert.Equal("10:00 Ana Gómez (Carlos) · 10:30 Luis Pérez (Andrés, pendiente)", adminAgenda.Body);
+    Assert.Equal("/admin/appointments", adminAgenda.Url);
+
+    // Each barber still gets their own summary.
+    Assert.Equal("10:00 Ana Gómez", Assert.Single(agendas, entry => entry.UserId == _staff.UserId).Body);
+    Assert.Equal("10:30 Luis Pérez (pendiente)", Assert.Single(agendas, entry => entry.UserId == andres.UserId).Body);
+    Assert.Equal(3, agendas.Count);
+  }
+
+  [Fact]
+  public async Task BarberWhoIsAdmin_OnlyGetsTheShopWideSummary()
+  {
+    var owner = await CreateAdminAsync("owner@example.com");
+    var ownerProfile = new StaffProfile(owner.Id, "Dueño", 30, NowUtc.AddMonths(-1));
+    _dbContext.StaffProfiles.Add(ownerProfile);
+    await _dbContext.SaveChangesAsync();
+
+    await AddAppointmentAsync(NowUtc.AddMinutes(55), AppointmentStatus.Confirmed, NowUtc.AddDays(-1), customerUserId: null, "Ana Gómez", ownerProfile);
+
+    await _service.RunAsync();
+
+    var agenda = Assert.Single(await _dbContext.UserNotifications.Where(entry => entry.UserId == owner.Id).ToListAsync());
+    Assert.Equal("/admin/appointments", agenda.Url);
+    Assert.Equal("10:00 Ana Gómez (Dueño)", agenda.Body);
+  }
+
+  private async Task<User> CreateAdminAsync(string email)
+  {
+    var role = await _dbContext.Roles.SingleOrDefaultAsync(candidate => candidate.NormalizedName == "ADMIN");
+    if (role is null)
+    {
+      role = new Role(RoleNames.Admin, isSystemRole: true);
+      _dbContext.Roles.Add(role);
+    }
+
+    var user = new User("Admin Prueba", email, "hash", NowUtc.AddMonths(-1));
+    user.UserRoles.Add(new UserRole(user.Id, role.Id, NowUtc));
+    _dbContext.Users.Add(user);
+    await _dbContext.SaveChangesAsync();
+    return user;
+  }
+
   private Task<List<UserNotification>> CustomerRemindersAsync()
       => _dbContext.UserNotifications
           .Where(entry => entry.Type == UserNotificationTypes.AppointmentReminder)
@@ -150,10 +212,11 @@ public sealed class AppointmentReminderServiceTests : IDisposable
       AppointmentStatus status,
       DateTime createdAtUtc,
       Guid? customerUserId,
-      string customerName = "Cliente Prueba")
+      string customerName = "Cliente Prueba",
+      StaffProfile? staff = null)
   {
     var appointment = new Appointment(
-        _staff.Id,
+        (staff ?? _staff).Id,
         customerName,
         startsAtUtc,
         startsAtUtc.AddMinutes(30),

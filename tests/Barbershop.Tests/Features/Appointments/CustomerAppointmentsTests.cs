@@ -213,6 +213,118 @@ public sealed class CustomerAppointmentsTests : IDisposable
         Assert.Contains(afterCancel.Slots, slot => slot.StartAtUtc == ToUtc(nextDay, 9, 0));
     }
 
+    [Fact]
+    public async Task RescheduleAsync_MovesAppointment_BackToPending_AndFreesOldSlot()
+    {
+        var staff = await CreateStaffAsync("move-staff@example.com", "Move Staff", "Move Staff");
+        var customer = await CreateCustomerAsync("move-customer@example.com", "Move Customer", null);
+        var nextDay = CurrentDate.AddDays(1);
+
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 11, 0)]);
+
+        var appointment = await _customerAppointmentsService.CreateAsync(
+            customer.Id,
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 0), "Keep this note"));
+
+        var stored = await _dbContext.Appointments.SingleAsync(item => item.Id == appointment.Id);
+        stored.UpdateStatus(AppointmentStatus.Confirmed, CurrentUtc.UtcDateTime);
+        await _dbContext.SaveChangesAsync();
+
+        var moved = await _customerAppointmentsService.RescheduleAsync(
+            customer.Id,
+            appointment.Id,
+            new CustomerAppointmentRescheduleRequest(ToUtc(nextDay, 10, 0)));
+
+        Assert.Equal(ToUtc(nextDay, 10, 0), moved.StartsAtUtc);
+        Assert.Equal(moved.StartsAtUtc + (appointment.EndsAtUtc - appointment.StartsAtUtc), moved.EndsAtUtc);
+        Assert.Equal(AppointmentStatus.Pending, moved.Status);
+        Assert.Equal("Keep this note", moved.Notes);
+        Assert.Equal("Move Staff", moved.StaffName);
+
+        var slots = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay);
+        Assert.Contains(slots.Slots, slot => slot.StartAtUtc == ToUtc(nextDay, 9, 0));
+        Assert.DoesNotContain(slots.Slots, slot => slot.StartAtUtc == ToUtc(nextDay, 10, 0));
+    }
+
+    [Fact]
+    public async Task RescheduleAsync_RejectsSlotTakenByAnotherCustomer()
+    {
+        var staff = await CreateStaffAsync("move-conflict-staff@example.com", "Move Conflict Staff", "Move Conflict Staff");
+        var firstCustomer = await CreateCustomerAsync("move-conflict-1@example.com", "Move Conflict 1", null);
+        var secondCustomer = await CreateCustomerAsync("move-conflict-2@example.com", "Move Conflict 2", null);
+        var nextDay = CurrentDate.AddDays(1);
+
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 11, 0)]);
+
+        var appointment = await _customerAppointmentsService.CreateAsync(
+            firstCustomer.Id,
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 0), null));
+
+        await _customerAppointmentsService.CreateAsync(
+            secondCustomer.Id,
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 10, 0), null));
+
+        await Assert.ThrowsAsync<ConflictException>(() =>
+            _customerAppointmentsService.RescheduleAsync(
+                firstCustomer.Id,
+                appointment.Id,
+                new CustomerAppointmentRescheduleRequest(ToUtc(nextDay, 10, 0))));
+    }
+
+    [Fact]
+    public async Task RescheduleAsync_RejectsAppointmentsOwnedByAnotherCustomer()
+    {
+        var staff = await CreateStaffAsync("move-other-staff@example.com", "Move Other Staff", "Move Other Staff");
+        var owner = await CreateCustomerAsync("move-owner@example.com", "Move Owner", null);
+        var intruder = await CreateCustomerAsync("move-intruder@example.com", "Move Intruder", null);
+        var nextDay = CurrentDate.AddDays(1);
+
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 11, 0)]);
+
+        var appointment = await _customerAppointmentsService.CreateAsync(
+            owner.Id,
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 0), null));
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            _customerAppointmentsService.RescheduleAsync(
+                intruder.Id,
+                appointment.Id,
+                new CustomerAppointmentRescheduleRequest(ToUtc(nextDay, 10, 0))));
+    }
+
+    [Fact]
+    public async Task RescheduleAsync_RejectsCancelledAppointments_AndPastTargets()
+    {
+        var staff = await CreateStaffAsync("move-invalid-staff@example.com", "Move Invalid Staff", "Move Invalid Staff");
+        var customer = await CreateCustomerAsync("move-invalid@example.com", "Move Invalid", null);
+        var nextDay = CurrentDate.AddDays(1);
+
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 11, 0)]);
+
+        var active = await _customerAppointmentsService.CreateAsync(
+            customer.Id,
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 0), null));
+
+        var pastTarget = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+            _customerAppointmentsService.RescheduleAsync(
+                customer.Id,
+                active.Id,
+                new CustomerAppointmentRescheduleRequest(ToUtc(CurrentDate, 9, 0))));
+        Assert.Contains("startsAtUtc", pastTarget.Errors.Keys);
+
+        var cancelled = await _customerAppointmentsService.CreateAsync(
+            customer.Id,
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 30), null));
+        await _customerAppointmentsService.CancelAsync(customer.Id, cancelled.Id);
+
+        var notActive = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+            _customerAppointmentsService.RescheduleAsync(
+                customer.Id,
+                cancelled.Id,
+                new CustomerAppointmentRescheduleRequest(ToUtc(nextDay, 10, 30))));
+        Assert.Contains("appointmentId", notActive.Errors.Keys);
+    }
+
     private static AvailabilityRuleRequest Rule(DayOfWeek dayOfWeek, int startHour, int startMinute, int endHour, int endMinute)
         => new((int)dayOfWeek, new TimeOnly(startHour, startMinute), new TimeOnly(endHour, endMinute), true);
 

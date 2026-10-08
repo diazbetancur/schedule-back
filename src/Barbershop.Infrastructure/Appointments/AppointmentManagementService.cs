@@ -164,6 +164,10 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     _dbContext.Appointments.Add(appointment);
     await _dbContext.SaveChangesAsync(cancellationToken);
 
+    await _notificationService.NotifyStaffOfNewAppointmentAsync(
+        new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, null, appointment.CustomerName, appointment.StartsAt, appointment.Id),
+        cancellationToken);
+
     return Map(appointment);
   }
 
@@ -308,6 +312,8 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 
     await EnsureSlotIsAvailableAsync(appointment.StaffProfileId, request.StartsAtUtc, request.EndsAtUtc, appointment.Id, cancellationToken);
 
+    var previousStartsAt = appointment.StartsAt;
+
     appointment.UpdateDetails(
         request.CustomerName,
         request.CustomerEmail,
@@ -319,9 +325,15 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 
     await _dbContext.SaveChangesAsync(cancellationToken);
 
-    await _notificationService.NotifyCustomerOfAppointmentUpdateAsync(
-        new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt, appointment.Id),
-        cancellationToken);
+    var notificationContext = new AppointmentNotificationContext(
+        staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt, appointment.Id);
+
+    await _notificationService.NotifyCustomerOfAppointmentUpdateAsync(notificationContext, cancellationToken);
+
+    if (appointment.StartsAt != previousStartsAt)
+    {
+      await _notificationService.NotifyStaffOfAppointmentRescheduledAsync(notificationContext, cancellationToken);
+    }
 
     return Map(appointment);
   }
@@ -366,9 +378,11 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 
     if (request.Status == AppointmentStatus.Cancelled)
     {
-      await _notificationService.NotifyCustomerOfAppointmentCancellationAsync(
-          new AppointmentNotificationContext(staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt, appointment.Id),
-          cancellationToken);
+      var notificationContext = new AppointmentNotificationContext(
+          staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt, appointment.Id);
+
+      await _notificationService.NotifyCustomerOfAppointmentCancellationAsync(notificationContext, cancellationToken);
+      await _notificationService.NotifyStaffOfAppointmentCancelledAsync(notificationContext, cancellationToken);
     }
 
     if (request.Status == AppointmentStatus.Confirmed)

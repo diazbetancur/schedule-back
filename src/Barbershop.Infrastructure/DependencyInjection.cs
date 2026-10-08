@@ -36,6 +36,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using System.Text;
@@ -117,6 +118,7 @@ public static class DependencyInjection
             .Bind(configuration.GetSection(NotificationWorkerOptions.SectionName));
         services.AddHostedService<NotificationBackgroundWorker>();
         services.AddScoped<IUserNotificationsService, UserNotificationsService>();
+        services.TryAddScoped<ICurrentUserAccessor, NullCurrentUserAccessor>();
         services.AddScoped<IAppointmentNotificationService, AppointmentNotificationService>();
         services.AddScoped<IAdminNotificationsService, AdminNotificationsService>();
         services.AddScoped<IImageTranscoder, MagickImageTranscoder>();

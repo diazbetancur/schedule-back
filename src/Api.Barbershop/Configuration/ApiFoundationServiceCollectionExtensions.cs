@@ -1,3 +1,4 @@
+using Api.Barbershop.Features.Auth;
 using Api.Barbershop.Middleware;
 using Barbershop.Application.Auth;
 using Barbershop.Domain.Users;
@@ -86,6 +87,9 @@ public static class ApiFoundationServiceCollectionExtensions
         });
 
         services.AddRateLimiter(ConfigureRateLimiter);
+
+        services.AddHttpContextAccessor();
+        services.AddScoped<ICurrentUserAccessor, HttpContextCurrentUserAccessor>();
 
         return services;
     }

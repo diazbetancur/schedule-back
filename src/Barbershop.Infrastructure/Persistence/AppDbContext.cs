@@ -3,6 +3,7 @@ using Barbershop.Domain.Customers;
 using Barbershop.Domain.Finance;
 using Barbershop.Domain.Landing;
 using Barbershop.Domain.Media;
+using Barbershop.Domain.Memberships;
 using Barbershop.Domain.Scheduling;
 using Barbershop.Domain.Services;
 using Barbershop.Domain.Staff;
@@ -42,6 +43,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<TickerItem> TickerItems => Set<TickerItem>();
     public DbSet<CustomerProfile> Customers => Set<CustomerProfile>();
     public DbSet<CustomerEvent> CustomerEvents => Set<CustomerEvent>();
+    public DbSet<MembershipPlan> MembershipPlans => Set<MembershipPlan>();
+    public DbSet<MembershipPlanIncludedService> MembershipPlanServices => Set<MembershipPlanIncludedService>();
+    public DbSet<MembershipPlanGiftRule> MembershipPlanGiftRules => Set<MembershipPlanGiftRule>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

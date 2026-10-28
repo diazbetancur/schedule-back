@@ -1,4 +1,5 @@
 using Api.Barbershop.Features.Admin.Appointments;
+using Api.Barbershop.Features.Admin.Customers;
 using Api.Barbershop.Configuration;
 using Api.Barbershop.Features.Admin.Finance;
 using Api.Barbershop.Features.Admin.Landing;
@@ -87,6 +88,7 @@ api.MapCustomerProfileEndpoints();
 api.MapCustomerReviewsEndpoints();
 api.MapAdminStaffEndpoints();
 api.MapAdminServicesEndpoints();
+api.MapAdminCustomersEndpoints();
 api.MapAdminIncomeEndpoints();
 api.MapAdminFixedExpensesEndpoints();
 api.MapAdminExpensesEndpoints();

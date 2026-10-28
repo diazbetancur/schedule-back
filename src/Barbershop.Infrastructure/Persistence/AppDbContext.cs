@@ -1,4 +1,5 @@
 using Barbershop.Domain.Appointments;
+using Barbershop.Domain.Customers;
 using Barbershop.Domain.Finance;
 using Barbershop.Domain.Landing;
 using Barbershop.Domain.Media;
@@ -39,6 +40,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<AppBrandingSettings> AppBrandingSettings => Set<AppBrandingSettings>();
     public DbSet<BusinessScheduleDay> BusinessScheduleDays => Set<BusinessScheduleDay>();
     public DbSet<TickerItem> TickerItems => Set<TickerItem>();
+    public DbSet<CustomerProfile> Customers => Set<CustomerProfile>();
+    public DbSet<CustomerEvent> CustomerEvents => Set<CustomerEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

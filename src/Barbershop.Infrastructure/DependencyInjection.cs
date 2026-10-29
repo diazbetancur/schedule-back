@@ -9,6 +9,7 @@ using Barbershop.Application.Authorization;
 using Barbershop.Application.Availability;
 using Barbershop.Application.Media;
 using Barbershop.Application.Memberships.Admin;
+using Barbershop.Application.Memberships.Portal;
 using Barbershop.Application.Notifications;
 using Barbershop.Application.PublicContent;
 using Barbershop.Application.Reviews;
@@ -140,6 +141,7 @@ public static class DependencyInjection
         services.AddScoped<IAdminMembershipsService, MembershipSalesService>();
         services.AddScoped<IAdminMembershipLedgerService, MembershipLedgerService>();
         services.AddScoped<IAdminMembershipGiftDeliveryService, MembershipGiftDeliveryService>();
+        services.AddScoped<IMyMembershipsService, MyMembershipsService>();
         services.AddScoped<IAdminRolesService, RolesManagementService>();
         services.AddScoped<IAdminIncomeService, IncomeManagementService>();
         services.AddScoped<IAdminFixedExpensesService, FixedExpenseManagementService>();

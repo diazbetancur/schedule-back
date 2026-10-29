@@ -122,6 +122,13 @@ internal sealed class IncomeManagementService : IAdminIncomeService
     public async Task SoftDeleteAsync(Guid incomeEntryId, CancellationToken cancellationToken = default)
     {
         var entry = await LoadAsync(incomeEntryId, cancellationToken);
+
+        // Memberships point to the income that paid for them; deleting it would leave them pointing at nothing.
+        if (await _dbContext.CustomerMemberships.AnyAsync(membership => membership.IncomeEntryId == incomeEntryId, cancellationToken))
+        {
+            throw new ConflictException("The income is linked to one or more memberships. Unlink them before deleting it.");
+        }
+
         entry.MarkDeleted(_timeProvider.GetUtcNow().UtcDateTime);
         await _dbContext.SaveChangesAsync(cancellationToken);
     }

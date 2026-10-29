@@ -2,6 +2,7 @@ using System.Net.Mail;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Customers.Admin;
 using Barbershop.Domain.Customers;
+using Barbershop.Domain.Memberships;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -335,6 +336,17 @@ internal sealed class CustomerManagementService : IAdminCustomersService
             target.Touch(utcNow);
         }
 
+        // Every membership follows the surviving profile; OriginalCustomerId keeps who bought it.
+        var memberships = await _dbContext.CustomerMemberships
+            .Where(membership => membership.CustomerId == source.Id)
+            .ToListAsync(cancellationToken);
+        foreach (var membership in memberships)
+        {
+            membership.MoveToCustomer(target.Id, utcNow);
+            _dbContext.MembershipEvents.Add(new MembershipEvent(
+                membership.Id, MembershipEventType.MovedByMerge, currentUserId, utcNow, relatedCustomerId: source.Id));
+        }
+
         _dbContext.CustomerEvents.Add(new CustomerEvent(
             target.Id, CustomerEventType.MergedFrom, currentUserId, utcNow, userId: transferredUserId, relatedCustomerId: source.Id));
         await SaveChangesAsync(cancellationToken);
@@ -378,6 +390,27 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         if (target.Id != source.Id)
         {
             warnings.Add("Se conservan el nombre, teléfono y correo del cliente destino. El cliente origen quedará marcado como fusionado y no se elimina.");
+
+            var sourceMemberships = await _dbContext.CustomerMemberships.CountAsync(membership => membership.CustomerId == source.Id, cancellationToken);
+            if (sourceMemberships > 0)
+            {
+                warnings.Add($"{sourceMemberships} membresía(s) del cliente origen pasarán al cliente destino, con sus saldos, obsequios e historial.");
+            }
+
+            // Both profiles may already have received a first-purchase gift for the same plan; both are kept.
+            var duplicatedFirstPurchasePlans = await (
+                    from gift in _dbContext.MembershipGifts
+                    join membership in _dbContext.CustomerMemberships on gift.CustomerMembershipId equals membership.Id
+                    where gift.Condition == MembershipGiftCondition.FirstPurchaseOfPlan
+                        && (membership.CustomerId == source.Id || membership.CustomerId == target.Id)
+                    group membership by new { membership.MembershipPlanId, membership.PlanName } into byPlan
+                    where byPlan.Select(membership => membership.CustomerId).Distinct().Count() > 1
+                    select byPlan.Key.PlanName)
+                .ToListAsync(cancellationToken);
+            foreach (var planName in duplicatedFirstPurchasePlans)
+            {
+                warnings.Add($"Ambos perfiles recibieron el obsequio de primera compra de \"{planName}\"; se conservan los dos.");
+            }
         }
 
         var users = await LoadUsersAsync(LinkUserIds(target).Concat(LinkUserIds(source)), cancellationToken);

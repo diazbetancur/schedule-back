@@ -137,6 +137,7 @@ public static class DependencyInjection
         services.AddScoped<IAdminServicesService, ServiceManagementService>();
         services.AddScoped<IAdminCustomersService, CustomerManagementService>();
         services.AddScoped<IAdminMembershipPlansService, MembershipPlanManagementService>();
+        services.AddScoped<IAdminMembershipsService, MembershipSalesService>();
         services.AddScoped<IAdminRolesService, RolesManagementService>();
         services.AddScoped<IAdminIncomeService, IncomeManagementService>();
         services.AddScoped<IAdminFixedExpensesService, FixedExpenseManagementService>();

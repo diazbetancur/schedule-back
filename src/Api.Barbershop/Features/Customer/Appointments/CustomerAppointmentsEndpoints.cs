@@ -37,6 +37,15 @@ public static class CustomerAppointmentsEndpoints
         .ProducesProblem(StatusCodes.Status404NotFound)
         .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
 
+    appointments.MapPatch("/{appointmentId:guid}/reschedule", RescheduleAsync)
+        .WithName("RescheduleCustomerAppointment")
+        .Produces<AppointmentView>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden)
+        .ProducesProblem(StatusCodes.Status404NotFound)
+        .ProducesProblem(StatusCodes.Status409Conflict)
+        .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
+
     return api;
   }
 
@@ -62,4 +71,12 @@ public static class CustomerAppointmentsEndpoints
       ICustomerAppointmentsService service,
       CancellationToken cancellationToken)
       => service.CancelAsync(user.GetRequiredUserId(), appointmentId, cancellationToken);
+
+  private static Task<AppointmentView> RescheduleAsync(
+      ClaimsPrincipal user,
+      Guid appointmentId,
+      CustomerAppointmentRescheduleRequest request,
+      ICustomerAppointmentsService service,
+      CancellationToken cancellationToken)
+      => service.RescheduleAsync(user.GetRequiredUserId(), appointmentId, request, cancellationToken);
 }

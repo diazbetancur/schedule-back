@@ -7,4 +7,6 @@ public interface ICustomerAppointmentsService
   Task<IReadOnlyList<AppointmentView>> GetHistoryAsync(Guid currentUserId, CancellationToken cancellationToken = default);
 
   Task<AppointmentView> CancelAsync(Guid currentUserId, Guid appointmentId, CancellationToken cancellationToken = default);
+
+  Task<AppointmentView> RescheduleAsync(Guid currentUserId, Guid appointmentId, CustomerAppointmentRescheduleRequest request, CancellationToken cancellationToken = default);
 }

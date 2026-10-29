@@ -1,7 +1,9 @@
 using Barbershop.Domain.Appointments;
+using Barbershop.Domain.Customers;
 using Barbershop.Domain.Finance;
 using Barbershop.Domain.Landing;
 using Barbershop.Domain.Media;
+using Barbershop.Domain.Memberships;
 using Barbershop.Domain.Scheduling;
 using Barbershop.Domain.Services;
 using Barbershop.Domain.Staff;
@@ -39,6 +41,21 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<AppBrandingSettings> AppBrandingSettings => Set<AppBrandingSettings>();
     public DbSet<BusinessScheduleDay> BusinessScheduleDays => Set<BusinessScheduleDay>();
     public DbSet<TickerItem> TickerItems => Set<TickerItem>();
+    public DbSet<CustomerProfile> Customers => Set<CustomerProfile>();
+    public DbSet<CustomerEvent> CustomerEvents => Set<CustomerEvent>();
+    public DbSet<MembershipPlan> MembershipPlans => Set<MembershipPlan>();
+    public DbSet<MembershipPlanIncludedService> MembershipPlanServices => Set<MembershipPlanIncludedService>();
+    public DbSet<MembershipPlanGiftRule> MembershipPlanGiftRules => Set<MembershipPlanGiftRule>();
+    public DbSet<CustomerMembership> CustomerMemberships => Set<CustomerMembership>();
+    public DbSet<MembershipGift> MembershipGifts => Set<MembershipGift>();
+    public DbSet<MembershipAllowance> MembershipAllowances => Set<MembershipAllowance>();
+    public DbSet<MembershipAllowanceService> MembershipAllowanceServices => Set<MembershipAllowanceService>();
+    public DbSet<MembershipEvent> MembershipEvents => Set<MembershipEvent>();
+    public DbSet<MembershipConsumption> MembershipConsumptions => Set<MembershipConsumption>();
+    public DbSet<MembershipMovement> MembershipMovements => Set<MembershipMovement>();
+    public DbSet<MembershipConsumptionReversal> MembershipConsumptionReversals => Set<MembershipConsumptionReversal>();
+    public DbSet<MembershipGiftDelivery> MembershipGiftDeliveries => Set<MembershipGiftDelivery>();
+    public DbSet<MembershipGiftDeliveryReversal> MembershipGiftDeliveryReversals => Set<MembershipGiftDeliveryReversal>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

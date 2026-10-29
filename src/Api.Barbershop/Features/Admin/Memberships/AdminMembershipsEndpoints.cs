@@ -100,6 +100,24 @@ public static class AdminMembershipsEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
+        memberships.MapPost("/{membershipId:guid}/gifts/{giftId:guid}/deliveries", DeliverGiftAsync)
+            .WithName("DeliverAdminMembershipGift")
+            .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
+
+        memberships.MapPost("/{membershipId:guid}/gifts/{giftId:guid}/deliveries/{deliveryId:guid}/reverse", ReverseGiftDeliveryAsync)
+            .WithName("ReverseAdminMembershipGiftDelivery")
+            .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
+
         return api;
     }
 
@@ -150,4 +168,23 @@ public static class AdminMembershipsEndpoints
         IAdminMembershipLedgerService service,
         CancellationToken cancellationToken)
         => service.ReverseAsync(user.GetRequiredUserId(), membershipId, consumptionId, request, cancellationToken);
+
+    private static Task<CustomerMembershipDetailView> DeliverGiftAsync(
+        Guid membershipId,
+        Guid giftId,
+        MembershipGiftDeliveryRequest request,
+        ClaimsPrincipal user,
+        IAdminMembershipGiftDeliveryService service,
+        CancellationToken cancellationToken)
+        => service.DeliverAsync(user.GetRequiredUserId(), membershipId, giftId, request, cancellationToken);
+
+    private static Task<CustomerMembershipDetailView> ReverseGiftDeliveryAsync(
+        Guid membershipId,
+        Guid giftId,
+        Guid deliveryId,
+        MembershipGiftDeliveryReverseRequest request,
+        ClaimsPrincipal user,
+        IAdminMembershipGiftDeliveryService service,
+        CancellationToken cancellationToken)
+        => service.ReverseAsync(user.GetRequiredUserId(), membershipId, giftId, deliveryId, request, cancellationToken);
 }

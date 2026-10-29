@@ -38,6 +38,15 @@ public sealed record MembershipConsumptionRequest(
 public sealed record MembershipConsumptionReverseRequest(string Reason);
 
 /// <summary>
+/// Hands over a whole physical gift on <c>DeliveredOn</c> (Bogotá date, from the sale date up to today); there are no
+/// partial deliveries. <c>IdempotencyKey</c> is generated once per intended delivery: resending returns the stored one.
+/// </summary>
+public sealed record MembershipGiftDeliveryRequest(DateOnly DeliveredOn, Guid IdempotencyKey);
+
+/// <summary>Reverses a delivery registered by mistake; the reason is required.</summary>
+public sealed record MembershipGiftDeliveryReverseRequest(string Reason);
+
+/// <summary>
 /// Links the membership in the route, plus <c>AdditionalMembershipIds</c> paid with the same income, in one
 /// step (so a payment for several memberships is checked against their total, not one at a time).
 /// <c>DiscrepancyJustification</c> is required when the income amount differs from the sum of the prices of
@@ -84,8 +93,9 @@ public sealed record MembershipAllowanceView(
     IReadOnlyList<MembershipAllowanceServiceView> Services);
 
 /// <summary>
-/// Status: service gifts are "Granted" or "Blocked" (annulled membership); physical gifts are
-/// "PendingDelivery" or "NotDeliverable" (annulled membership). Delivery is recorded in a later stage.
+/// Status: service gifts are "Granted" or "Blocked" (annulled membership). Physical gifts are "Delivered" while
+/// they have a delivery that was not reversed (even after an annulment), otherwise "PendingDelivery", or
+/// "NotDeliverable" on an annulled membership. <c>DeliveryId</c>/<c>DeliveredOn</c> describe that current delivery.
 /// </summary>
 public sealed record MembershipGiftView(
     Guid Id,
@@ -95,7 +105,22 @@ public sealed record MembershipGiftView(
     Guid? ServiceId,
     string? ServiceName,
     string? Description,
-    string Status);
+    string Status,
+    Guid? DeliveryId = null,
+    DateOnly? DeliveredOn = null);
+
+public sealed record MembershipGiftDeliveryReversalView(string Reason, DateTime PerformedAt, string PerformedByName);
+
+/// <summary>Every delivery of the membership's physical gifts, newest first, including reversed ones.</summary>
+public sealed record MembershipGiftDeliveryView(
+    Guid Id,
+    Guid GiftId,
+    string GiftDescription,
+    int Quantity,
+    DateOnly DeliveredOn,
+    DateTime RegisteredAt,
+    string RegisteredByName,
+    MembershipGiftDeliveryReversalView? Reversal);
 
 public sealed record MembershipLinkedPeerView(Guid MembershipId, string CustomerName, string PlanName, int Price, string Status);
 
@@ -164,6 +189,7 @@ public sealed record CustomerMembershipDetailView(
     MembershipIncomeView? Income,
     IReadOnlyList<MembershipEventView> Events,
     IReadOnlyList<MembershipConsumptionView> Consumptions,
+    IReadOnlyList<MembershipGiftDeliveryView> GiftDeliveries,
     DateTime CreatedAt);
 
 /// <summary>A membership-sale income an admin can link, with the memberships it already covers.</summary>

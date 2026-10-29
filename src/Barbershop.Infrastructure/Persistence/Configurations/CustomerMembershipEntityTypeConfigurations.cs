@@ -199,6 +199,52 @@ internal sealed class MembershipConsumptionReversalConfiguration : IEntityTypeCo
   }
 }
 
+internal sealed class MembershipGiftDeliveryConfiguration : IEntityTypeConfiguration<MembershipGiftDelivery>
+{
+  public void Configure(EntityTypeBuilder<MembershipGiftDelivery> builder)
+  {
+    builder.ToTable("membership_gift_deliveries", tableBuilder =>
+    {
+      tableBuilder.HasCheckConstraint("ck_membership_gift_deliveries_quantity_range", "\"Quantity\" >= 1 AND \"Quantity\" <= 1000");
+      tableBuilder.HasCheckConstraint("ck_membership_gift_deliveries_number_positive", "\"DeliveryNumber\" >= 1");
+    });
+
+    builder.HasKey(x => x.Id);
+
+    builder.Property(x => x.Id).ValueGeneratedNever();
+    builder.Property(x => x.DeliveredOn).HasColumnType("date");
+    builder.Property(x => x.RegisteredAt).HasColumnType("timestamp with time zone").IsRequired();
+
+    // Two simultaneous deliveries of one gift would get the same number: only one can be stored.
+    builder.HasIndex(x => new { x.MembershipGiftId, x.DeliveryNumber }).IsUnique();
+    // A retried request carries the same key, so it can never be stored twice.
+    builder.HasIndex(x => x.IdempotencyKey).IsUnique();
+    builder.HasIndex(x => x.CustomerMembershipId);
+
+    builder.HasOne<MembershipGift>().WithMany().HasForeignKey(x => x.MembershipGiftId).OnDelete(DeleteBehavior.Restrict);
+    builder.HasOne<CustomerMembership>().WithMany().HasForeignKey(x => x.CustomerMembershipId).OnDelete(DeleteBehavior.Restrict);
+  }
+}
+
+internal sealed class MembershipGiftDeliveryReversalConfiguration : IEntityTypeConfiguration<MembershipGiftDeliveryReversal>
+{
+  public void Configure(EntityTypeBuilder<MembershipGiftDeliveryReversal> builder)
+  {
+    builder.ToTable("membership_gift_delivery_reversals");
+
+    builder.HasKey(x => x.Id);
+
+    builder.Property(x => x.Id).ValueGeneratedNever();
+    builder.Property(x => x.Reason).HasMaxLength(500).IsRequired();
+    builder.Property(x => x.PerformedAt).HasColumnType("timestamp with time zone").IsRequired();
+
+    // A delivery can be reversed only once.
+    builder.HasIndex(x => x.MembershipGiftDeliveryId).IsUnique();
+
+    builder.HasOne<MembershipGiftDelivery>().WithMany().HasForeignKey(x => x.MembershipGiftDeliveryId).OnDelete(DeleteBehavior.Restrict);
+  }
+}
+
 internal sealed class MembershipEventConfiguration : IEntityTypeConfiguration<MembershipEvent>
 {
   public void Configure(EntityTypeBuilder<MembershipEvent> builder)

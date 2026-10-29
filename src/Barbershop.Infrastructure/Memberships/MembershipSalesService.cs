@@ -583,10 +583,24 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             .Where(staff => staffIds.Contains(staff.Id))
             .ToDictionaryAsync(staff => staff.Id, staff => staff.DisplayName, cancellationToken);
 
+        var deliveries = await _dbContext.MembershipGiftDeliveries
+            .Where(delivery => delivery.CustomerMembershipId == membership.Id)
+            .ToListAsync(cancellationToken);
+        var deliveryIds = deliveries.Select(delivery => delivery.Id).ToArray();
+        var deliveryReversals = await _dbContext.MembershipGiftDeliveryReversals
+            .Where(reversal => deliveryIds.Contains(reversal.MembershipGiftDeliveryId))
+            .ToDictionaryAsync(reversal => reversal.MembershipGiftDeliveryId, cancellationToken);
+        // A gift is delivered while it has a delivery that was not reversed (at most one, enforced on write).
+        var currentDeliveries = deliveries
+            .Where(delivery => !deliveryReversals.ContainsKey(delivery.Id))
+            .ToDictionary(delivery => delivery.MembershipGiftId);
+
         var userIds = events.Select(membershipEvent => membershipEvent.PerformedByUserId)
             .Concat(new[] { membership.ActivatedByUserId, membership.AnnulledByUserId }.Where(id => id is not null).Select(id => id!.Value))
             .Concat(consumptions.Select(consumption => consumption.RegisteredByUserId))
             .Concat(reversals.Values.Select(reversal => reversal.PerformedByUserId))
+            .Concat(deliveries.Select(delivery => delivery.RegisteredByUserId))
+            .Concat(deliveryReversals.Values.Select(reversal => reversal.PerformedByUserId))
             .Distinct()
             .ToArray();
         var userNames = await _dbContext.Users
@@ -635,17 +649,45 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
 
         var gifts = membership.Gifts
             .OrderBy(gift => gift.Position)
-            .Select(gift => new MembershipGiftView(
-                gift.Id,
-                gift.Kind.ToString(),
-                gift.Condition.ToString(),
-                gift.Quantity,
-                gift.ServiceId,
-                gift.ServiceNameSnapshot,
-                gift.DescriptionSnapshot,
-                gift.Kind == MembershipGiftKind.Service
+            .Select(gift =>
+            {
+                var current = currentDeliveries.GetValueOrDefault(gift.Id);
+                // A gift handed over before an annulment stays delivered; a pending one becomes not deliverable.
+                var status = gift.Kind == MembershipGiftKind.Service
                     ? (annulled ? "Blocked" : "Granted")
-                    : (annulled ? "NotDeliverable" : "PendingDelivery")))
+                    : current is not null ? "Delivered" : (annulled ? "NotDeliverable" : "PendingDelivery");
+                return new MembershipGiftView(
+                    gift.Id,
+                    gift.Kind.ToString(),
+                    gift.Condition.ToString(),
+                    gift.Quantity,
+                    gift.ServiceId,
+                    gift.ServiceNameSnapshot,
+                    gift.DescriptionSnapshot,
+                    status,
+                    current?.Id,
+                    current?.DeliveredOn);
+            })
+            .ToArray();
+
+        var giftDescriptions = membership.Gifts.ToDictionary(gift => gift.Id, gift => gift.DescriptionSnapshot ?? string.Empty);
+        var deliveryViews = deliveries
+            .OrderByDescending(delivery => delivery.RegisteredAt)
+            .ThenByDescending(delivery => delivery.DeliveryNumber)
+            .Select(delivery => new MembershipGiftDeliveryView(
+                delivery.Id,
+                delivery.MembershipGiftId,
+                giftDescriptions.GetValueOrDefault(delivery.MembershipGiftId, string.Empty),
+                delivery.Quantity,
+                delivery.DeliveredOn,
+                delivery.RegisteredAt,
+                userNames.GetValueOrDefault(delivery.RegisteredByUserId, string.Empty),
+                deliveryReversals.TryGetValue(delivery.Id, out var deliveryReversal)
+                    ? new MembershipGiftDeliveryReversalView(
+                        deliveryReversal.Reason,
+                        deliveryReversal.PerformedAt,
+                        userNames.GetValueOrDefault(deliveryReversal.PerformedByUserId, string.Empty))
+                    : null))
             .ToArray();
 
         var eventViews = events.Select(membershipEvent => new MembershipEventView(
@@ -712,6 +754,7 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             income,
             eventViews,
             consumptionViews,
+            deliveryViews,
             membership.CreatedAt);
     }
 }

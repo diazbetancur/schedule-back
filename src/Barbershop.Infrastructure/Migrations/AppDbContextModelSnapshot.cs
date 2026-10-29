@@ -1011,6 +1011,80 @@ namespace Barbershop.Infrastructure.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipGiftDelivery", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CustomerMembershipId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("DeliveredOn")
+                        .HasColumnType("date");
+
+                    b.Property<int>("DeliveryNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("IdempotencyKey")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("MembershipGiftId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("RegisteredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("RegisteredByUserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CustomerMembershipId");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("MembershipGiftId", "DeliveryNumber")
+                        .IsUnique();
+
+                    b.ToTable("membership_gift_deliveries", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_membership_gift_deliveries_number_positive", "\"DeliveryNumber\" >= 1");
+
+                            t.HasCheckConstraint("ck_membership_gift_deliveries_quantity_range", "\"Quantity\" >= 1 AND \"Quantity\" <= 1000");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipGiftDeliveryReversal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("MembershipGiftDeliveryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("PerformedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("PerformedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MembershipGiftDeliveryId")
+                        .IsUnique();
+
+                    b.ToTable("membership_gift_delivery_reversals", "public");
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipMovement", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2073,6 +2147,30 @@ namespace Barbershop.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("ServiceId")
                         .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipGiftDelivery", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Memberships.CustomerMembership", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerMembershipId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Memberships.MembershipGift", null)
+                        .WithMany()
+                        .HasForeignKey("MembershipGiftId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipGiftDeliveryReversal", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Memberships.MembershipGiftDelivery", null)
+                        .WithMany()
+                        .HasForeignKey("MembershipGiftDeliveryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipMovement", b =>

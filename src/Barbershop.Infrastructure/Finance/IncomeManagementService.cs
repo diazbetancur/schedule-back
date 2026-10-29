@@ -42,22 +42,34 @@ internal sealed class IncomeManagementService : IAdminIncomeService
 
     public async Task<IncomeEntryView> CreateAsync(Guid currentUserId, IncomeEntryCreateRequest request, CancellationToken cancellationToken = default)
     {
-        var service = await ValidateAndLoadServiceAsync(request.ServiceId, cancellationToken);
-        await EnsureStaffExistsAsync(request.StaffProfileId, cancellationToken);
-        ValidateAmountAndDate(request.Amount, request.OccurredOn);
-
+        var kind = ParseKind(request.Kind) ?? IncomeKind.Service;
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var entry = new IncomeEntry(
-            service.Id,
-            service.Name,
-            service.BasePrice,
-            request.StaffProfileId,
-            request.Amount,
-            request.IsPromo,
-            request.OccurredOn,
-            currentUserId,
-            utcNow,
-            service.BusinessPercentage);
+        IncomeEntry entry;
+
+        if (kind == IncomeKind.MembershipSale)
+        {
+            ValidateMembershipSaleShape(request.ServiceId, request.StaffProfileId, request.IsPromo);
+            ValidateAmountAndDate(request.Amount, request.OccurredOn);
+            entry = IncomeEntry.CreateMembershipSale(request.Amount, request.OccurredOn, currentUserId, utcNow);
+        }
+        else
+        {
+            var service = await ValidateAndLoadServiceAsync(request.ServiceId, cancellationToken);
+            var staffProfileId = await EnsureStaffExistsAsync(request.StaffProfileId, cancellationToken);
+            ValidateAmountAndDate(request.Amount, request.OccurredOn);
+
+            entry = new IncomeEntry(
+                service.Id,
+                service.Name,
+                service.BasePrice,
+                staffProfileId,
+                request.Amount,
+                request.IsPromo,
+                request.OccurredOn,
+                currentUserId,
+                utcNow,
+                service.BusinessPercentage);
+        }
 
         _dbContext.IncomeEntries.Add(entry);
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -67,20 +79,41 @@ internal sealed class IncomeManagementService : IAdminIncomeService
     public async Task<IncomeEntryView> UpdateAsync(Guid incomeEntryId, IncomeEntryUpdateRequest request, CancellationToken cancellationToken = default)
     {
         var entry = await LoadAsync(incomeEntryId, cancellationToken);
-        var service = await ValidateAndLoadServiceAsync(request.ServiceId, cancellationToken);
-        await EnsureStaffExistsAsync(request.StaffProfileId, cancellationToken);
-        ValidateAmountAndDate(request.Amount, request.OccurredOn);
 
-        entry.Update(
-            service.Id,
-            service.Name,
-            service.BasePrice,
-            request.StaffProfileId,
-            request.Amount,
-            request.IsPromo,
-            request.OccurredOn,
-            _timeProvider.GetUtcNow().UtcDateTime,
-            service.BusinessPercentage);
+        // Omitting the kind keeps the entry's kind, so older clients can still edit service income.
+        var requestedKind = ParseKind(request.Kind) ?? entry.Kind;
+        if (requestedKind != entry.Kind)
+        {
+            throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["kind"] = ["The income type cannot be changed. Delete the entry and register it again."],
+            });
+        }
+
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        if (entry.Kind == IncomeKind.MembershipSale)
+        {
+            ValidateMembershipSaleShape(request.ServiceId, request.StaffProfileId, request.IsPromo);
+            ValidateAmountAndDate(request.Amount, request.OccurredOn);
+            entry.UpdateMembershipSale(request.Amount, request.OccurredOn, utcNow);
+        }
+        else
+        {
+            var service = await ValidateAndLoadServiceAsync(request.ServiceId, cancellationToken);
+            var staffProfileId = await EnsureStaffExistsAsync(request.StaffProfileId, cancellationToken);
+            ValidateAmountAndDate(request.Amount, request.OccurredOn);
+
+            entry.Update(
+                service.Id,
+                service.Name,
+                service.BasePrice,
+                staffProfileId,
+                request.Amount,
+                request.IsPromo,
+                request.OccurredOn,
+                utcNow,
+                service.BusinessPercentage);
+        }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
         return await MapAsync(entry, cancellationToken);
@@ -96,8 +129,61 @@ internal sealed class IncomeManagementService : IAdminIncomeService
     private DateOnly Today()
         => DateOnly.FromDateTime(_timeProvider.GetUtcNow().UtcDateTime.Add(ColombiaOffset));
 
-    private async Task<Service> ValidateAndLoadServiceAsync(Guid serviceId, CancellationToken cancellationToken)
+    /// <summary>Null when omitted (callers pick the default); only the enum names are accepted.</summary>
+    private static IncomeKind? ParseKind(string? kind)
     {
+        if (string.IsNullOrWhiteSpace(kind))
+        {
+            return null;
+        }
+
+        var name = Enum.GetNames<IncomeKind>().FirstOrDefault(candidate =>
+            string.Equals(candidate, kind.Trim(), StringComparison.OrdinalIgnoreCase));
+
+        return name is null
+            ? throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["kind"] = ["Kind must be Service or MembershipSale."],
+            })
+            : Enum.Parse<IncomeKind>(name);
+    }
+
+    /// <summary>A membership sale has no service, no professional and no promo flag.</summary>
+    private static void ValidateMembershipSaleShape(Guid? serviceId, Guid? staffProfileId, bool isPromo)
+    {
+        var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+
+        if (serviceId is not null)
+        {
+            errors["serviceId"] = ["A membership sale is not tied to a service."];
+        }
+
+        if (staffProfileId is not null)
+        {
+            errors["staffProfileId"] = ["A membership sale is not tied to a professional."];
+        }
+
+        if (isPromo)
+        {
+            errors["isPromo"] = ["A membership sale cannot be marked as promo."];
+        }
+
+        if (errors.Count > 0)
+        {
+            throw new ValidationProblemException(errors);
+        }
+    }
+
+    private async Task<Service> ValidateAndLoadServiceAsync(Guid? serviceId, CancellationToken cancellationToken)
+    {
+        if (serviceId is null)
+        {
+            throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["serviceId"] = ["A service is required for service income."],
+            });
+        }
+
         var service = await _dbContext.Services
             .SingleOrDefaultAsync(candidate => candidate.Id == serviceId && !candidate.IsDeleted, cancellationToken);
 
@@ -112,9 +198,17 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         return service;
     }
 
-    private async Task EnsureStaffExistsAsync(Guid staffProfileId, CancellationToken cancellationToken)
+    private async Task<Guid> EnsureStaffExistsAsync(Guid? staffProfileId, CancellationToken cancellationToken)
     {
-        var exists = await _dbContext.StaffProfiles.AnyAsync(candidate => candidate.Id == staffProfileId, cancellationToken);
+        if (staffProfileId is not { } staffId)
+        {
+            throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["staffProfileId"] = ["A professional is required for service income."],
+            });
+        }
+
+        var exists = await _dbContext.StaffProfiles.AnyAsync(candidate => candidate.Id == staffId, cancellationToken);
         if (!exists)
         {
             throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
@@ -122,6 +216,8 @@ internal sealed class IncomeManagementService : IAdminIncomeService
                 ["staffProfileId"] = ["The selected professional does not exist."],
             });
         }
+
+        return staffId;
     }
 
     private void ValidateAmountAndDate(int amount, DateOnly occurredOn)
@@ -153,10 +249,14 @@ internal sealed class IncomeManagementService : IAdminIncomeService
 
     private async Task<IncomeEntryView> MapAsync(IncomeEntry entry, CancellationToken cancellationToken)
     {
-        var displayName = await _dbContext.StaffProfiles
-            .Where(staff => staff.Id == entry.StaffProfileId)
-            .Select(staff => staff.DisplayName)
-            .SingleOrDefaultAsync(cancellationToken) ?? string.Empty;
+        string? displayName = null;
+        if (entry.StaffProfileId is { } staffId)
+        {
+            displayName = await _dbContext.StaffProfiles
+                .Where(staff => staff.Id == staffId)
+                .Select(staff => staff.DisplayName)
+                .SingleOrDefaultAsync(cancellationToken) ?? string.Empty;
+        }
 
         return Map(entry, displayName);
     }
@@ -168,18 +268,27 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             return [];
         }
 
-        var staffIds = entries.Select(entry => entry.StaffProfileId).Distinct().ToArray();
-        var displayNames = await _dbContext.StaffProfiles
-            .Where(staff => staffIds.Contains(staff.Id))
-            .Select(staff => new { staff.Id, staff.DisplayName })
-            .ToDictionaryAsync(staff => staff.Id, staff => staff.DisplayName, cancellationToken);
+        var staffIds = entries
+            .Where(entry => entry.StaffProfileId is not null)
+            .Select(entry => entry.StaffProfileId!.Value)
+            .Distinct()
+            .ToArray();
+        var displayNames = staffIds.Length == 0
+            ? new Dictionary<Guid, string>()
+            : await _dbContext.StaffProfiles
+                .Where(staff => staffIds.Contains(staff.Id))
+                .Select(staff => new { staff.Id, staff.DisplayName })
+                .ToDictionaryAsync(staff => staff.Id, staff => staff.DisplayName, cancellationToken);
 
         return entries
-            .Select(entry => Map(entry, displayNames.TryGetValue(entry.StaffProfileId, out var name) ? name : string.Empty))
+            .Select(entry => Map(
+                entry,
+                entry.StaffProfileId is { } staffId ? displayNames.GetValueOrDefault(staffId, string.Empty) : null))
             .ToArray();
     }
 
-    private static IncomeEntryView Map(IncomeEntry entry, string staffDisplayName)
+    /// <summary>A membership sale has no professional, so its display name is null rather than empty.</summary>
+    private static IncomeEntryView Map(IncomeEntry entry, string? staffDisplayName)
         => new(
             entry.Id,
             entry.ServiceId,
@@ -194,5 +303,6 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             entry.ProfessionalAmount,
             entry.OccurredOn,
             entry.CreatedAt,
-            entry.UpdatedAt);
+            entry.UpdatedAt,
+            entry.Kind.ToString());
 }

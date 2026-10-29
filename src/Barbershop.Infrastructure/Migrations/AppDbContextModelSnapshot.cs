@@ -349,18 +349,24 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<bool>("IsPromo")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasDefaultValue("Service");
+
                     b.Property<DateOnly>("OccurredOn")
                         .HasColumnType("date");
 
-                    b.Property<Guid>("ServiceId")
+                    b.Property<Guid?>("ServiceId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("ServiceNameSnapshot")
-                        .IsRequired()
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
 
-                    b.Property<Guid>("StaffProfileId")
+                    b.Property<Guid?>("StaffProfileId")
                         .HasColumnType("uuid");
 
                     b.Property<DateTime?>("UpdatedAt")
@@ -381,6 +387,8 @@ namespace Barbershop.Infrastructure.Migrations
                             t.HasCheckConstraint("ck_income_entries_base_price_non_negative", "\"BasePriceSnapshot\" >= 0");
 
                             t.HasCheckConstraint("ck_income_entries_business_percentage_range", "\"BusinessPercentageSnapshot\" >= 0 AND \"BusinessPercentageSnapshot\" <= 100");
+
+                            t.HasCheckConstraint("ck_income_entries_kind_consistency", "(\"Kind\" = 'Service' AND \"ServiceId\" IS NOT NULL AND \"StaffProfileId\" IS NOT NULL AND \"ServiceNameSnapshot\" IS NOT NULL) OR (\"Kind\" = 'MembershipSale' AND \"ServiceId\" IS NULL AND \"StaffProfileId\" IS NULL AND \"ServiceNameSnapshot\" IS NULL AND \"BusinessPercentageSnapshot\" = 100 AND \"BasePriceSnapshot\" = 0 AND \"IsPromo\" = false)");
                         });
                 });
 
@@ -1531,14 +1539,12 @@ namespace Barbershop.Infrastructure.Migrations
                     b.HasOne("Barbershop.Domain.Services.Service", null)
                         .WithMany()
                         .HasForeignKey("ServiceId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("Barbershop.Domain.Staff.StaffProfile", null)
                         .WithMany()
                         .HasForeignKey("StaffProfileId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Landing.AppBrandingSettings", b =>

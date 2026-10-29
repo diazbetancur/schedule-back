@@ -51,6 +51,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<MembershipAllowance> MembershipAllowances => Set<MembershipAllowance>();
     public DbSet<MembershipAllowanceService> MembershipAllowanceServices => Set<MembershipAllowanceService>();
     public DbSet<MembershipEvent> MembershipEvents => Set<MembershipEvent>();
+    public DbSet<MembershipConsumption> MembershipConsumptions => Set<MembershipConsumption>();
+    public DbSet<MembershipMovement> MembershipMovements => Set<MembershipMovement>();
+    public DbSet<MembershipConsumptionReversal> MembershipConsumptionReversals => Set<MembershipConsumptionReversal>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

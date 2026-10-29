@@ -565,8 +565,28 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             .ThenByDescending(membershipEvent => membershipEvent.Id)
             .ToList();
 
+        var movements = await _dbContext.MembershipMovements
+            .Where(movement => movement.CustomerMembershipId == membership.Id)
+            .ToListAsync(cancellationToken);
+        var consumptions = await _dbContext.MembershipConsumptions
+            .Where(consumption => consumption.CustomerMembershipId == membership.Id)
+            .ToListAsync(cancellationToken);
+        var consumptionIds = consumptions.Select(consumption => consumption.Id).ToArray();
+        var reversals = await _dbContext.MembershipConsumptionReversals
+            .Where(reversal => consumptionIds.Contains(reversal.MembershipConsumptionId))
+            .ToDictionaryAsync(reversal => reversal.MembershipConsumptionId, cancellationToken);
+        var staffIds = consumptions.Where(consumption => consumption.StaffProfileId is not null)
+            .Select(consumption => consumption.StaffProfileId!.Value)
+            .Distinct()
+            .ToArray();
+        var staffNames = await _dbContext.StaffProfiles
+            .Where(staff => staffIds.Contains(staff.Id))
+            .ToDictionaryAsync(staff => staff.Id, staff => staff.DisplayName, cancellationToken);
+
         var userIds = events.Select(membershipEvent => membershipEvent.PerformedByUserId)
             .Concat(new[] { membership.ActivatedByUserId, membership.AnnulledByUserId }.Where(id => id is not null).Select(id => id!.Value))
+            .Concat(consumptions.Select(consumption => consumption.RegisteredByUserId))
+            .Concat(reversals.Values.Select(reversal => reversal.PerformedByUserId))
             .Distinct()
             .ToArray();
         var userNames = await _dbContext.Users
@@ -592,6 +612,11 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             income = new MembershipIncomeView(entry.Id, entry.Amount, entry.OccurredOn, entry.IsDeleted, total, total != entry.Amount, peers);
         }
 
+        // Consumed = consumption movements minus the reversal movements that gave units back.
+        int ConsumedQuantity(Guid allowanceId) => movements
+            .Where(movement => movement.MembershipAllowanceId == allowanceId)
+            .Sum(movement => movement.Type == MembershipMovementType.Consumption ? movement.Quantity : -movement.Quantity);
+
         var annulled = membership.Status == MembershipStatus.Annulled;
         var allowances = membership.Allowances
             .OrderBy(allowance => allowance.Position)
@@ -600,8 +625,8 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
                 allowance.Origin.ToString(),
                 allowance.MembershipGiftId,
                 allowance.GrantedQuantity,
-                ConsumedQuantity: 0,
-                AvailableQuantity: allowance.GrantedQuantity,
+                ConsumedQuantity(allowance.Id),
+                allowance.GrantedQuantity - ConsumedQuantity(allowance.Id),
                 allowance.Services
                     .OrderBy(service => service.ServiceNameSnapshot, StringComparer.CurrentCultureIgnoreCase)
                     .Select(service => new MembershipAllowanceServiceView(service.ServiceId, service.ServiceNameSnapshot))
@@ -634,6 +659,31 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
                 membershipEvent.RelatedCustomerId is { } relatedId ? customerNames.GetValueOrDefault(relatedId) : null))
             .ToArray();
 
+        var origins = membership.Allowances.ToDictionary(allowance => allowance.Id, allowance => allowance.Origin.ToString());
+        var consumptionViews = consumptions
+            .OrderByDescending(consumption => consumption.ServiceDate)
+            .ThenByDescending(consumption => consumption.RegisteredAt)
+            .ThenByDescending(consumption => consumption.Id)
+            .Select(consumption => new MembershipConsumptionView(
+                consumption.Id,
+                consumption.ServiceId,
+                consumption.ServiceNameSnapshot,
+                consumption.Quantity,
+                consumption.ServiceDate,
+                consumption.StaffProfileId,
+                consumption.StaffProfileId is { } staffId ? staffNames.GetValueOrDefault(staffId) : null,
+                consumption.RegisteredAt,
+                userNames.GetValueOrDefault(consumption.RegisteredByUserId, string.Empty),
+                movements
+                    .Where(movement => movement.MembershipConsumptionId == consumption.Id && movement.Type == MembershipMovementType.Consumption)
+                    .OrderBy(movement => origins[movement.MembershipAllowanceId] == nameof(MembershipAllowanceOrigin.Gift) ? 0 : 1)
+                    .Select(movement => new MembershipConsumptionPartView(movement.MembershipAllowanceId, origins[movement.MembershipAllowanceId], movement.Quantity))
+                    .ToArray(),
+                reversals.TryGetValue(consumption.Id, out var reversal)
+                    ? new MembershipConsumptionReversalView(reversal.Reason, reversal.PerformedAt, userNames.GetValueOrDefault(reversal.PerformedByUserId, string.Empty))
+                    : null))
+            .ToArray();
+
         return new CustomerMembershipDetailView(
             membership.Id,
             membership.CustomerId,
@@ -661,6 +711,7 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             gifts,
             income,
             eventViews,
+            consumptionViews,
             membership.CreatedAt);
     }
 }

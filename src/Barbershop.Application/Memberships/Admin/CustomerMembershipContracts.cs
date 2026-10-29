@@ -23,6 +23,21 @@ public sealed record MembershipActivateRequest(bool ConfirmExpiredActivation = f
 public sealed record MembershipAnnulRequest(string Reason);
 
 /// <summary>
+/// Registers that <c>Quantity</c> units of <c>ServiceId</c> were given on <c>ServiceDate</c> (Bogotá date, within the
+/// validity and not in the future). Gifted units are used before purchased ones. <c>IdempotencyKey</c> is generated
+/// once per intended consumption: resending the same request returns the already registered consumption.
+/// </summary>
+public sealed record MembershipConsumptionRequest(
+    Guid ServiceId,
+    int Quantity,
+    DateOnly ServiceDate,
+    Guid? StaffProfileId,
+    Guid IdempotencyKey);
+
+/// <summary>Reverses a whole consumption; the reason is required.</summary>
+public sealed record MembershipConsumptionReverseRequest(string Reason);
+
+/// <summary>
 /// Links the membership in the route, plus <c>AdditionalMembershipIds</c> paid with the same income, in one
 /// step (so a payment for several memberships is checked against their total, not one at a time).
 /// <c>DiscrepancyJustification</c> is required when the income amount differs from the sum of the prices of
@@ -55,7 +70,10 @@ public sealed record CustomerMembershipSummaryView(
 
 public sealed record MembershipAllowanceServiceView(Guid ServiceId, string ServiceName);
 
-/// <summary>A balance line. Consumption arrives in a later stage, so for now Available equals Granted.</summary>
+/// <summary>
+/// A balance line. <c>ConsumedQuantity</c> counts consumptions minus their reversals and
+/// <c>AvailableQuantity</c> = Granted − Consumed. On an annulled membership the available units stay blocked.
+/// </summary>
 public sealed record MembershipAllowanceView(
     Guid Id,
     string Origin,
@@ -100,6 +118,24 @@ public sealed record MembershipEventView(
     Guid? RelatedCustomerId,
     string? RelatedCustomerName);
 
+/// <summary>Units a consumption took from one balance line ("Gift" or "Purchased").</summary>
+public sealed record MembershipConsumptionPartView(Guid AllowanceId, string Origin, int Quantity);
+
+public sealed record MembershipConsumptionReversalView(string Reason, DateTime PerformedAt, string PerformedByName);
+
+public sealed record MembershipConsumptionView(
+    Guid Id,
+    Guid ServiceId,
+    string ServiceName,
+    int Quantity,
+    DateOnly ServiceDate,
+    Guid? StaffProfileId,
+    string? StaffName,
+    DateTime RegisteredAt,
+    string RegisteredByName,
+    IReadOnlyList<MembershipConsumptionPartView> Parts,
+    MembershipConsumptionReversalView? Reversal);
+
 public sealed record CustomerMembershipDetailView(
     Guid Id,
     Guid CustomerId,
@@ -127,6 +163,7 @@ public sealed record CustomerMembershipDetailView(
     IReadOnlyList<MembershipGiftView> Gifts,
     MembershipIncomeView? Income,
     IReadOnlyList<MembershipEventView> Events,
+    IReadOnlyList<MembershipConsumptionView> Consumptions,
     DateTime CreatedAt);
 
 /// <summary>A membership-sale income an admin can link, with the memberships it already covers.</summary>

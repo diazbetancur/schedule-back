@@ -2,6 +2,7 @@ using Barbershop.Domain.Customers;
 using Barbershop.Domain.Finance;
 using Barbershop.Domain.Memberships;
 using Barbershop.Domain.Services;
+using Barbershop.Domain.Staff;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -124,6 +125,77 @@ internal sealed class MembershipAllowanceServiceConfiguration : IEntityTypeConfi
     builder.Property(x => x.ServiceNameSnapshot).HasMaxLength(120).IsRequired();
 
     builder.HasOne<Service>().WithMany().HasForeignKey(x => x.ServiceId).OnDelete(DeleteBehavior.Restrict);
+  }
+}
+
+internal sealed class MembershipConsumptionConfiguration : IEntityTypeConfiguration<MembershipConsumption>
+{
+  public void Configure(EntityTypeBuilder<MembershipConsumption> builder)
+  {
+    builder.ToTable("membership_consumptions", tableBuilder =>
+    {
+      tableBuilder.HasCheckConstraint("ck_membership_consumptions_quantity_range", "\"Quantity\" >= 1 AND \"Quantity\" <= 1000");
+    });
+
+    builder.HasKey(x => x.Id);
+
+    builder.Property(x => x.Id).ValueGeneratedNever();
+    builder.Property(x => x.ServiceNameSnapshot).HasMaxLength(120).IsRequired();
+    builder.Property(x => x.ServiceDate).HasColumnType("date");
+    builder.Property(x => x.RegisteredAt).HasColumnType("timestamp with time zone").IsRequired();
+
+    // A retried request carries the same key, so it can never be stored twice.
+    builder.HasIndex(x => x.IdempotencyKey).IsUnique();
+    builder.HasIndex(x => new { x.CustomerMembershipId, x.ServiceDate });
+
+    builder.HasOne<CustomerMembership>().WithMany().HasForeignKey(x => x.CustomerMembershipId).OnDelete(DeleteBehavior.Restrict);
+    builder.HasOne<Service>().WithMany().HasForeignKey(x => x.ServiceId).OnDelete(DeleteBehavior.Restrict);
+    builder.HasOne<StaffProfile>().WithMany().HasForeignKey(x => x.StaffProfileId).OnDelete(DeleteBehavior.Restrict);
+  }
+}
+
+internal sealed class MembershipMovementConfiguration : IEntityTypeConfiguration<MembershipMovement>
+{
+  public void Configure(EntityTypeBuilder<MembershipMovement> builder)
+  {
+    builder.ToTable("membership_movements", tableBuilder =>
+    {
+      tableBuilder.HasCheckConstraint("ck_membership_movements_quantity_range", "\"Quantity\" >= 1 AND \"Quantity\" <= 1000");
+    });
+
+    builder.HasKey(x => x.Id);
+
+    builder.Property(x => x.Id).ValueGeneratedNever();
+    builder.Property(x => x.Type).HasConversion<string>().HasMaxLength(16).IsRequired();
+    builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
+
+    // A consumption takes from each line at most once, and its reversal gives each line back at most once.
+    builder.HasIndex(x => new { x.MembershipConsumptionId, x.MembershipAllowanceId, x.Type }).IsUnique();
+    builder.HasIndex(x => x.MembershipAllowanceId);
+    builder.HasIndex(x => x.CustomerMembershipId);
+
+    builder.HasOne<CustomerMembership>().WithMany().HasForeignKey(x => x.CustomerMembershipId).OnDelete(DeleteBehavior.Restrict);
+    builder.HasOne<MembershipAllowance>().WithMany().HasForeignKey(x => x.MembershipAllowanceId).OnDelete(DeleteBehavior.Restrict);
+    builder.HasOne<MembershipConsumption>().WithMany().HasForeignKey(x => x.MembershipConsumptionId).OnDelete(DeleteBehavior.Restrict);
+  }
+}
+
+internal sealed class MembershipConsumptionReversalConfiguration : IEntityTypeConfiguration<MembershipConsumptionReversal>
+{
+  public void Configure(EntityTypeBuilder<MembershipConsumptionReversal> builder)
+  {
+    builder.ToTable("membership_consumption_reversals");
+
+    builder.HasKey(x => x.Id);
+
+    builder.Property(x => x.Id).ValueGeneratedNever();
+    builder.Property(x => x.Reason).HasMaxLength(500).IsRequired();
+    builder.Property(x => x.PerformedAt).HasColumnType("timestamp with time zone").IsRequired();
+
+    // A consumption can be reversed only once.
+    builder.HasIndex(x => x.MembershipConsumptionId).IsUnique();
+
+    builder.HasOne<MembershipConsumption>().WithMany().HasForeignKey(x => x.MembershipConsumptionId).OnDelete(DeleteBehavior.Restrict);
   }
 }
 

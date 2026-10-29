@@ -82,6 +82,24 @@ public static class AdminMembershipsEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
+        memberships.MapPost("/{membershipId:guid}/consumptions", ConsumeAsync)
+            .WithName("ConsumeAdminMembershipService")
+            .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
+
+        memberships.MapPost("/{membershipId:guid}/consumptions/{consumptionId:guid}/reverse", ReverseConsumptionAsync)
+            .WithName("ReverseAdminMembershipConsumption")
+            .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
+
         return api;
     }
 
@@ -119,4 +137,17 @@ public static class AdminMembershipsEndpoints
     private static Task<CustomerMembershipDetailView> UnlinkIncomeAsync(
         Guid membershipId, MembershipIncomeUnlinkRequest request, ClaimsPrincipal user, IAdminMembershipsService service, CancellationToken cancellationToken)
         => service.UnlinkIncomeAsync(user.GetRequiredUserId(), membershipId, request, cancellationToken);
+
+    private static Task<CustomerMembershipDetailView> ConsumeAsync(
+        Guid membershipId, MembershipConsumptionRequest request, ClaimsPrincipal user, IAdminMembershipLedgerService service, CancellationToken cancellationToken)
+        => service.ConsumeAsync(user.GetRequiredUserId(), membershipId, request, cancellationToken);
+
+    private static Task<CustomerMembershipDetailView> ReverseConsumptionAsync(
+        Guid membershipId,
+        Guid consumptionId,
+        MembershipConsumptionReverseRequest request,
+        ClaimsPrincipal user,
+        IAdminMembershipLedgerService service,
+        CancellationToken cancellationToken)
+        => service.ReverseAsync(user.GetRequiredUserId(), membershipId, consumptionId, request, cancellationToken);
 }

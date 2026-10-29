@@ -46,13 +46,21 @@ internal sealed class ReportsQueryService : IAdminReportsService
             .Where(entry => !entry.IsDeleted && entry.OccurredOn >= rangeFrom && entry.OccurredOn <= rangeTo)
             .ToListAsync(cancellationToken);
 
+        // Membership sales are money in (total, business share, trend) but not services performed: they stay
+        // out of the service count, the promo/normal split and the per-professional table. Every historical
+        // entry is a service entry, so reports over past periods are unchanged.
+        var serviceIncomes = incomes.Where(entry => entry.Kind == IncomeKind.Service).ToList();
+        var membershipSales = incomes.Where(entry => entry.Kind == IncomeKind.MembershipSale).ToList();
+
         var totalIncome = incomes.Sum(entry => (long)entry.Amount);
-        var promoIncome = incomes.Where(entry => entry.IsPromo).Sum(entry => (long)entry.Amount);
+        var serviceIncome = serviceIncomes.Sum(entry => (long)entry.Amount);
+        var promoIncome = serviceIncomes.Where(entry => entry.IsPromo).Sum(entry => (long)entry.Amount);
+        var membershipSalesIncome = membershipSales.Sum(entry => (long)entry.Amount);
         var businessIncome = incomes.Sum(entry => (long)entry.BusinessAmount);
         var professionalIncome = incomes.Sum(entry => (long)entry.ProfessionalAmount);
         var totalExpenses = expenses.Sum(entry => (long)entry.Amount);
 
-        var staffIds = incomes.Select(entry => entry.StaffProfileId).Distinct().ToArray();
+        var staffIds = serviceIncomes.Select(entry => entry.StaffProfileId!.Value).Distinct().ToArray();
         var names = staffIds.Length == 0
             ? new Dictionary<Guid, string>()
             : await _dbContext.StaffProfiles
@@ -60,8 +68,8 @@ internal sealed class ReportsQueryService : IAdminReportsService
                 .Select(staff => new { staff.Id, staff.DisplayName })
                 .ToDictionaryAsync(staff => staff.Id, staff => staff.DisplayName, cancellationToken);
 
-        var byProfessional = incomes
-            .GroupBy(entry => entry.StaffProfileId)
+        var byProfessional = serviceIncomes
+            .GroupBy(entry => entry.StaffProfileId!.Value)
             .Select(group => new ReportProfessionalIncomeView(
                 group.Key,
                 names.TryGetValue(group.Key, out var name) ? name : string.Empty,
@@ -86,14 +94,16 @@ internal sealed class ReportsQueryService : IAdminReportsService
             totalIncome,
             totalExpenses,
             totalIncome - totalExpenses,
-            incomes.Count,
+            serviceIncomes.Count,
             promoIncome,
-            totalIncome - promoIncome,
+            serviceIncome - promoIncome,
             businessIncome,
             professionalIncome,
             byProfessional,
             byExpenseConcept,
-            trend);
+            trend,
+            membershipSalesIncome,
+            membershipSales.Count);
     }
 
     private static IReadOnlyList<ReportTrendPointView> BuildTrend(

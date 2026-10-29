@@ -7,6 +7,9 @@ public sealed record CustomerAppointmentCreateRequest(
     DateTime StartsAtUtc,
     string? Notes);
 
+/// <summary>The customer moves their own appointment to another slot with the same barber.</summary>
+public sealed record CustomerAppointmentRescheduleRequest(DateTime StartsAtUtc);
+
 public sealed record StaffManualAppointmentCreateRequest(
     DateTime StartsAtUtc,
     DateTime? EndsAtUtc,

@@ -119,6 +119,120 @@ namespace Barbershop.Infrastructure.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Customers.CustomerEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("PerformedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("PerformedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid?>("RelatedCustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<Guid?>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CustomerId", "PerformedAt");
+
+                    b.ToTable("customer_events", "public");
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Customers.CustomerProfile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<DateTime?>("LinkedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("LinkedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("MergedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("MergedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("MergedIntoCustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("NormalizedEmail")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("NormalizedPhone")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("Phone")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MergedIntoCustomerId");
+
+                    b.HasIndex("NormalizedEmail");
+
+                    b.HasIndex("NormalizedPhone");
+
+                    b.HasIndex("UserId")
+                        .IsUnique()
+                        .HasFilter("\"UserId\" IS NOT NULL AND \"MergedIntoCustomerId\" IS NULL");
+
+                    b.ToTable("customers", "public");
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Finance.ExpenseEntry", b =>
                 {
                     b.Property<Guid>("Id")
@@ -235,18 +349,24 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<bool>("IsPromo")
                         .HasColumnType("boolean");
 
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasDefaultValue("Service");
+
                     b.Property<DateOnly>("OccurredOn")
                         .HasColumnType("date");
 
-                    b.Property<Guid>("ServiceId")
+                    b.Property<Guid?>("ServiceId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("ServiceNameSnapshot")
-                        .IsRequired()
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
 
-                    b.Property<Guid>("StaffProfileId")
+                    b.Property<Guid?>("StaffProfileId")
                         .HasColumnType("uuid");
 
                     b.Property<DateTime?>("UpdatedAt")
@@ -267,6 +387,8 @@ namespace Barbershop.Infrastructure.Migrations
                             t.HasCheckConstraint("ck_income_entries_base_price_non_negative", "\"BasePriceSnapshot\" >= 0");
 
                             t.HasCheckConstraint("ck_income_entries_business_percentage_range", "\"BusinessPercentageSnapshot\" >= 0 AND \"BusinessPercentageSnapshot\" <= 100");
+
+                            t.HasCheckConstraint("ck_income_entries_kind_consistency", "(\"Kind\" = 'Service' AND \"ServiceId\" IS NOT NULL AND \"StaffProfileId\" IS NOT NULL AND \"ServiceNameSnapshot\" IS NOT NULL) OR (\"Kind\" = 'MembershipSale' AND \"ServiceId\" IS NULL AND \"StaffProfileId\" IS NULL AND \"ServiceNameSnapshot\" IS NULL AND \"BusinessPercentageSnapshot\" = 100 AND \"BasePriceSnapshot\" = 0 AND \"IsPromo\" = false)");
                         });
                 });
 
@@ -545,6 +667,617 @@ namespace Barbershop.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("pending_file_deletions", "public");
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.CustomerMembership", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ActivatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ActivatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("AnnulledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("AnnulledByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AnnulmentReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("EndsOn")
+                        .HasColumnType("date");
+
+                    b.Property<Guid?>("IncomeEntryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("MembershipPlanId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid>("OriginalCustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("PlanDescription")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("PlanName")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<int>("Price")
+                        .HasColumnType("integer");
+
+                    b.Property<DateOnly>("SoldOn")
+                        .HasColumnType("date");
+
+                    b.Property<string>("SpecificConditions")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<DateOnly>("StartsOn")
+                        .HasColumnType("date");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)");
+
+                    b.Property<string>("Terms")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IncomeEntryId");
+
+                    b.HasIndex("MembershipPlanId");
+
+                    b.HasIndex("OriginalCustomerId");
+
+                    b.HasIndex("CustomerId", "MembershipPlanId");
+
+                    b.ToTable("customer_memberships", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_customer_memberships_active_has_activation", "\"Status\" <> 'Active' OR \"ActivatedAt\" IS NOT NULL");
+
+                            t.HasCheckConstraint("ck_customer_memberships_annulled_has_audit", "\"Status\" <> 'Annulled' OR (\"AnnulledAt\" IS NOT NULL AND \"AnnulledByUserId\" IS NOT NULL AND \"AnnulmentReason\" IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_customer_memberships_date_range", "\"EndsOn\" >= \"StartsOn\"");
+
+                            t.HasCheckConstraint("ck_customer_memberships_price_non_negative", "\"Price\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipAllowance", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CustomerMembershipId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("GrantedQuantity")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("MembershipGiftId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Origin")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CustomerMembershipId");
+
+                    b.HasIndex("MembershipGiftId")
+                        .IsUnique()
+                        .HasFilter("\"MembershipGiftId\" IS NOT NULL");
+
+                    b.ToTable("membership_allowances", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_membership_allowances_granted_range", "\"GrantedQuantity\" >= 1 AND \"GrantedQuantity\" <= 1000");
+
+                            t.HasCheckConstraint("ck_membership_allowances_origin_shape", "(\"Origin\" = 'Purchased' AND \"MembershipGiftId\" IS NULL) OR (\"Origin\" = 'Gift' AND \"MembershipGiftId\" IS NOT NULL)");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipAllowanceService", b =>
+                {
+                    b.Property<Guid>("MembershipAllowanceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ServiceNameSnapshot")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.HasKey("MembershipAllowanceId", "ServiceId");
+
+                    b.HasIndex("ServiceId");
+
+                    b.ToTable("membership_allowance_services", "public");
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipConsumption", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CustomerMembershipId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("IdempotencyKey")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("RegisteredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("RegisteredByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("ServiceDate")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("ServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ServiceNameSnapshot")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<Guid?>("StaffProfileId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("ServiceId");
+
+                    b.HasIndex("StaffProfileId");
+
+                    b.HasIndex("CustomerMembershipId", "ServiceDate");
+
+                    b.ToTable("membership_consumptions", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_membership_consumptions_quantity_range", "\"Quantity\" >= 1 AND \"Quantity\" <= 1000");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipConsumptionReversal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("MembershipConsumptionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("PerformedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("PerformedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MembershipConsumptionId")
+                        .IsUnique();
+
+                    b.ToTable("membership_consumption_reversals", "public");
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CustomerMembershipId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("IncomeEntryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("PerformedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("PerformedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid?>("RelatedCustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IncomeEntryId");
+
+                    b.HasIndex("CustomerMembershipId", "PerformedAt");
+
+                    b.ToTable("membership_events", "public");
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipGift", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Condition")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CustomerMembershipId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DescriptionSnapshot")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid>("MembershipPlanGiftRuleId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("ServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ServiceNameSnapshot")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MembershipPlanGiftRuleId");
+
+                    b.HasIndex("ServiceId");
+
+                    b.HasIndex("CustomerMembershipId", "MembershipPlanGiftRuleId")
+                        .IsUnique();
+
+                    b.ToTable("membership_gifts", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_membership_gifts_kind_shape", "(\"Kind\" = 'Service' AND \"ServiceId\" IS NOT NULL AND \"ServiceNameSnapshot\" IS NOT NULL AND \"DescriptionSnapshot\" IS NULL) OR (\"Kind\" = 'Physical' AND \"ServiceId\" IS NULL AND \"ServiceNameSnapshot\" IS NULL AND \"DescriptionSnapshot\" IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_membership_gifts_quantity_range", "\"Quantity\" >= 1 AND \"Quantity\" <= 1000");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipGiftDelivery", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CustomerMembershipId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("DeliveredOn")
+                        .HasColumnType("date");
+
+                    b.Property<int>("DeliveryNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("IdempotencyKey")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("MembershipGiftId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("RegisteredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("RegisteredByUserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CustomerMembershipId");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("MembershipGiftId", "DeliveryNumber")
+                        .IsUnique();
+
+                    b.ToTable("membership_gift_deliveries", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_membership_gift_deliveries_number_positive", "\"DeliveryNumber\" >= 1");
+
+                            t.HasCheckConstraint("ck_membership_gift_deliveries_quantity_range", "\"Quantity\" >= 1 AND \"Quantity\" <= 1000");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipGiftDeliveryReversal", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("MembershipGiftDeliveryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("PerformedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("PerformedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MembershipGiftDeliveryId")
+                        .IsUnique();
+
+                    b.ToTable("membership_gift_delivery_reversals", "public");
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipMovement", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CustomerMembershipId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("MembershipAllowanceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("MembershipConsumptionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PerformedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CustomerMembershipId");
+
+                    b.HasIndex("MembershipAllowanceId");
+
+                    b.HasIndex("MembershipConsumptionId", "MembershipAllowanceId", "Type")
+                        .IsUnique();
+
+                    b.ToTable("membership_movements", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_membership_movements_quantity_range", "\"Quantity\" >= 1 AND \"Quantity\" <= 1000");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipPlan", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("DefaultDurationDays")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("IsDeleted")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("Mode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<int?>("PoolQuantity")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Price")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("SpecificConditions")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<string>("Terms")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique()
+                        .HasFilter("\"IsDeleted\" = false");
+
+                    b.ToTable("membership_plans", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_membership_plans_duration_range", "\"DefaultDurationDays\" >= 1 AND \"DefaultDurationDays\" <= 3650");
+
+                            t.HasCheckConstraint("ck_membership_plans_pool_quantity_by_mode", "(\"Mode\" = 'Pool' AND \"PoolQuantity\" IS NOT NULL AND \"PoolQuantity\" BETWEEN 1 AND 1000) OR (\"Mode\" = 'PerService' AND \"PoolQuantity\" IS NULL)");
+
+                            t.HasCheckConstraint("ck_membership_plans_price_non_negative", "\"Price\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipPlanGiftRule", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Condition")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<bool>("IsDeleted")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid>("MembershipPlanId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Position")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("ServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MembershipPlanId");
+
+                    b.HasIndex("ServiceId");
+
+                    b.ToTable("membership_plan_gift_rules", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_membership_plan_gift_rules_kind_shape", "(\"Kind\" = 'Service' AND \"ServiceId\" IS NOT NULL AND \"Description\" IS NULL) OR (\"Kind\" = 'Physical' AND \"ServiceId\" IS NULL AND \"Description\" IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_membership_plan_gift_rules_quantity_range", "\"Quantity\" >= 1 AND \"Quantity\" <= 1000");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipPlanIncludedService", b =>
+                {
+                    b.Property<Guid>("MembershipPlanId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int?>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.HasKey("MembershipPlanId", "ServiceId");
+
+                    b.HasIndex("ServiceId");
+
+                    b.ToTable("membership_plan_services", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_membership_plan_services_quantity_range", "\"Quantity\" IS NULL OR (\"Quantity\" >= 1 AND \"Quantity\" <= 1000)");
+                        });
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Scheduling.StaffAvailabilityRule", b =>
@@ -1230,6 +1963,28 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Navigation("CustomerUser");
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Customers.CustomerEvent", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Customers.CustomerProfile", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Customers.CustomerProfile", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Customers.CustomerProfile", null)
+                        .WithMany()
+                        .HasForeignKey("MergedIntoCustomerId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Finance.ExpenseEntry", b =>
                 {
                     b.HasOne("Barbershop.Domain.Finance.FixedExpense", null)
@@ -1243,14 +1998,12 @@ namespace Barbershop.Infrastructure.Migrations
                     b.HasOne("Barbershop.Domain.Services.Service", null)
                         .WithMany()
                         .HasForeignKey("ServiceId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("Barbershop.Domain.Staff.StaffProfile", null)
                         .WithMany()
                         .HasForeignKey("StaffProfileId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Landing.AppBrandingSettings", b =>
@@ -1279,6 +2032,193 @@ namespace Barbershop.Infrastructure.Migrations
                     b.HasOne("Barbershop.Domain.Users.User", null)
                         .WithMany()
                         .HasForeignKey("UploadedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.CustomerMembership", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Customers.CustomerProfile", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Finance.IncomeEntry", null)
+                        .WithMany()
+                        .HasForeignKey("IncomeEntryId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Memberships.MembershipPlan", null)
+                        .WithMany()
+                        .HasForeignKey("MembershipPlanId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Customers.CustomerProfile", null)
+                        .WithMany()
+                        .HasForeignKey("OriginalCustomerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipAllowance", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Memberships.CustomerMembership", null)
+                        .WithMany("Allowances")
+                        .HasForeignKey("CustomerMembershipId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Memberships.MembershipGift", null)
+                        .WithMany()
+                        .HasForeignKey("MembershipGiftId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipAllowanceService", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Memberships.MembershipAllowance", null)
+                        .WithMany("Services")
+                        .HasForeignKey("MembershipAllowanceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Services.Service", null)
+                        .WithMany()
+                        .HasForeignKey("ServiceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipConsumption", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Memberships.CustomerMembership", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerMembershipId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Services.Service", null)
+                        .WithMany()
+                        .HasForeignKey("ServiceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Staff.StaffProfile", null)
+                        .WithMany()
+                        .HasForeignKey("StaffProfileId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipConsumptionReversal", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Memberships.MembershipConsumption", null)
+                        .WithMany()
+                        .HasForeignKey("MembershipConsumptionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipEvent", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Memberships.CustomerMembership", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerMembershipId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipGift", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Memberships.CustomerMembership", null)
+                        .WithMany("Gifts")
+                        .HasForeignKey("CustomerMembershipId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Memberships.MembershipPlanGiftRule", null)
+                        .WithMany()
+                        .HasForeignKey("MembershipPlanGiftRuleId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Services.Service", null)
+                        .WithMany()
+                        .HasForeignKey("ServiceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipGiftDelivery", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Memberships.CustomerMembership", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerMembershipId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Memberships.MembershipGift", null)
+                        .WithMany()
+                        .HasForeignKey("MembershipGiftId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipGiftDeliveryReversal", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Memberships.MembershipGiftDelivery", null)
+                        .WithMany()
+                        .HasForeignKey("MembershipGiftDeliveryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipMovement", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Memberships.CustomerMembership", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerMembershipId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Memberships.MembershipAllowance", null)
+                        .WithMany()
+                        .HasForeignKey("MembershipAllowanceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Memberships.MembershipConsumption", null)
+                        .WithMany()
+                        .HasForeignKey("MembershipConsumptionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipPlanGiftRule", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Memberships.MembershipPlan", null)
+                        .WithMany("GiftRules")
+                        .HasForeignKey("MembershipPlanId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Services.Service", null)
+                        .WithMany()
+                        .HasForeignKey("ServiceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipPlanIncludedService", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Memberships.MembershipPlan", null)
+                        .WithMany("Services")
+                        .HasForeignKey("MembershipPlanId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Services.Service", null)
+                        .WithMany()
+                        .HasForeignKey("ServiceId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
@@ -1447,6 +2387,25 @@ namespace Barbershop.Infrastructure.Migrations
             modelBuilder.Entity("Barbershop.Domain.Appointments.Appointment", b =>
                 {
                     b.Navigation("Review");
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.CustomerMembership", b =>
+                {
+                    b.Navigation("Allowances");
+
+                    b.Navigation("Gifts");
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipAllowance", b =>
+                {
+                    b.Navigation("Services");
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Memberships.MembershipPlan", b =>
+                {
+                    b.Navigation("GiftRules");
+
+                    b.Navigation("Services");
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Staff.StaffProfile", b =>

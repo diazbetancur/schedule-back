@@ -45,6 +45,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<TickerItem> TickerItems => Set<TickerItem>();
     public DbSet<CustomerProfile> Customers => Set<CustomerProfile>();
     public DbSet<CustomerEvent> CustomerEvents => Set<CustomerEvent>();
+    public DbSet<CustomerClaim> CustomerClaims => Set<CustomerClaim>();
     public DbSet<MembershipPlan> MembershipPlans => Set<MembershipPlan>();
     public DbSet<MembershipPlanIncludedService> MembershipPlanServices => Set<MembershipPlanIncludedService>();
     public DbSet<MembershipPlanGiftRule> MembershipPlanGiftRules => Set<MembershipPlanGiftRule>();

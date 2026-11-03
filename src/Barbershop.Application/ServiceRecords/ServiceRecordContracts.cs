@@ -37,6 +37,11 @@ public sealed record ServiceRecordApprovalView(
     DateTime ApprovedAt,
     string? ApprovedByName);
 
+/// <summary>
+/// <c>SuggestedCustomerId</c>: for a pending record without customer registered from an appointment booked by an app
+/// account, the profile now linked to that account (it may have been created or claimed after the registration). A
+/// suggestion through real relations (appointment → account → linked profile); the reviewer still decides.
+/// </summary>
 public sealed record ServiceRecordView(
     Guid Id,
     string Status,
@@ -56,7 +61,9 @@ public sealed record ServiceRecordView(
     string? RejectionReason,
     DateTime? RejectedAt,
     string? RejectedByName,
-    uint Version);
+    uint Version,
+    Guid? SuggestedCustomerId = null,
+    string? SuggestedCustomerName = null);
 
 /// <summary>
 /// Confirms a pending record. Service, professional, customer and date may be corrected; the registered values are

@@ -21,6 +21,10 @@ internal sealed class CustomerManagementService : IAdminCustomersService
 
     private const string ConcurrencyConflictMessage = "El cliente fue modificado por otra operación. Recarga e intenta de nuevo.";
     private const string AccountAlreadyLinkedMessage = "Esta cuenta ya está vinculada a otro cliente.";
+    private const string AccountHasPendingClaimMessage =
+        "La cuenta tiene una solicitud de vinculación pendiente. Resuélvela en la bandeja de reclamaciones.";
+    internal const string OwnProfilePendingClaimMessage =
+        "Tienes una solicitud para vincular tu perfil histórico pendiente; espera su respuesta.";
 
     private readonly AppDbContext _dbContext;
     private readonly TimeProvider _timeProvider;
@@ -213,46 +217,155 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         CancellationToken cancellationToken = default)
     {
         EnsureIdentityVerified(request.IdentityVerified);
-        var user = await LoadLinkableUserAsync(request.UserId, cancellationToken);
+        var customer = await InAccountTransactionAsync(async () =>
+        {
+            var user = await LoadLinkableUserAsync(request.UserId, cancellationToken);
 
-        // Name and email come from the account as they are today; the phone can be typed when the account has none.
-        var phone = string.IsNullOrWhiteSpace(request.Phone) ? user.PhoneNumber : request.Phone;
-        ValidateDetails(user.FullName, phone, user.Email);
+            // Name and email come from the account as they are today; the phone can be typed when the account has none.
+            var phone = string.IsNullOrWhiteSpace(request.Phone) ? user.PhoneNumber : request.Phone;
+            ValidateDetails(user.FullName, phone, user.Email);
 
-        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var customer = new CustomerProfile(user.FullName, phone!, user.Email, currentUserId, utcNow);
-        customer.LinkAccount(user.Id, currentUserId, utcNow);
+            var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+            var created = new CustomerProfile(user.FullName, phone!, user.Email, currentUserId, utcNow);
+            created.LinkAccount(user.Id, currentUserId, utcNow);
 
-        _dbContext.Customers.Add(customer);
-        _dbContext.CustomerEvents.Add(new CustomerEvent(customer.Id, CustomerEventType.Created, currentUserId, utcNow));
-        _dbContext.CustomerEvents.Add(new CustomerEvent(customer.Id, CustomerEventType.AccountLinked, currentUserId, utcNow, userId: user.Id));
+            _dbContext.Customers.Add(created);
+            _dbContext.CustomerEvents.Add(new CustomerEvent(created.Id, CustomerEventType.Created, currentUserId, utcNow));
+            _dbContext.CustomerEvents.Add(new CustomerEvent(created.Id, CustomerEventType.AccountLinked, currentUserId, utcNow, userId: user.Id));
 
-        // A single SaveChanges is one database transaction: the profile never exists without its link.
-        await SaveChangesAsync(cancellationToken);
+            // The profile never exists without its link.
+            await SaveChangesAsync(cancellationToken);
+            return created;
+        }, cancellationToken);
 
         return await MapDetailAsync(customer, cancellationToken);
     }
 
-    public async Task<CustomerDetailView> LinkAccountAsync(
+    /// <summary>
+    /// "I am a new customer": a profile linked to the caller's own account, created by the caller. Same validations and
+    /// account rules as <see cref="CreateFromAccountAsync"/>, but the identity is the signed-in account itself, so no
+    /// in-person check is needed. Returns the existing profile when the account already has one (retries, double
+    /// clicks), and refuses while the account has a pending claim. Runs under the account lock, so a concurrent claim
+    /// or link of the same account is decided before or after it, never in between.
+    /// </summary>
+    internal async Task<CustomerProfile> CreateOwnLinkedAsync(
+        Guid userId, string fullName, string phone, string email, CancellationToken cancellationToken)
+    {
+        if (await FindLiveLinkedAsync(userId, cancellationToken) is { } existing)
+        {
+            return existing;
+        }
+
+        ValidateDetails(fullName, phone, email);
+        try
+        {
+            return await InAccountTransactionAsync(async () =>
+            {
+                await LockAccountAsync(userId, cancellationToken);
+                if (await FindLiveLinkedAsync(userId, cancellationToken) is { } concurrent)
+                {
+                    // A concurrent retry linked a profile while this one waited for the lock: return it.
+                    return concurrent;
+                }
+
+                // A pending claim means "I already have a profile": creating another one would make a duplicate.
+                if (await HasPendingClaimAsync(userId, null, cancellationToken))
+                {
+                    throw new ConflictException(OwnProfilePendingClaimMessage);
+                }
+
+                var user = await LoadLinkableUserAsync(userId, cancellationToken);
+                var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+                var customer = new CustomerProfile(fullName, phone, email, user.Id, utcNow);
+                customer.LinkAccount(user.Id, user.Id, utcNow);
+                _dbContext.Customers.Add(customer);
+                _dbContext.CustomerEvents.Add(new CustomerEvent(customer.Id, CustomerEventType.Created, user.Id, utcNow));
+                _dbContext.CustomerEvents.Add(new CustomerEvent(customer.Id, CustomerEventType.AccountLinked, user.Id, utcNow, userId: user.Id));
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                return customer;
+            }, cancellationToken);
+        }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            // A path that does not take the account lock (a merge moving the account) linked it first: return that one.
+            _dbContext.ChangeTracker.Clear();
+            return await FindLiveLinkedAsync(userId, cancellationToken) ?? throw new ConflictException(AccountAlreadyLinkedMessage);
+        }
+    }
+
+    /// <summary>
+    /// The per-account lock (the account's row, FOR UPDATE) taken by everything that gives an account a live profile
+    /// or a pending claim: own profile, claim submission, admin create/link and claim approval. Held until the
+    /// surrounding transaction ends; a no-op outside PostgreSQL.
+    /// </summary>
+    internal async Task LockAccountAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        if (_dbContext.Database.IsNpgsql())
+        {
+            await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT 1 FROM public.users WHERE \"Id\" = {userId} FOR UPDATE", cancellationToken);
+        }
+    }
+
+    internal Task<bool> HasPendingClaimAsync(Guid userId, Guid? exceptClaimId, CancellationToken cancellationToken)
+        => _dbContext.CustomerClaims.AnyAsync(
+            claim => claim.UserId == userId && claim.Status == CustomerClaimStatus.Pending && claim.Id != exceptClaimId,
+            cancellationToken);
+
+    /// <summary>Runs <paramref name="work"/> in a transaction, or in the caller's when one is already open.</summary>
+    private async Task<T> InAccountTransactionAsync<T>(Func<Task<T>> work, CancellationToken cancellationToken)
+    {
+        if (_dbContext.Database.CurrentTransaction is not null)
+        {
+            return await work();
+        }
+
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var result = await work();
+        await transaction.CommitAsync(cancellationToken);
+        return result;
+    }
+
+    internal Task<CustomerProfile?> FindLiveLinkedAsync(Guid userId, CancellationToken cancellationToken)
+        => _dbContext.Customers.AsNoTracking()
+            .SingleOrDefaultAsync(customer => customer.UserId == userId && customer.MergedIntoCustomerId == null, cancellationToken);
+
+    public Task<CustomerDetailView> LinkAccountAsync(
         Guid currentUserId,
         Guid customerId,
         CustomerLinkAccountRequest request,
         CancellationToken cancellationToken = default)
+        => LinkAccountAsync(currentUserId, customerId, request, approvingClaimId: null, cancellationToken);
+
+    /// <summary>
+    /// Links the account; <paramref name="approvingClaimId"/> is the pending claim being approved, the only one the
+    /// account may have while it is linked.
+    /// </summary>
+    internal async Task<CustomerDetailView> LinkAccountAsync(
+        Guid currentUserId,
+        Guid customerId,
+        CustomerLinkAccountRequest request,
+        Guid? approvingClaimId,
+        CancellationToken cancellationToken)
     {
         EnsureIdentityVerified(request.IdentityVerified);
 
-        var customer = await LoadLiveAsync(customerId, cancellationToken);
-        if (customer.UserId is not null)
+        var customer = await InAccountTransactionAsync(async () =>
         {
-            throw new ConflictException("El cliente ya tiene una cuenta vinculada. Desvincúlala antes de vincular otra.");
-        }
+            var linked = await LoadLiveAsync(customerId, cancellationToken);
+            if (linked.UserId is not null)
+            {
+                throw new ConflictException("El cliente ya tiene una cuenta vinculada. Desvincúlala antes de vincular otra.");
+            }
 
-        var user = await LoadLinkableUserAsync(request.UserId, cancellationToken);
+            var user = await LoadLinkableUserAsync(request.UserId, cancellationToken, approvingClaimId);
 
-        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        customer.LinkAccount(user.Id, currentUserId, utcNow);
-        _dbContext.CustomerEvents.Add(new CustomerEvent(customer.Id, CustomerEventType.AccountLinked, currentUserId, utcNow, userId: user.Id));
-        await SaveChangesAsync(cancellationToken);
+            var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+            linked.LinkAccount(user.Id, currentUserId, utcNow);
+            _dbContext.CustomerEvents.Add(new CustomerEvent(linked.Id, CustomerEventType.AccountLinked, currentUserId, utcNow, userId: user.Id));
+            await SaveChangesAsync(cancellationToken);
+            return linked;
+        }, cancellationToken);
 
         return await MapDetailAsync(customer, cancellationToken);
     }
@@ -436,9 +549,14 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         }
     }
 
-    /// <summary>An account can back a profile only if it is active, has the Customer role and no live profile uses it.</summary>
-    private async Task<User> LoadLinkableUserAsync(Guid userId, CancellationToken cancellationToken)
+    /// <summary>
+    /// An account can back a profile only if it is active, has the Customer role, no live profile uses it and no
+    /// claim of it waits for review (other than the one being approved). Takes the account lock first, so the answer
+    /// holds until the caller's transaction ends.
+    /// </summary>
+    private async Task<User> LoadLinkableUserAsync(Guid userId, CancellationToken cancellationToken, Guid? approvingClaimId = null)
     {
+        await LockAccountAsync(userId, cancellationToken);
         var user = await _dbContext.Users
             .Include(candidate => candidate.UserRoles)
             .ThenInclude(assignment => assignment.Role)
@@ -464,6 +582,11 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         if (alreadyLinked)
         {
             throw new ConflictException(AccountAlreadyLinkedMessage);
+        }
+
+        if (await HasPendingClaimAsync(user.Id, approvingClaimId, cancellationToken))
+        {
+            throw new ConflictException(AccountHasPendingClaimMessage);
         }
 
         return user;
@@ -617,7 +740,8 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         return matches;
     }
 
-    private static void ValidateDetails(string? fullName, string? phone, string? email)
+    /// <summary>Same contact rules everywhere a profile's data is entered (also claims).</summary>
+    internal static void ValidateDetails(string? fullName, string? phone, string? email)
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 

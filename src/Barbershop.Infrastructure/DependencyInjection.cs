@@ -1,5 +1,6 @@
 using Barbershop.Application.Customer;
 using Barbershop.Application.Customers.Admin;
+using Barbershop.Application.Customers.Claims;
 using Barbershop.Application.Email;
 using Barbershop.Application.Finance.Admin;
 using Barbershop.Application.Landing;
@@ -141,7 +142,11 @@ public static class DependencyInjection
         services.AddScoped<ICustomerProfileService, CustomerProfileService>();
         services.AddScoped<IAdminUsersService, AdminUsersService>();
         services.AddScoped<IAdminServicesService, ServiceManagementService>();
-        services.AddScoped<IAdminCustomersService, CustomerManagementService>();
+        services.AddScoped<CustomerManagementService>();
+        services.AddScoped<IAdminCustomersService>(serviceProvider => serviceProvider.GetRequiredService<CustomerManagementService>());
+        services.AddScoped<CustomerClaimsService>();
+        services.AddScoped<IOwnCustomerProfileService>(serviceProvider => serviceProvider.GetRequiredService<CustomerClaimsService>());
+        services.AddScoped<IAdminCustomerClaimsService>(serviceProvider => serviceProvider.GetRequiredService<CustomerClaimsService>());
         services.AddScoped<IAdminMembershipPlansService, MembershipPlanManagementService>();
         services.AddScoped<IAdminLoyaltySettingsService, LoyaltySettingsService>();
         services.AddScoped<IAdminMembershipsService, MembershipSalesService>();

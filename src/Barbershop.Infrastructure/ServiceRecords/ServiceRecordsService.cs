@@ -861,12 +861,35 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             .ToDictionaryAsync(user => user.Id, user => user.FullName, cancellationToken);
 
         var appointmentIds = records.Where(record => record.AppointmentId is not null).Select(record => record.AppointmentId!.Value).Distinct().ToArray();
-        var appointmentStarts = await _dbContext.Appointments.AsNoTracking()
+        var appointments = await _dbContext.Appointments.AsNoTracking()
             .Where(appointment => appointmentIds.Contains(appointment.Id))
-            .ToDictionaryAsync(appointment => appointment.Id, appointment => appointment.StartsAt, cancellationToken);
+            .Select(appointment => new { appointment.Id, appointment.StartsAt, appointment.CustomerUserId })
+            .ToDictionaryAsync(appointment => appointment.Id, cancellationToken);
+        var appointmentStarts = appointments.ToDictionary(item => item.Key, item => item.Value.StartsAt);
+
+        // Profiles now linked to the accounts that booked appointments of pending records without customer.
+        var bookingUserIds = records
+            .Where(record => record.Status == ServiceRecordStatus.Pending && record.CustomerId is null && record.AppointmentId is not null)
+            .Select(record => appointments.GetValueOrDefault(record.AppointmentId!.Value)?.CustomerUserId)
+            .Where(userId => userId is not null)
+            .Distinct()
+            .ToArray();
+        var linkedProfiles = bookingUserIds.Length == 0
+            ? []
+            : await _dbContext.Customers.AsNoTracking()
+                .Where(customer => bookingUserIds.Contains(customer.UserId) && customer.MergedIntoCustomerId == null)
+                .ToDictionaryAsync(customer => customer.UserId!.Value, customer => new { customer.Id, customer.FullName }, cancellationToken);
 
         return records.Select(record =>
         {
+            var suggestion = record.Status == ServiceRecordStatus.Pending
+                && record.CustomerId is null
+                && record.AppointmentId is { } bookedId
+                && appointments.GetValueOrDefault(bookedId)?.CustomerUserId is { } bookingUserId
+                && linkedProfiles.TryGetValue(bookingUserId, out var linked)
+                    ? linked
+                    : null;
+
             ServiceRecordApprovalView? approval = null;
             if (record.Status == ServiceRecordStatus.Approved)
             {
@@ -909,7 +932,9 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                 record.RejectionReason,
                 record.RejectedAt,
                 record.RejectedByUserId is { } rejectedBy ? userNames.GetValueOrDefault(rejectedBy) : null,
-                record.Version);
+                record.Version,
+                suggestion?.Id,
+                suggestion?.FullName);
         }).ToArray();
     }
 }

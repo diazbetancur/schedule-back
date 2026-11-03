@@ -119,6 +119,97 @@ namespace Barbershop.Infrastructure.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Customers.CustomerClaim", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ApprovedCustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("DecidedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DecidedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DecisionNotes")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<Guid>("IdempotencyKey")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("NormalizedEmail")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)");
+
+                    b.Property<string>("NormalizedPhone")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Phone")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTime>("SubmittedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ApprovedCustomerId");
+
+                    b.HasIndex("DecidedByUserId");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("UserId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_customer_claims_UserId_pending")
+                        .HasFilter("\"Status\" = 'Pending'");
+
+                    b.HasIndex("Status", "SubmittedAt");
+
+                    b.HasIndex("UserId", "SubmittedAt");
+
+                    b.ToTable("customer_claims", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_customer_claims_status_shape", "(\"Status\" = 'Pending' AND \"ApprovedCustomerId\" IS NULL AND \"DecidedAt\" IS NULL AND \"DecidedByUserId\" IS NULL) OR (\"Status\" = 'Approved' AND \"ApprovedCustomerId\" IS NOT NULL AND \"DecidedAt\" IS NOT NULL AND \"DecidedByUserId\" IS NOT NULL) OR (\"Status\" = 'Rejected' AND \"ApprovedCustomerId\" IS NULL AND \"DecidedAt\" IS NOT NULL AND \"DecidedByUserId\" IS NOT NULL AND \"DecisionNotes\" IS NOT NULL)");
+                        });
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Customers.CustomerEvent", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2245,6 +2336,25 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Navigation("Appointment");
 
                     b.Navigation("CustomerUser");
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Customers.CustomerClaim", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Customers.CustomerProfile", null)
+                        .WithMany()
+                        .HasForeignKey("ApprovedCustomerId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("DecidedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Customers.CustomerEvent", b =>

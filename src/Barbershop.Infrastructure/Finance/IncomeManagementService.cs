@@ -79,6 +79,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
     public async Task<IncomeEntryView> UpdateAsync(Guid incomeEntryId, IncomeEntryUpdateRequest request, CancellationToken cancellationToken = default)
     {
         var entry = await LoadAsync(incomeEntryId, cancellationToken);
+        await EnsureNotFromServiceRecordAsync(incomeEntryId, cancellationToken);
 
         // Omitting the kind keeps the entry's kind, so older clients can still edit service income.
         var requestedKind = ParseKind(request.Kind) ?? entry.Kind;
@@ -127,6 +128,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
     public async Task SoftDeleteAsync(Guid incomeEntryId, CancellationToken cancellationToken = default)
     {
         var entry = await LoadAsync(incomeEntryId, cancellationToken);
+        await EnsureNotFromServiceRecordAsync(incomeEntryId, cancellationToken);
 
         // Memberships point to the income that paid for them; deleting it would leave them pointing at nothing.
         if (await _dbContext.CustomerMemberships.AnyAsync(membership => membership.IncomeEntryId == incomeEntryId, cancellationToken))
@@ -252,6 +254,19 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         }
     }
 
+    /// <summary>
+    /// An income created by confirming a service record belongs to that record: editing or deleting it here would
+    /// silently change a confirmed operation. How a confirmed record is corrected is still to be decided.
+    /// </summary>
+    private async Task EnsureNotFromServiceRecordAsync(Guid incomeEntryId, CancellationToken cancellationToken)
+    {
+        if (await _dbContext.ServiceRecords.AnyAsync(record => record.IncomeEntryId == incomeEntryId, cancellationToken))
+        {
+            throw new ConflictException(
+                "Este ingreso proviene de un servicio realizado confirmado; no se puede editar ni eliminar desde Ingresos.");
+        }
+    }
+
     private async Task<IncomeEntry> LoadAsync(Guid incomeEntryId, CancellationToken cancellationToken)
     {
         return await _dbContext.IncomeEntries
@@ -270,7 +285,11 @@ internal sealed class IncomeManagementService : IAdminIncomeService
                 .SingleOrDefaultAsync(cancellationToken) ?? string.Empty;
         }
 
-        return Map(entry, displayName);
+        var serviceRecordId = await _dbContext.ServiceRecords
+            .Where(record => record.IncomeEntryId == entry.Id)
+            .Select(record => (Guid?)record.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        return Map(entry, displayName, serviceRecordId);
     }
 
     private async Task<IReadOnlyList<IncomeEntryView>> MapManyAsync(IReadOnlyCollection<IncomeEntry> entries, CancellationToken cancellationToken)
@@ -292,15 +311,22 @@ internal sealed class IncomeManagementService : IAdminIncomeService
                 .Select(staff => new { staff.Id, staff.DisplayName })
                 .ToDictionaryAsync(staff => staff.Id, staff => staff.DisplayName, cancellationToken);
 
+        var entryIds = entries.Select(entry => (Guid?)entry.Id).ToArray();
+        var serviceRecordIds = await _dbContext.ServiceRecords
+            .Where(record => entryIds.Contains(record.IncomeEntryId))
+            .Select(record => new { IncomeEntryId = record.IncomeEntryId!.Value, record.Id })
+            .ToDictionaryAsync(record => record.IncomeEntryId, record => record.Id, cancellationToken);
+
         return entries
             .Select(entry => Map(
                 entry,
-                entry.StaffProfileId is { } staffId ? displayNames.GetValueOrDefault(staffId, string.Empty) : null))
+                entry.StaffProfileId is { } staffId ? displayNames.GetValueOrDefault(staffId, string.Empty) : null,
+                serviceRecordIds.TryGetValue(entry.Id, out var serviceRecordId) ? serviceRecordId : null))
             .ToArray();
     }
 
     /// <summary>A membership sale has no professional, so its display name is null rather than empty.</summary>
-    private static IncomeEntryView Map(IncomeEntry entry, string? staffDisplayName)
+    private static IncomeEntryView Map(IncomeEntry entry, string? staffDisplayName, Guid? serviceRecordId)
         => new(
             entry.Id,
             entry.ServiceId,
@@ -316,5 +342,6 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             entry.OccurredOn,
             entry.CreatedAt,
             entry.UpdatedAt,
-            entry.Kind.ToString());
+            entry.Kind.ToString(),
+            serviceRecordId);
 }

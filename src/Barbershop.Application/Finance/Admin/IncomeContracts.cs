@@ -1,7 +1,8 @@
 namespace Barbershop.Application.Finance.Admin;
 
 // Kind is "Service" or "MembershipSale". Service income has a service and a professional; a membership
-// sale has neither, is 100% business and never produces a professional share.
+// sale has neither, is 100% business and never produces a professional share. ServiceRecordId is set when the
+// income was created by confirming a service record: it is then managed from there and cannot be edited here.
 
 public sealed record IncomeEntryView(
     Guid Id,
@@ -18,7 +19,8 @@ public sealed record IncomeEntryView(
     DateOnly OccurredOn,
     DateTime CreatedAt,
     DateTime? UpdatedAt,
-    string Kind);
+    string Kind,
+    Guid? ServiceRecordId = null);
 
 /// <summary>
 /// <c>Kind</c> is optional: clients that predate membership sales omit it and get a service income.

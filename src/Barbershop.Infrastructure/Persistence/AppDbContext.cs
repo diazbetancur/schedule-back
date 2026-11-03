@@ -6,6 +6,7 @@ using Barbershop.Domain.Loyalty;
 using Barbershop.Domain.Media;
 using Barbershop.Domain.Memberships;
 using Barbershop.Domain.Scheduling;
+using Barbershop.Domain.ServiceRecords;
 using Barbershop.Domain.Services;
 using Barbershop.Domain.Staff;
 using Barbershop.Domain.Users;
@@ -60,6 +61,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<LoyaltySettings> LoyaltySettings => Set<LoyaltySettings>();
     public DbSet<LoyaltySettingsChange> LoyaltySettingsChanges => Set<LoyaltySettingsChange>();
     public DbSet<LoyaltyPointsChange> LoyaltyPointsChanges => Set<LoyaltyPointsChange>();
+    public DbSet<ServiceRecord> ServiceRecords => Set<ServiceRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

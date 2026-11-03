@@ -8,6 +8,7 @@ using Api.Barbershop.Features.Admin.Media;
 using Api.Barbershop.Features.Admin.Memberships;
 using Api.Barbershop.Features.Admin.Notifications;
 using Api.Barbershop.Features.Admin.Roles;
+using Api.Barbershop.Features.Admin.ServiceRecords;
 using Api.Barbershop.Features.Admin.Services;
 using Api.Barbershop.Features.Admin.Staff;
 using Api.Barbershop.Features.Admin.Users;
@@ -24,6 +25,7 @@ using Api.Barbershop.Features.Public.Staff;
 using Api.Barbershop.Features.Staff.Appointments;
 using Api.Barbershop.Features.Staff.Availability;
 using Api.Barbershop.Features.Staff.Profile;
+using Api.Barbershop.Features.Staff.ServiceRecords;
 using Api.Barbershop.Middleware;
 using Barbershop.Application;
 using Barbershop.Infrastructure;
@@ -96,6 +98,7 @@ api.MapAdminCustomersEndpoints();
 api.MapAdminMembershipPlansEndpoints();
 api.MapAdminMembershipsEndpoints();
 api.MapAdminLoyaltyEndpoints();
+api.MapAdminServiceRecordsEndpoints();
 api.MapAdminIncomeEndpoints();
 api.MapAdminFixedExpensesEndpoints();
 api.MapAdminExpensesEndpoints();
@@ -115,6 +118,7 @@ api.MapPublicStaffReviewsEndpoints();
 api.MapStaffAppointmentsEndpoints();
 api.MapStaffAvailabilityEndpoints();
 api.MapStaffProfileEndpoints();
+api.MapStaffServiceRecordsEndpoints();
 
 app.MapGet("/", (HttpContext httpContext) => Results.Ok(new
 {

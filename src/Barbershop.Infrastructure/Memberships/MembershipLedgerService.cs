@@ -57,9 +57,7 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
                     return await ReplayAsync(concurrent, membershipId, request, cancellationToken);
                 }
 
-                var staffExists = request.StaffProfileId is not { } staffId
-                    || await _dbContext.StaffProfiles.AnyAsync(staff => staff.Id == staffId, cancellationToken);
-                Register(currentUserId, membership, request, await LoadAvailableAsync(membership, cancellationToken), staffExists);
+                await RegisterAsync(currentUserId, membership, request, cancellationToken);
                 await _dbContext.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
             }
@@ -74,6 +72,23 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
         }
 
         return await _memberships.GetByIdAsync(membershipId, cancellationToken);
+    }
+
+    /// <summary>
+    /// Registers one consumption inside a transaction the caller already opened (a confirmed service record), with the
+    /// same lock, validations and balances as <see cref="ConsumeAsync"/>. Nothing is saved: the caller saves and commits.
+    /// The caller guarantees the idempotency key is new (the service record it belongs to is locked and pending).
+    /// </summary>
+    internal async Task<MembershipConsumption> RegisterInCurrentTransactionAsync(
+        Guid currentUserId,
+        Guid membershipId,
+        MembershipConsumptionRequest request,
+        CancellationToken cancellationToken)
+    {
+        ValidateShape(request);
+        await LockMembershipAsync(membershipId, cancellationToken);
+        var membership = await LoadAsync(membershipId, cancellationToken);
+        return await RegisterAsync(currentUserId, membership, request, cancellationToken);
     }
 
     public async Task<CustomerMembershipDetailView> ReverseAsync(
@@ -107,6 +122,14 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
                     reversal => reversal.MembershipConsumptionId == consumption.Id, cancellationToken))
             {
                 throw new ConflictException("Este consumo ya fue revertido.");
+            }
+
+            // A consumption created by confirming a service record belongs to that record; how a confirmed record is
+            // corrected is still to be decided, so it cannot be undone from here.
+            if (await _dbContext.ServiceRecords.AnyAsync(record => record.MembershipConsumptionId == consumption.Id, cancellationToken))
+            {
+                throw new ConflictException(
+                    "Este consumo proviene de un servicio realizado confirmado y no se puede revertir desde la membresía.");
             }
 
             // Allowed on an annulled membership too: the units go back to their lines but the membership stays
@@ -163,7 +186,18 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
         }
     }
 
-    private void Register(
+    private async Task<MembershipConsumption> RegisterAsync(
+        Guid currentUserId,
+        CustomerMembership membership,
+        MembershipConsumptionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var staffExists = request.StaffProfileId is not { } staffId
+            || await _dbContext.StaffProfiles.AnyAsync(staff => staff.Id == staffId, cancellationToken);
+        return Register(currentUserId, membership, request, await LoadAvailableAsync(membership, cancellationToken), staffExists);
+    }
+
+    private MembershipConsumption Register(
         Guid currentUserId,
         CustomerMembership membership,
         MembershipConsumptionRequest request,
@@ -247,6 +281,8 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
                 break;
             }
         }
+
+        return consumption;
     }
 
     private async Task<IReadOnlyDictionary<Guid, int>> LoadAvailableAsync(CustomerMembership membership, CancellationToken cancellationToken)

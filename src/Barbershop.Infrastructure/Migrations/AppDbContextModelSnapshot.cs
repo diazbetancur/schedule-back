@@ -581,6 +581,116 @@ namespace Barbershop.Infrastructure.Migrations
                     b.ToTable("ticker_items", "public");
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyPointsChange", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("ChangedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ChangedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("NewPoints")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("PreviousPoints")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("TargetId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("TargetType")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TargetType", "TargetId", "ChangedAt");
+
+                    b.ToTable("loyalty_points_changes", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_loyalty_points_changes_points_non_negative", "\"PreviousPoints\" >= 0 AND \"NewPoints\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltySettings", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("PointsValidityDays")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UpdatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("loyalty_settings", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_loyalty_settings_singleton", "\"Id\" = 1");
+
+                            t.HasCheckConstraint("ck_loyalty_settings_validity_range", "\"PointsValidityDays\" >= 1 AND \"PointsValidityDays\" <= 3650");
+                        });
+
+                    b.HasData(
+                        new
+                        {
+                            Id = 1,
+                            CreatedAt = new DateTime(2026, 11, 3, 0, 0, 0, 0, DateTimeKind.Utc),
+                            IsEnabled = false,
+                            PointsValidityDays = 365
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltySettingsChange", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("ChangedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ChangedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("NewIsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("NewPointsValidityDays")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("PreviousIsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("PreviousPointsValidityDays")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ChangedAt");
+
+                    b.ToTable("loyalty_settings_changes", "public");
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Media.MediaAsset", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1153,6 +1263,11 @@ namespace Barbershop.Infrastructure.Migrations
                         .HasColumnType("boolean")
                         .HasDefaultValue(false);
 
+                    b.Property<int>("LoyaltyPoints")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
                     b.Property<string>("Mode")
                         .IsRequired()
                         .HasMaxLength(16)
@@ -1196,6 +1311,8 @@ namespace Barbershop.Infrastructure.Migrations
                     b.ToTable("membership_plans", "public", t =>
                         {
                             t.HasCheckConstraint("ck_membership_plans_duration_range", "\"DefaultDurationDays\" >= 1 AND \"DefaultDurationDays\" <= 3650");
+
+                            t.HasCheckConstraint("ck_membership_plans_loyalty_points_non_negative", "\"LoyaltyPoints\" >= 0");
 
                             t.HasCheckConstraint("ck_membership_plans_pool_quantity_by_mode", "(\"Mode\" = 'Pool' AND \"PoolQuantity\" IS NOT NULL AND \"PoolQuantity\" BETWEEN 1 AND 1000) OR (\"Mode\" = 'PerService' AND \"PoolQuantity\" IS NULL)");
 
@@ -1369,6 +1486,11 @@ namespace Barbershop.Infrastructure.Migrations
                         .HasColumnType("boolean")
                         .HasDefaultValue(false);
 
+                    b.Property<int>("LoyaltyPoints")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(120)
@@ -1388,6 +1510,8 @@ namespace Barbershop.Infrastructure.Migrations
                             t.HasCheckConstraint("ck_services_base_price_non_negative", "\"BasePrice\" >= 0");
 
                             t.HasCheckConstraint("ck_services_business_percentage_range", "\"BusinessPercentage\" >= 0 AND \"BusinessPercentage\" <= 100");
+
+                            t.HasCheckConstraint("ck_services_loyalty_points_non_negative", "\"LoyaltyPoints\" >= 0");
                         });
                 });
 

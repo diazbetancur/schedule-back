@@ -16,6 +16,9 @@ internal sealed class ServiceConfiguration : IEntityTypeConfiguration<Service>
       tableBuilder.HasCheckConstraint(
               "ck_services_business_percentage_range",
               "\"BusinessPercentage\" >= 0 AND \"BusinessPercentage\" <= 100");
+      tableBuilder.HasCheckConstraint(
+              "ck_services_loyalty_points_non_negative",
+              "\"LoyaltyPoints\" >= 0");
     });
 
     builder.HasKey(x => x.Id);
@@ -24,6 +27,7 @@ internal sealed class ServiceConfiguration : IEntityTypeConfiguration<Service>
     builder.Property(x => x.Name).HasMaxLength(120).IsRequired();
     builder.Property(x => x.BasePrice).IsRequired();
     builder.Property(x => x.BusinessPercentage).IsRequired().HasDefaultValue(0);
+    builder.Property(x => x.LoyaltyPoints).IsRequired().HasDefaultValue(0);
     builder.Property(x => x.IsActive).HasDefaultValue(true);
     builder.Property(x => x.IsDeleted).HasDefaultValue(false);
     builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();

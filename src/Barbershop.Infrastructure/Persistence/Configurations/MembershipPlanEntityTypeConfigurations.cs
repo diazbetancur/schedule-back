@@ -12,6 +12,7 @@ internal sealed class MembershipPlanConfiguration : IEntityTypeConfiguration<Mem
     builder.ToTable("membership_plans", tableBuilder =>
     {
       tableBuilder.HasCheckConstraint("ck_membership_plans_price_non_negative", "\"Price\" >= 0");
+      tableBuilder.HasCheckConstraint("ck_membership_plans_loyalty_points_non_negative", "\"LoyaltyPoints\" >= 0");
       tableBuilder.HasCheckConstraint(
           "ck_membership_plans_duration_range",
           "\"DefaultDurationDays\" >= 1 AND \"DefaultDurationDays\" <= 3650");
@@ -31,6 +32,7 @@ internal sealed class MembershipPlanConfiguration : IEntityTypeConfiguration<Mem
     builder.Property(x => x.Mode).HasConversion<string>().HasMaxLength(16).IsRequired();
     builder.Property(x => x.Terms).HasMaxLength(4000).IsRequired();
     builder.Property(x => x.SpecificConditions).HasMaxLength(2000);
+    builder.Property(x => x.LoyaltyPoints).IsRequired().HasDefaultValue(0);
     builder.Property(x => x.IsActive).HasDefaultValue(true);
     builder.Property(x => x.IsDeleted).HasDefaultValue(false);
     builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();

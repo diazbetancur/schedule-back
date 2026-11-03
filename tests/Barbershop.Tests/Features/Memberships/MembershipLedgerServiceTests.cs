@@ -8,6 +8,7 @@ using Barbershop.Domain.Services;
 using Barbershop.Domain.Staff;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Customers;
+using Barbershop.Infrastructure.Identity;
 using Barbershop.Infrastructure.Memberships;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -42,7 +43,7 @@ public sealed class MembershipLedgerServiceTests : IDisposable
     _dbContext = new AppDbContext(options);
     _memberships = new MembershipSalesService(_dbContext, TimeProvider.System);
     _ledger = new MembershipLedgerService(_dbContext, _memberships, TimeProvider.System);
-    _plans = new MembershipPlanManagementService(_dbContext, TimeProvider.System);
+    _plans = new MembershipPlanManagementService(_dbContext, TimeProvider.System, new NullCurrentUserAccessor());
     _customers = new CustomerManagementService(_dbContext, TimeProvider.System);
 
     var admin = new User("Admin Principal", "admin@example.com", "hash", DateTime.UtcNow);

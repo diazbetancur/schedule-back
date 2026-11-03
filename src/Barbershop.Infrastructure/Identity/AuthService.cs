@@ -29,7 +29,6 @@ internal sealed class AuthService : IAuthService
 
     private readonly AppDbContext _dbContext;
     private readonly IPasswordHasher<object> _passwordHasher;
-    private readonly IIdentitySeedService _identitySeedService;
     private readonly IEmailSender _emailSender;
     private readonly IOptions<JwtOptions> _jwtOptions;
     private readonly IOptions<AppOptions> _appOptions;
@@ -38,7 +37,6 @@ internal sealed class AuthService : IAuthService
     public AuthService(
         AppDbContext dbContext,
         IPasswordHasher<object> passwordHasher,
-        IIdentitySeedService identitySeedService,
         IEmailSender emailSender,
         IOptions<JwtOptions> jwtOptions,
         IOptions<AppOptions> appOptions,
@@ -46,7 +44,6 @@ internal sealed class AuthService : IAuthService
     {
         _dbContext = dbContext;
         _passwordHasher = passwordHasher;
-        _identitySeedService = identitySeedService;
         _emailSender = emailSender;
         _jwtOptions = jwtOptions;
         _appOptions = appOptions;
@@ -57,8 +54,6 @@ internal sealed class AuthService : IAuthService
     {
         ValidateRegisterRequest(request);
         EnsureJwtConfigured();
-
-        await _identitySeedService.EnsureSeededAsync(cancellationToken);
 
         // An inactive account still owns its email: registering again must never reactivate it or replace its
         // password, since whoever did so would inherit its linked customer profile. Same answer for active and
@@ -103,7 +98,8 @@ internal sealed class AuthService : IAuthService
         ValidateLoginRequest(request);
         EnsureJwtConfigured();
 
-        await _identitySeedService.EnsureSeededAsync(cancellationToken);
+        // No seeding here: signing in must never change roles or permissions. The roles and the catalog are
+        // bootstrapped once at startup (Program.cs).
 
         var normalizedEmail = NormalizeEmail(request.Email);
         var user = await _dbContext.Users

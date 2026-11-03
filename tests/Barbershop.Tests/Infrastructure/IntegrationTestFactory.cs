@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Barbershop.Infrastructure.Identity;
 using Barbershop.Infrastructure.Persistence;
 
 namespace Barbershop.Tests.Infrastructure;
@@ -59,5 +60,8 @@ public sealed class IntegrationTestFactory : WebApplicationFactory<Program>
 
         await dbContext.Database.EnsureDeletedAsync();
         await dbContext.Database.MigrateAsync();
+
+        // Same bootstrap as Program.cs at startup: system roles and the permission catalog with its default grants.
+        await scope.ServiceProvider.GetRequiredService<IIdentitySeedService>().EnsureSeededAsync();
     }
 }

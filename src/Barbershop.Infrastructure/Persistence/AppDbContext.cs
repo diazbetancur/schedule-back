@@ -2,6 +2,7 @@ using Barbershop.Domain.Appointments;
 using Barbershop.Domain.Customers;
 using Barbershop.Domain.Finance;
 using Barbershop.Domain.Landing;
+using Barbershop.Domain.Loyalty;
 using Barbershop.Domain.Media;
 using Barbershop.Domain.Memberships;
 using Barbershop.Domain.Scheduling;
@@ -56,6 +57,9 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<MembershipConsumptionReversal> MembershipConsumptionReversals => Set<MembershipConsumptionReversal>();
     public DbSet<MembershipGiftDelivery> MembershipGiftDeliveries => Set<MembershipGiftDelivery>();
     public DbSet<MembershipGiftDeliveryReversal> MembershipGiftDeliveryReversals => Set<MembershipGiftDeliveryReversal>();
+    public DbSet<LoyaltySettings> LoyaltySettings => Set<LoyaltySettings>();
+    public DbSet<LoyaltySettingsChange> LoyaltySettingsChanges => Set<LoyaltySettingsChange>();
+    public DbSet<LoyaltyPointsChange> LoyaltyPointsChanges => Set<LoyaltyPointsChange>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

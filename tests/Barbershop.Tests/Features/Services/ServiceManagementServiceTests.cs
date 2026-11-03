@@ -1,5 +1,6 @@
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Services.Admin;
+using Barbershop.Infrastructure.Identity;
 using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
@@ -18,7 +19,7 @@ public sealed class ServiceManagementServiceTests : IDisposable
         .Options;
 
     _dbContext = new AppDbContext(options);
-    _service = new ServiceManagementService(_dbContext, TimeProvider.System);
+    _service = new ServiceManagementService(_dbContext, TimeProvider.System, new NullCurrentUserAccessor());
   }
 
   public void Dispose() => _dbContext.Dispose();

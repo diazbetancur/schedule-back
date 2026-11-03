@@ -177,10 +177,18 @@ public sealed class IncomeKindMigrationRegressionTests
     };
     db.Users.AddRange(users);
     db.StaffProfiles.AddRange(staff);
-    db.Services.AddRange(services);
     db.ExpenseEntries.Add(new ExpenseEntry(null, "Arriendo", 900000, new DateOnly(2026, 6, 5), Guid.NewGuid(), DateTime.UtcNow));
     db.ExpenseEntries.Add(new ExpenseEntry(null, "Insumos", 120000, new DateOnly(2026, 3, 15), Guid.NewGuid(), DateTime.UtcNow));
     await db.SaveChangesAsync();
+
+    // Services get columns in later migrations (LoyaltyPoints), so they are written with the old ones only.
+    foreach (var service in services)
+    {
+      await db.Database.ExecuteSqlInterpolatedAsync($"""
+          INSERT INTO public.services ("Id", "Name", "BasePrice", "BusinessPercentage", "IsActive", "IsDeleted", "CreatedAt")
+          VALUES ({service.Id}, {service.Name}, {service.BasePrice}, {service.BusinessPercentage}, {true}, {false}, {service.CreatedAt})
+          """);
+    }
 
     var rows = new List<LegacyIncome>();
     var random = new Random(20261028); // deterministic

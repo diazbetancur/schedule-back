@@ -39,7 +39,6 @@ public sealed class AuthServiceTests : IDisposable
         _authService = new AuthService(
             _dbContext,
             passwordHasher,
-            seedService,
             new NoOpEmailSender(),
             Options.Create(new JwtOptions
             {
@@ -53,6 +52,9 @@ public sealed class AuthServiceTests : IDisposable
             }),
             Options.Create(new AppOptions()),
             timeProvider);
+
+        // Roles and permissions are bootstrapped at startup in the app, not by AuthService.
+        seedService.EnsureSeededAsync().GetAwaiter().GetResult();
     }
 
     public void Dispose()

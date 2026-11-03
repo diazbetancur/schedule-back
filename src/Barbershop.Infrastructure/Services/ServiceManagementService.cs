@@ -1,6 +1,9 @@
+using Barbershop.Application.Auth;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Services.Admin;
+using Barbershop.Domain.Loyalty;
 using Barbershop.Domain.Services;
+using Barbershop.Infrastructure.Loyalty;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -13,11 +16,13 @@ internal sealed class ServiceManagementService : IAdminServicesService
 
     private readonly AppDbContext _dbContext;
     private readonly TimeProvider _timeProvider;
+    private readonly ICurrentUserAccessor _currentUser;
 
-    public ServiceManagementService(AppDbContext dbContext, TimeProvider timeProvider)
+    public ServiceManagementService(AppDbContext dbContext, TimeProvider timeProvider, ICurrentUserAccessor currentUser)
     {
         _dbContext = dbContext;
         _timeProvider = timeProvider;
+        _currentUser = currentUser;
     }
 
     public async Task<IReadOnlyList<ServiceView>> GetAllAsync(CancellationToken cancellationToken = default)
@@ -38,11 +43,12 @@ internal sealed class ServiceManagementService : IAdminServicesService
 
     public async Task<ServiceView> CreateAsync(ServiceCreateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateRequest(request.Name, request.BasePrice, request.BusinessPercentage);
+        ValidateRequest(request.Name, request.BasePrice, request.BusinessPercentage, request.LoyaltyPoints);
         await EnsureNameIsUniqueAsync(request.Name, null, cancellationToken);
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         var service = new Service(request.Name, request.BasePrice, utcNow, request.BusinessPercentage);
+        ApplyLoyaltyPoints(service, request.LoyaltyPoints, utcNow);
 
         _dbContext.Services.Add(service);
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -51,11 +57,13 @@ internal sealed class ServiceManagementService : IAdminServicesService
 
     public async Task<ServiceView> UpdateAsync(Guid serviceId, ServiceUpdateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateRequest(request.Name, request.BasePrice, request.BusinessPercentage);
+        ValidateRequest(request.Name, request.BasePrice, request.BusinessPercentage, request.LoyaltyPoints);
         var service = await LoadAsync(serviceId, cancellationToken);
         await EnsureNameIsUniqueAsync(request.Name, serviceId, cancellationToken);
 
-        service.Update(request.Name, request.BasePrice, _timeProvider.GetUtcNow().UtcDateTime, request.BusinessPercentage);
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        service.Update(request.Name, request.BasePrice, utcNow, request.BusinessPercentage);
+        ApplyLoyaltyPoints(service, request.LoyaltyPoints, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
         return Map(service);
     }
@@ -85,6 +93,19 @@ internal sealed class ServiceManagementService : IAdminServicesService
         await _dbContext.SaveChangesAsync(cancellationToken);
     }
 
+    private void ApplyLoyaltyPoints(Service service, int? requestedPoints, DateTime utcNow)
+    {
+        var change = LoyaltyCatalogPoints.Change(
+            LoyaltyPointsTarget.Service, service.Id, service.LoyaltyPoints, requestedPoints, _currentUser, utcNow);
+        if (change is null)
+        {
+            return;
+        }
+
+        service.SetLoyaltyPoints(change.NewPoints, utcNow);
+        _dbContext.LoyaltyPointsChanges.Add(change);
+    }
+
     private async Task<Service> LoadAsync(Guid serviceId, CancellationToken cancellationToken)
     {
         return await _dbContext.Services
@@ -107,7 +128,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
         }
     }
 
-    private static void ValidateRequest(string name, int basePrice, int businessPercentage)
+    private static void ValidateRequest(string name, int basePrice, int businessPercentage, int? loyaltyPoints)
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 
@@ -126,6 +147,8 @@ internal sealed class ServiceManagementService : IAdminServicesService
             errors["businessPercentage"] = ["BusinessPercentage must be between 0 and 100."];
         }
 
+        LoyaltyCatalogPoints.Validate(loyaltyPoints, errors);
+
         if (errors.Count > 0)
         {
             throw new ValidationProblemException(errors);
@@ -133,5 +156,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
     }
 
     private static ServiceView Map(Service service)
-        => new(service.Id, service.Name, service.BasePrice, service.BusinessPercentage, service.IsActive, service.CreatedAt, service.UpdatedAt);
+        => new(
+            service.Id, service.Name, service.BasePrice, service.BusinessPercentage, service.IsActive,
+            service.CreatedAt, service.UpdatedAt, service.LoyaltyPoints);
 }

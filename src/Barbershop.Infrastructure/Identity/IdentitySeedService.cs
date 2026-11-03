@@ -55,30 +55,16 @@ internal sealed class IdentitySeedService : IIdentitySeedService
     _timeProvider = timeProvider;
   }
 
+  /// <summary>
+  /// Idempotent bootstrap, run at startup: migrations, system roles, the permission catalog with its default grants,
+  /// and the configured seed admin. Default grants are given only when the permission or the role is created in this
+  /// same run, so a grant an administrator removed later is never restored.
+  /// </summary>
   public async Task EnsureSeededAsync(CancellationToken cancellationToken = default)
   {
     await EnsureDatabaseAsync(cancellationToken);
 
-    var rolesChanged = await EnsureRolesAsync(cancellationToken);
-    if (rolesChanged)
-    {
-      await _dbContext.SaveChangesAsync(cancellationToken);
-    }
-
-    var permissionsChanged = await EnsurePermissionsAsync(cancellationToken);
-    if (permissionsChanged)
-    {
-      await _dbContext.SaveChangesAsync(cancellationToken);
-    }
-
-    var adminPermissionsChanged = await EnsureAdminPermissionsAsync(cancellationToken);
-    if (adminPermissionsChanged)
-    {
-      await _dbContext.SaveChangesAsync(cancellationToken);
-    }
-
-    var staffPermissionsChanged = await EnsureStaffPermissionsAsync(cancellationToken);
-    if (staffPermissionsChanged)
+    if (await EnsureRolesAndPermissionsAsync(cancellationToken))
     {
       await _dbContext.SaveChangesAsync(cancellationToken);
     }
@@ -123,101 +109,77 @@ internal sealed class IdentitySeedService : IIdentitySeedService
     }
   }
 
-  private async Task<bool> EnsureRolesAsync(CancellationToken cancellationToken)
+  /// <summary>
+  /// Adds the missing system roles and catalog permissions, and the default grants that go with them: Admin gets every
+  /// permission, Staff gets <see cref="StaffPermissionCodes"/>. A grant is added only for a permission created now or
+  /// to a role created now. An existing permission that an existing role lacks was revoked on purpose (since the catalog
+  /// exists, every permission has been granted to Admin when it was created), so it stays revoked. Everything is saved
+  /// together by the caller, so a failure cannot leave a new permission without its default grants.
+  /// </summary>
+  private async Task<bool> EnsureRolesAndPermissionsAsync(CancellationToken cancellationToken)
   {
-    var existingNormalizedNames = await _dbContext.Roles
-        .Select(role => role.NormalizedName)
-        .ToListAsync(cancellationToken);
-
+    var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
     var changed = false;
+
+    var roles = await _dbContext.Roles
+        .Include(role => role.RolePermissions)
+        .ToListAsync(cancellationToken);
+    var createdRoles = new HashSet<Role>();
     foreach (var roleName in RoleNames.All)
     {
       var normalizedRoleName = roleName.ToUpperInvariant();
-      if (existingNormalizedNames.Contains(normalizedRoleName, StringComparer.Ordinal))
+      if (roles.Any(role => role.NormalizedName == normalizedRoleName))
       {
         continue;
       }
 
-      _dbContext.Roles.Add(new Role(roleName, isSystemRole: true));
+      var role = new Role(roleName, isSystemRole: true);
+      _dbContext.Roles.Add(role);
+      roles.Add(role);
+      createdRoles.Add(role);
       changed = true;
     }
 
-    return changed;
-  }
-
-  private async Task<bool> EnsurePermissionsAsync(CancellationToken cancellationToken)
-  {
-    var existingCodes = await _dbContext.Permissions
-        .Select(permission => permission.Code)
-        .ToListAsync(cancellationToken);
-
-    var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-    var changed = false;
+    var permissions = await _dbContext.Permissions.ToListAsync(cancellationToken);
+    var createdPermissions = new HashSet<Permission>();
     foreach (var code in PermissionCodes.All)
     {
-      if (existingCodes.Contains(code, StringComparer.Ordinal))
+      if (permissions.Any(permission => permission.Code == code))
       {
         continue;
       }
 
-      _dbContext.Permissions.Add(new Permission(code, PermissionDescriptions[code], utcNow));
+      var permission = new Permission(code, PermissionDescriptions[code], utcNow);
+      _dbContext.Permissions.Add(permission);
+      permissions.Add(permission);
+      createdPermissions.Add(permission);
       changed = true;
     }
 
+    changed |= GrantDefaults(RoleNames.Admin, PermissionCodes.All);
+    changed |= GrantDefaults(RoleNames.Staff, StaffPermissionCodes);
     return changed;
-  }
 
-  private async Task<bool> EnsureAdminPermissionsAsync(CancellationToken cancellationToken)
-  {
-    var adminRole = await _dbContext.Roles
-        .Include(role => role.RolePermissions)
-        .SingleAsync(role => role.NormalizedName == RoleNames.Admin.ToUpperInvariant(), cancellationToken);
-
-    var allPermissions = await _dbContext.Permissions.ToListAsync(cancellationToken);
-    var grantedPermissionIds = adminRole.RolePermissions.Select(rp => rp.PermissionId).ToHashSet();
-
-    var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-    var changed = false;
-    foreach (var permission in allPermissions)
+    bool GrantDefaults(string roleName, IReadOnlyCollection<string> defaultCodes)
     {
-      if (grantedPermissionIds.Contains(permission.Id))
+      var role = roles.Single(candidate => candidate.NormalizedName == roleName.ToUpperInvariant());
+      var granted = role.RolePermissions.Select(rolePermission => rolePermission.PermissionId).ToHashSet();
+      var added = false;
+      foreach (var permission in permissions.Where(permission => defaultCodes.Contains(permission.Code)))
       {
-        continue;
+        if (granted.Contains(permission.Id) || (!createdRoles.Contains(role) && !createdPermissions.Contains(permission)))
+        {
+          continue;
+        }
+
+        // Bypass Role.AddPermission a propósito: ese método rechaza IsSystemRole por diseño (protege el flujo
+        // admin de /admin/roles), pero el seed es quien da a Admin y a Staff sus permisos iniciales.
+        role.RolePermissions.Add(new RolePermission(role.Id, permission.Id, utcNow));
+        added = true;
       }
 
-      // Bypass Role.AddPermission a propósito: ese método rechaza IsSystemRole por diseño
-      // (protege el flujo admin de /admin/roles), pero el seed es quien mantiene a Admin
-      // sincronizado con el 100% del catálogo — mismo patrón que EnsureAdminAsync, que ya
-      // manipula UserRoles directamente sin pasar por un método de dominio guardado.
-      adminRole.RolePermissions.Add(new RolePermission(adminRole.Id, permission.Id, utcNow));
-      changed = true;
+      return added;
     }
-
-    return changed;
-  }
-
-  private async Task<bool> EnsureStaffPermissionsAsync(CancellationToken cancellationToken)
-  {
-    var staffRole = await _dbContext.Roles
-        .Include(role => role.RolePermissions)
-        .SingleAsync(role => role.NormalizedName == RoleNames.Staff.ToUpperInvariant(), cancellationToken);
-
-    var staffPermissions = await _dbContext.Permissions
-        .Where(permission => StaffPermissionCodes.Contains(permission.Code))
-        .ToListAsync(cancellationToken);
-    var grantedPermissionIds = staffRole.RolePermissions.Select(rp => rp.PermissionId).ToHashSet();
-
-    var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-    var changed = false;
-    foreach (var permission in staffPermissions.Where(permission => !grantedPermissionIds.Contains(permission.Id)))
-    {
-      // Mismo bypass de Role.AddPermission que en EnsureAdminPermissionsAsync: Staff es rol de sistema
-      // y solo el seed define su conjunto fijo de permisos.
-      staffRole.RolePermissions.Add(new RolePermission(staffRole.Id, permission.Id, utcNow));
-      changed = true;
-    }
-
-    return changed;
   }
 
   private async Task<bool> EnsureAdminAsync(CancellationToken cancellationToken)

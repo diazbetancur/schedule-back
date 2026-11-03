@@ -72,6 +72,10 @@ public sealed class RegisterEmailRacePostgresTests
     await using var dbContext = CreateContext();
     await dbContext.Database.EnsureDeletedAsync();
     await dbContext.Database.MigrateAsync();
+    // The app bootstraps roles at startup; registration needs the Customer role.
+    await new IdentitySeedService(
+        dbContext, new PasswordHasher<object>(), Options.Create(new SeedAdminOptions()), new TestHostEnvironment(), TimeProvider.System)
+        .EnsureSeededAsync();
   }
 
   private AppDbContext CreateContext() => CreateContext(null);
@@ -91,13 +95,9 @@ public sealed class RegisterEmailRacePostgresTests
   private static AuthService CreateAuthService(AppDbContext dbContext)
   {
     var passwordHasher = new PasswordHasher<object>();
-    var seedService = new IdentitySeedService(
-        dbContext, passwordHasher, Options.Create(new SeedAdminOptions()), new TestHostEnvironment(), TimeProvider.System);
-
     return new AuthService(
         dbContext,
         passwordHasher,
-        seedService,
         new NoOpEmailSender(),
         Options.Create(new JwtOptions
         {

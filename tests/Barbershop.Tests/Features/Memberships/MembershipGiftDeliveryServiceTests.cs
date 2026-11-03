@@ -6,6 +6,7 @@ using Barbershop.Domain.Finance;
 using Barbershop.Domain.Services;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Customers;
+using Barbershop.Infrastructure.Identity;
 using Barbershop.Infrastructure.Memberships;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -40,7 +41,7 @@ public sealed class MembershipGiftDeliveryServiceTests : IDisposable
     _memberships = new MembershipSalesService(_dbContext, TimeProvider.System);
     _ledger = new MembershipLedgerService(_dbContext, _memberships, TimeProvider.System);
     _deliveries = new MembershipGiftDeliveryService(_dbContext, _memberships, TimeProvider.System);
-    _plans = new MembershipPlanManagementService(_dbContext, TimeProvider.System);
+    _plans = new MembershipPlanManagementService(_dbContext, TimeProvider.System, new NullCurrentUserAccessor());
     _customers = new CustomerManagementService(_dbContext, TimeProvider.System);
 
     var admin = new User("Admin Principal", "admin@example.com", "hash", DateTime.UtcNow);

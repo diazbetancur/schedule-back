@@ -1,7 +1,10 @@
+using Barbershop.Application.Auth;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Memberships.Admin;
+using Barbershop.Domain.Loyalty;
 using Barbershop.Domain.Memberships;
 using Barbershop.Domain.Services;
+using Barbershop.Infrastructure.Loyalty;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -18,11 +21,13 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
 
     private readonly AppDbContext _dbContext;
     private readonly TimeProvider _timeProvider;
+    private readonly ICurrentUserAccessor _currentUser;
 
-    public MembershipPlanManagementService(AppDbContext dbContext, TimeProvider timeProvider)
+    public MembershipPlanManagementService(AppDbContext dbContext, TimeProvider timeProvider, ICurrentUserAccessor currentUser)
     {
         _dbContext = dbContext;
         _timeProvider = timeProvider;
+        _currentUser = currentUser;
     }
 
     public async Task<IReadOnlyList<MembershipPlanView>> GetAllAsync(CancellationToken cancellationToken = default)
@@ -54,6 +59,7 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
         var plan = new MembershipPlan(
             request.Name, request.Description, request.Price, valid.Mode, valid.PoolQuantity,
             request.DefaultDurationDays, request.Terms, request.SpecificConditions, utcNow);
+        ApplyLoyaltyPoints(plan, request.LoyaltyPoints, utcNow);
 
         foreach (var service in valid.Services)
         {
@@ -83,6 +89,7 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
             request.Name, request.Description, request.Price, valid.Mode, valid.PoolQuantity,
             request.DefaultDurationDays, request.Terms, request.SpecificConditions, utcNow);
 
+        ApplyLoyaltyPoints(plan, request.LoyaltyPoints, utcNow);
         SyncServices(plan, valid.Services);
         SyncGiftRules(plan, valid.GiftRules, utcNow);
 
@@ -113,6 +120,19 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
         var plan = await LoadAsync(planId, cancellationToken);
         plan.MarkDeleted(_timeProvider.GetUtcNow().UtcDateTime);
         await SaveChangesAsync(cancellationToken);
+    }
+
+    private void ApplyLoyaltyPoints(MembershipPlan plan, int? requestedPoints, DateTime utcNow)
+    {
+        var change = LoyaltyCatalogPoints.Change(
+            LoyaltyPointsTarget.MembershipPlan, plan.Id, plan.LoyaltyPoints, requestedPoints, _currentUser, utcNow);
+        if (change is null)
+        {
+            return;
+        }
+
+        plan.SetLoyaltyPoints(change.NewPoints, utcNow);
+        _dbContext.LoyaltyPointsChanges.Add(change);
     }
 
     /// <summary>Keeps rows for services that stay (updating their quantity), drops removed ones and adds new ones.</summary>
@@ -204,6 +224,8 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
         {
             errors["specificConditions"] = ["Las condiciones particulares deben tener 2000 caracteres o menos."];
         }
+
+        LoyaltyCatalogPoints.Validate(request.LoyaltyPoints, errors);
 
         var mode = ParseName<MembershipPlanMode>(request.Mode);
         if (mode is null)
@@ -507,7 +529,8 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
             includedServices,
             giftRules,
             plan.CreatedAt,
-            plan.UpdatedAt);
+            plan.UpdatedAt,
+            plan.LoyaltyPoints);
     }
 
     private sealed record ValidService(Guid ServiceId, int? Quantity);

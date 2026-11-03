@@ -1,9 +1,9 @@
 using Api.Barbershop.Features.Auth;
 using Api.Barbershop.Middleware;
 using Barbershop.Application.Auth;
-using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Configuration;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.RateLimiting;
@@ -82,9 +82,9 @@ public static class ApiFoundationServiceCollectionExtensions
             options.AddPolicy(AuthPolicyNames.Admin, policy => policy.RequireRole(AuthRoleNames.Admin));
             options.AddPolicy(AuthPolicyNames.Staff, policy => policy.RequireRole(AuthRoleNames.Staff));
             options.AddPolicy(AuthPolicyNames.Customer, policy => policy.RequireRole(AuthRoleNames.Customer));
-            options.AddPolicy(PermissionPolicyNames.SalesRegister,
-                policy => policy.RequireClaim(PermissionClaimTypes.Permission, PermissionCodes.SalesRegister));
+            options.AddPermissionPolicies();
         });
+        services.AddScoped<IAuthorizationHandler, CurrentPermissionAuthorizationHandler>();
 
         services.AddRateLimiter(ConfigureRateLimiter);
 

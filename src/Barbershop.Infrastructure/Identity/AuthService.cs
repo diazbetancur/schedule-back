@@ -13,11 +13,17 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using Npgsql;
 
 namespace Barbershop.Infrastructure.Identity;
 
 internal sealed class AuthService : IAuthService
 {
+    private const string DuplicateEmailMessage = "A user with this email already exists.";
+
+    // Name of the unique index on users."NormalizedEmail" (created by the InitialDomainModel migration).
+    private const string UsersEmailUniqueIndex = "IX_users_NormalizedEmail";
+
     private const int MaxFailedLoginAttempts = 5;
     private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
 
@@ -54,41 +60,40 @@ internal sealed class AuthService : IAuthService
 
         await _identitySeedService.EnsureSeededAsync(cancellationToken);
 
+        // An inactive account still owns its email: registering again must never reactivate it or replace its
+        // password, since whoever did so would inherit its linked customer profile. Same answer for active and
+        // inactive accounts, so the response does not reveal which one it is.
         var normalizedEmail = NormalizeEmail(request.Email);
-        var existingUser = await _dbContext.Users
-            .Include(u => u.UserRoles)
-            .ThenInclude(ur => ur.Role)
-            .SingleOrDefaultAsync(u => u.NormalizedEmail == normalizedEmail, cancellationToken);
-
-        if (existingUser is not null && existingUser.IsActive)
+        if (await _dbContext.Users.AnyAsync(u => u.NormalizedEmail == normalizedEmail, cancellationToken))
         {
-            throw new ConflictException("A user with this email already exists.");
+            throw new ConflictException(DuplicateEmailMessage);
         }
 
         var createdAt = _timeProvider.GetUtcNow().UtcDateTime;
         var passwordHash = _passwordHasher.HashPassword(new object(), request.Password);
 
-        User user;
-        if (existingUser is not null)
-        {
-            // Inactive user: overwrite data and reactivate
-            existingUser.UpdateCustomerProfile(request.FullName, request.PhoneNumber, null, createdAt);
-            existingUser.SetPasswordHash(passwordHash, createdAt);
-            existingUser.Activate(createdAt);
-            user = existingUser;
-        }
-        else
-        {
-            user = new User(request.FullName, request.Email, passwordHash, createdAt, request.PhoneNumber);
-            var customerRole = await _dbContext.Roles.SingleAsync(role => role.NormalizedName == RoleNames.Customer.ToUpperInvariant(), cancellationToken);
-            user.UserRoles.Add(new UserRole(user.Id, customerRole.Id, createdAt));
-            _dbContext.Users.Add(user);
-        }
+        var user = new User(request.FullName, request.Email, passwordHash, createdAt, request.PhoneNumber);
+        var customerRole = await _dbContext.Roles.SingleAsync(role => role.NormalizedName == RoleNames.Customer.ToUpperInvariant(), cancellationToken);
+        user.UserRoles.Add(new UserRole(user.Id, customerRole.Id, createdAt));
+        _dbContext.Users.Add(user);
 
         var refreshToken = CreateRefreshToken(user.Id, createdAt);
         user.RefreshTokens.Add(refreshToken.Entity);
 
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException
+        {
+            SqlState: PostgresErrorCodes.UniqueViolation,
+            ConstraintName: UsersEmailUniqueIndex,
+        })
+        {
+            // A simultaneous registration took the email between the check above and this insert; the unique
+            // index rejected this one, so nothing was written. Same answer as the regular duplicate check.
+            throw new ConflictException(DuplicateEmailMessage);
+        }
 
         return CreateTokenResponse(user, [RoleNames.Customer], [], refreshToken.RawToken, null);
     }
@@ -208,6 +213,8 @@ internal sealed class AuthService : IAuthService
         var user = await _dbContext.Users
             .Include(candidate => candidate.UserRoles)
             .ThenInclude(userRole => userRole.Role)
+            .ThenInclude(role => role.RolePermissions)
+            .ThenInclude(rolePermission => rolePermission.Permission)
             .SingleOrDefaultAsync(candidate => candidate.Id == currentUserId, cancellationToken);
 
         if (user is null || !user.IsActive)
@@ -216,9 +223,10 @@ internal sealed class AuthService : IAuthService
         }
 
         var roles = GetRoleNames(user);
+        var permissions = GetPermissionCodes(user);
         var profilePhotoUrl = await GetProfilePhotoUrlAsync(user.ProfilePhotoMediaAssetId, cancellationToken);
 
-        return CreateUserResponse(user, roles, profilePhotoUrl);
+        return CreateUserResponse(user, roles, permissions, profilePhotoUrl);
     }
 
     public async Task ForgotPasswordAsync(ForgotPasswordRequest request, CancellationToken cancellationToken = default)
@@ -376,7 +384,7 @@ internal sealed class AuthService : IAuthService
             signingCredentials: credentials);
 
         var accessToken = new JwtSecurityTokenHandler().WriteToken(securityToken);
-        return new TokenResponse(accessToken, (int)TimeSpan.FromMinutes(jwtOptions.AccessTokenMinutes).TotalSeconds, refreshToken, CreateUserResponse(user, roles, profilePhotoUrl));
+        return new TokenResponse(accessToken, (int)TimeSpan.FromMinutes(jwtOptions.AccessTokenMinutes).TotalSeconds, refreshToken, CreateUserResponse(user, roles, permissions, profilePhotoUrl));
     }
 
     private static IReadOnlyList<string> GetPermissionCodes(User user)
@@ -386,7 +394,7 @@ internal sealed class AuthService : IAuthService
             .OrderBy(code => code, StringComparer.Ordinal)
             .ToArray();
 
-    private AuthUserResponse CreateUserResponse(User user, IReadOnlyList<string> roles, string? profilePhotoUrl)
+    private AuthUserResponse CreateUserResponse(User user, IReadOnlyList<string> roles, IReadOnlyList<string> permissions, string? profilePhotoUrl)
         => new(
             user.Id,
             user.FullName,
@@ -394,7 +402,8 @@ internal sealed class AuthService : IAuthService
             user.PhoneNumber,
             roles,
             user.ProfilePhotoMediaAssetId,
-            profilePhotoUrl);
+            profilePhotoUrl,
+            permissions);
 
     private RefreshTokenEnvelope CreateRefreshToken(Guid userId, DateTime createdAt)
     {

@@ -87,6 +87,7 @@ public static class DependencyInjection
         services.AddScoped<IPasswordHasher<object>, PasswordHasher<object>>();
         services.AddScoped<IIdentitySeedService, IdentitySeedService>();
         services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<IUserPermissionVerifier, UserPermissionVerifier>();
         services.AddScoped<AppointmentManagementService>();
         services.AddScoped<ICustomerAppointmentsService>(serviceProvider => serviceProvider.GetRequiredService<AppointmentManagementService>());
         services.AddScoped<IStaffAppointmentsService>(serviceProvider => serviceProvider.GetRequiredService<AppointmentManagementService>());

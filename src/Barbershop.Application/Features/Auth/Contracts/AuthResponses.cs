@@ -7,7 +7,9 @@ public sealed record AuthUserResponse(
     string? PhoneNumber,
     IReadOnlyList<string> Roles,
     Guid? ProfilePhotoId,
-    string? ProfilePhotoUrl);
+    string? ProfilePhotoUrl,
+    /// <summary>Same codes as the token's permission claims, so the UI can show or hide actions; the API still authorizes from the token.</summary>
+    IReadOnlyList<string> Permissions);
 
 public sealed record TokenResponse(
     string AccessToken,

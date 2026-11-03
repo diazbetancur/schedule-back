@@ -68,6 +68,70 @@ public sealed class IdentitySeedServiceTests : IDisposable
   }
 
   [Fact]
+  public async Task EnsureSeededAsync_GrantsStaffRole_OnlyServiceRecordRegistration()
+  {
+    await _seedService.EnsureSeededAsync();
+
+    Assert.Equal([PermissionCodes.ServiceRecordsRegister], await GrantedCodesAsync(RoleNames.Staff));
+  }
+
+  [Fact]
+  public async Task EnsureSeededAsync_GrantsStaffAndCustomer_NoAdministrativePermission()
+  {
+    await _seedService.EnsureSeededAsync();
+
+    string[] administrative =
+    [
+      PermissionCodes.ServiceRecordsApprove,
+      PermissionCodes.LoyaltySettingsManage,
+      PermissionCodes.LoyaltyRewardsManage,
+      PermissionCodes.LoyaltyRedemptionsApprove,
+      PermissionCodes.LoyaltyRedemptionsDeliver,
+      PermissionCodes.LoyaltyPointsAdjust,
+      PermissionCodes.MembershipPaymentsConfirm,
+      PermissionCodes.CustomerClaimsApprove,
+      PermissionCodes.SalesRegister,
+    ];
+
+    Assert.Empty((await GrantedCodesAsync(RoleNames.Staff)).Intersect(administrative));
+    Assert.Empty(await GrantedCodesAsync(RoleNames.Customer));
+  }
+
+  [Fact]
+  public async Task EnsureSeededAsync_CalledTwice_DoesNotDuplicateStaffGrant()
+  {
+    await _seedService.EnsureSeededAsync();
+    await _seedService.EnsureSeededAsync();
+
+    Assert.Equal([PermissionCodes.ServiceRecordsRegister], await GrantedCodesAsync(RoleNames.Staff));
+    Assert.Equal(PermissionCodes.All.Count, (await GrantedCodesAsync(RoleNames.Admin)).Length);
+  }
+
+  [Fact]
+  public async Task EnsureSeededAsync_RestoresAStaffGrantRemovedFromTheDatabase()
+  {
+    await _seedService.EnsureSeededAsync();
+    var staffRole = await _dbContext.Roles.Include(r => r.RolePermissions)
+        .SingleAsync(r => r.NormalizedName == RoleNames.Staff.ToUpperInvariant());
+    _dbContext.RolePermissions.RemoveRange(staffRole.RolePermissions);
+    await _dbContext.SaveChangesAsync();
+
+    await _seedService.EnsureSeededAsync();
+
+    Assert.Equal([PermissionCodes.ServiceRecordsRegister], await GrantedCodesAsync(RoleNames.Staff));
+  }
+
+  private async Task<string[]> GrantedCodesAsync(string roleName)
+  {
+    var normalizedName = roleName.ToUpperInvariant();
+    return await _dbContext.RolePermissions
+        .Where(rp => rp.Role.NormalizedName == normalizedName)
+        .Select(rp => rp.Permission.Code)
+        .OrderBy(code => code)
+        .ToArrayAsync();
+  }
+
+  [Fact]
   public async Task EnsureSeededAsync_MarksTheThreeSystemRoles_AsIsSystemRole()
   {
     await _seedService.EnsureSeededAsync();

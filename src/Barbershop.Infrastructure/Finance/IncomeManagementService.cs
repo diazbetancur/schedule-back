@@ -103,16 +103,21 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             var staffProfileId = await EnsureStaffExistsAsync(request.StaffProfileId, cancellationToken);
             ValidateAmountAndDate(request.Amount, request.OccurredOn);
 
+            // Choosing a different service is the explicit operation that captures its current name, price and
+            // split; any other edit keeps the values captured at registration, so later changes to the service
+            // master never rewrite the split of an existing income.
+            var keepsService = entry.ServiceId == service.Id;
+
             entry.Update(
                 service.Id,
-                service.Name,
-                service.BasePrice,
+                keepsService ? entry.ServiceNameSnapshot! : service.Name,
+                keepsService ? entry.BasePriceSnapshot : service.BasePrice,
                 staffProfileId,
                 request.Amount,
                 request.IsPromo,
                 request.OccurredOn,
                 utcNow,
-                service.BusinessPercentage);
+                keepsService ? entry.BusinessPercentageSnapshot : service.BusinessPercentage);
         }
 
         await _dbContext.SaveChangesAsync(cancellationToken);

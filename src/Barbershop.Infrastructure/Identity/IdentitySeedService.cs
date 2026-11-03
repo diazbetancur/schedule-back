@@ -20,8 +20,20 @@ internal sealed class IdentitySeedService : IIdentitySeedService
   private static readonly IReadOnlyDictionary<string, string> PermissionDescriptions =
       new Dictionary<string, string>(StringComparer.Ordinal)
       {
-        [PermissionCodes.SalesRegister] = "Registrar ventas"
+        [PermissionCodes.SalesRegister] = "Registrar ventas",
+        [PermissionCodes.ServiceRecordsRegister] = "Registrar servicios realizados",
+        [PermissionCodes.ServiceRecordsApprove] = "Aprobar servicios realizados",
+        [PermissionCodes.LoyaltySettingsManage] = "Configurar el programa de fidelización",
+        [PermissionCodes.LoyaltyRewardsManage] = "Gestionar el catálogo de recompensas",
+        [PermissionCodes.LoyaltyRedemptionsApprove] = "Aprobar o rechazar redenciones de puntos",
+        [PermissionCodes.LoyaltyRedemptionsDeliver] = "Confirmar la entrega de redenciones de puntos",
+        [PermissionCodes.LoyaltyPointsAdjust] = "Ajustar puntos de clientes",
+        [PermissionCodes.MembershipPaymentsConfirm] = "Confirmar el pago de membresías",
+        [PermissionCodes.CustomerClaimsApprove] = "Aprobar reclamaciones de perfiles de cliente"
       };
+
+  // Professionals register the services they performed; every administrative permission stays out of Staff.
+  private static readonly IReadOnlyCollection<string> StaffPermissionCodes = [PermissionCodes.ServiceRecordsRegister];
 
   private readonly AppDbContext _dbContext;
   private readonly IPasswordHasher<object> _passwordHasher;
@@ -61,6 +73,12 @@ internal sealed class IdentitySeedService : IIdentitySeedService
 
     var adminPermissionsChanged = await EnsureAdminPermissionsAsync(cancellationToken);
     if (adminPermissionsChanged)
+    {
+      await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+
+    var staffPermissionsChanged = await EnsureStaffPermissionsAsync(cancellationToken);
+    if (staffPermissionsChanged)
     {
       await _dbContext.SaveChangesAsync(cancellationToken);
     }
@@ -172,6 +190,30 @@ internal sealed class IdentitySeedService : IIdentitySeedService
       // sincronizado con el 100% del catálogo — mismo patrón que EnsureAdminAsync, que ya
       // manipula UserRoles directamente sin pasar por un método de dominio guardado.
       adminRole.RolePermissions.Add(new RolePermission(adminRole.Id, permission.Id, utcNow));
+      changed = true;
+    }
+
+    return changed;
+  }
+
+  private async Task<bool> EnsureStaffPermissionsAsync(CancellationToken cancellationToken)
+  {
+    var staffRole = await _dbContext.Roles
+        .Include(role => role.RolePermissions)
+        .SingleAsync(role => role.NormalizedName == RoleNames.Staff.ToUpperInvariant(), cancellationToken);
+
+    var staffPermissions = await _dbContext.Permissions
+        .Where(permission => StaffPermissionCodes.Contains(permission.Code))
+        .ToListAsync(cancellationToken);
+    var grantedPermissionIds = staffRole.RolePermissions.Select(rp => rp.PermissionId).ToHashSet();
+
+    var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+    var changed = false;
+    foreach (var permission in staffPermissions.Where(permission => !grantedPermissionIds.Contains(permission.Id)))
+    {
+      // Mismo bypass de Role.AddPermission que en EnsureAdminPermissionsAsync: Staff es rol de sistema
+      // y solo el seed define su conjunto fijo de permisos.
+      staffRole.RolePermissions.Add(new RolePermission(staffRole.Id, permission.Id, utcNow));
       changed = true;
     }
 

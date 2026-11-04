@@ -672,6 +672,257 @@ namespace Barbershop.Infrastructure.Migrations
                     b.ToTable("ticker_items", "public");
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyAdjustment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Direction")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid>("IdempotencyKey")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("PerformedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("PerformedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Points")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("PerformedByUserId");
+
+                    b.HasIndex("CustomerId", "PerformedAt");
+
+                    b.ToTable("loyalty_adjustments", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_loyalty_adjustments_points_positive", "\"Points\" > 0");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyDebt", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Amount")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("IncurredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Origin")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)");
+
+                    b.Property<Guid?>("OriginCustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("OriginDebtId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("OutstandingPoints")
+                        .HasColumnType("integer");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OriginCustomerId");
+
+                    b.HasIndex("OriginDebtId")
+                        .IsUnique()
+                        .HasFilter("\"OriginDebtId\" IS NOT NULL");
+
+                    b.HasIndex("CustomerId", "IncurredAt");
+
+                    b.ToTable("loyalty_debts", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_loyalty_debts_amount_positive", "\"Amount\" > 0");
+
+                            t.HasCheckConstraint("ck_loyalty_debts_incurred_not_after_created", "\"IncurredAt\" <= \"CreatedAt\"");
+
+                            t.HasCheckConstraint("ck_loyalty_debts_origin_shape", "(\"Origin\" = 'MergeTransfer' AND \"OriginDebtId\" IS NOT NULL AND \"OriginCustomerId\" IS NOT NULL) OR (\"Origin\" <> 'MergeTransfer' AND \"OriginDebtId\" IS NULL)");
+
+                            t.HasCheckConstraint("ck_loyalty_debts_outstanding_range", "\"OutstandingPoints\" >= 0 AND \"OutstandingPoints\" <= \"Amount\"");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyLot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("AccruedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateOnly>("AccruedOn")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("ExpiresOn")
+                        .HasColumnType("date");
+
+                    b.Property<int>("InitialPoints")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("OriginCustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("OriginLotId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("RemainingPoints")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("SourceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SourceType")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)");
+
+                    b.Property<int>("ValidityDays")
+                        .HasColumnType("integer");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OriginCustomerId");
+
+                    b.HasIndex("OriginLotId")
+                        .IsUnique()
+                        .HasFilter("\"OriginLotId\" IS NOT NULL");
+
+                    b.HasIndex("CustomerId", "ExpiresOn");
+
+                    b.HasIndex("SourceType", "SourceId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_loyalty_lots_original_source")
+                        .HasFilter("\"OriginLotId\" IS NULL");
+
+                    b.ToTable("loyalty_lots", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_loyalty_lots_expiry_after_accrual", "\"ExpiresOn\" >= \"AccruedOn\"");
+
+                            t.HasCheckConstraint("ck_loyalty_lots_initial_positive", "\"InitialPoints\" > 0");
+
+                            t.HasCheckConstraint("ck_loyalty_lots_origin_shape", "(\"OriginLotId\" IS NULL AND \"OriginCustomerId\" IS NULL) OR (\"OriginLotId\" IS NOT NULL AND \"OriginCustomerId\" IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_loyalty_lots_remaining_range", "\"RemainingPoints\" >= 0 AND \"RemainingPoints\" <= \"InitialPoints\"");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyMovement", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AdjustmentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("DebtId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("LotId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("PerformedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("PerformedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Points")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid?>("RelatedCustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AdjustmentId");
+
+                    b.HasIndex("LotId");
+
+                    b.HasIndex("PerformedByUserId");
+
+                    b.HasIndex("CustomerId", "PerformedAt");
+
+                    b.HasIndex("DebtId", "LotId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_loyalty_movements_settlement_once")
+                        .HasFilter("\"Type\" = 'DebtSettlement'");
+
+                    b.HasIndex("DebtId", "Type")
+                        .IsUnique()
+                        .HasDatabaseName("IX_loyalty_movements_once_per_debt")
+                        .HasFilter("\"Type\" IN ('DebtMergeTransferIn', 'DebtMergeTransferOut', 'DebtOpened')");
+
+                    b.HasIndex("LotId", "Type")
+                        .IsUnique()
+                        .HasDatabaseName("IX_loyalty_movements_once_per_lot")
+                        .HasFilter("\"Type\" IN ('Accrual', 'MergeTransferIn', 'AdjustmentCredit', 'Expiration', 'MembershipAnnulmentWithdrawal', 'MergeTransferOut')");
+
+                    b.ToTable("loyalty_movements", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_loyalty_movements_points_positive", "\"Points\" > 0");
+
+                            t.HasCheckConstraint("ck_loyalty_movements_target", "\"LotId\" IS NOT NULL OR \"DebtId\" IS NOT NULL");
+                        });
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyPointsChange", b =>
                 {
                     b.Property<Guid>("Id")
@@ -906,6 +1157,16 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<Guid?>("IncomeEntryId")
                         .HasColumnType("uuid");
 
+                    b.Property<DateTime?>("LoyaltyDecidedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("LoyaltyDecision")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<int?>("LoyaltyPointsSnapshot")
+                        .HasColumnType("integer");
+
                     b.Property<Guid>("MembershipPlanId")
                         .HasColumnType("uuid");
 
@@ -975,6 +1236,10 @@ namespace Barbershop.Infrastructure.Migrations
                             t.HasCheckConstraint("ck_customer_memberships_annulled_has_audit", "\"Status\" <> 'Annulled' OR (\"AnnulledAt\" IS NOT NULL AND \"AnnulledByUserId\" IS NOT NULL AND \"AnnulmentReason\" IS NOT NULL)");
 
                             t.HasCheckConstraint("ck_customer_memberships_date_range", "\"EndsOn\" >= \"StartsOn\"");
+
+                            t.HasCheckConstraint("ck_customer_memberships_loyalty_decision_shape", "(\"LoyaltyDecision\" IS NULL AND \"LoyaltyDecidedAt\" IS NULL) OR (\"LoyaltyDecision\" IS NOT NULL AND \"LoyaltyDecidedAt\" IS NOT NULL AND (\"LoyaltyDecision\" <> 'Accrued' OR (\"LoyaltyPointsSnapshot\" IS NOT NULL AND \"LoyaltyPointsSnapshot\" > 0)))");
+
+                            t.HasCheckConstraint("ck_customer_memberships_loyalty_snapshot_range", "\"LoyaltyPointsSnapshot\" IS NULL OR \"LoyaltyPointsSnapshot\" >= 0");
 
                             t.HasCheckConstraint("ck_customer_memberships_price_non_negative", "\"Price\" >= 0");
                         });
@@ -2419,6 +2684,88 @@ namespace Barbershop.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("ImageMediaAssetId")
                         .OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyAdjustment", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Customers.CustomerProfile", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("PerformedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyDebt", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Customers.CustomerProfile", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Customers.CustomerProfile", null)
+                        .WithMany()
+                        .HasForeignKey("OriginCustomerId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Loyalty.LoyaltyDebt", null)
+                        .WithMany()
+                        .HasForeignKey("OriginDebtId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyLot", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Customers.CustomerProfile", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Customers.CustomerProfile", null)
+                        .WithMany()
+                        .HasForeignKey("OriginCustomerId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Loyalty.LoyaltyLot", null)
+                        .WithMany()
+                        .HasForeignKey("OriginLotId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyMovement", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Loyalty.LoyaltyAdjustment", null)
+                        .WithMany()
+                        .HasForeignKey("AdjustmentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Customers.CustomerProfile", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Loyalty.LoyaltyDebt", null)
+                        .WithMany()
+                        .HasForeignKey("DebtId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Loyalty.LoyaltyLot", null)
+                        .WithMany()
+                        .HasForeignKey("LotId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("PerformedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Media.MediaAsset", b =>

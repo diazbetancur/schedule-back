@@ -41,6 +41,8 @@ public sealed record ServiceRecordApprovalView(
 /// <c>SuggestedCustomerId</c>: for a pending record without customer registered from an appointment booked by an app
 /// account, the profile now linked to that account (it may have been created or claimed after the registration). A
 /// suggestion through real relations (appointment → account → linked profile); the reviewer still decides.
+/// <c>LoyaltyAccrualStatus</c>, only for approved records marked to accrue: "Credited" when its points are in the
+/// wallet, "PredatesWallet" when it was approved before the wallet existed (no retroactive accrual).
 /// </summary>
 public sealed record ServiceRecordView(
     Guid Id,
@@ -63,7 +65,8 @@ public sealed record ServiceRecordView(
     string? RejectedByName,
     uint Version,
     Guid? SuggestedCustomerId = null,
-    string? SuggestedCustomerName = null);
+    string? SuggestedCustomerName = null,
+    string? LoyaltyAccrualStatus = null);
 
 /// <summary>
 /// Confirms a pending record. Service, professional, customer and date may be corrected; the registered values are

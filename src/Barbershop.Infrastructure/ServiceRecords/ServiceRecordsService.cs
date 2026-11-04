@@ -8,6 +8,7 @@ using Barbershop.Domain.Loyalty;
 using Barbershop.Domain.Memberships;
 using Barbershop.Domain.ServiceRecords;
 using Barbershop.Domain.Staff;
+using Barbershop.Infrastructure.Loyalty;
 using Barbershop.Infrastructure.Memberships;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -36,12 +37,14 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
     private readonly AppDbContext _dbContext;
     private readonly MembershipLedgerService _ledger;
     private readonly TimeProvider _timeProvider;
+    private readonly LoyaltyWalletService _wallet;
 
     public ServiceRecordsService(AppDbContext dbContext, MembershipLedgerService ledger, TimeProvider timeProvider)
     {
         _dbContext = dbContext;
         _ledger = ledger;
         _timeProvider = timeProvider;
+        _wallet = new LoyaltyWalletService(dbContext, timeProvider);
     }
 
     // ── Professional ────────────────────────────────────────────────────────────────────────────
@@ -516,7 +519,20 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             }
 
             var approval = await BuildApprovalAsync(currentUserId, record, operationType, request, cancellationToken);
-            record.Approve(approval, currentUserId, _timeProvider.GetUtcNow().UtcDateTime);
+            var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+            record.Approve(approval, currentUserId, utcNow);
+
+            // A paid service marked to accrue credits its points in the same transaction (ADR-0014): the record id
+            // is the source, so a retried approval never credits twice. Lock order: record → customer profile.
+            if (approval.OperationType == ServiceRecordOperationType.Paid
+                && approval.LoyaltyPointsSnapshot is > 0
+                && approval.CustomerId is { } customerId)
+            {
+                await _wallet.AccrueInCurrentTransactionAsync(
+                    customerId, LoyaltySourceType.ServiceRecord, record.Id, approval.LoyaltyPointsSnapshot.Value,
+                    currentUserId, utcNow, cancellationToken);
+            }
+
             await _dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
@@ -880,6 +896,19 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                 .Where(customer => bookingUserIds.Contains(customer.UserId) && customer.MergedIntoCustomerId == null)
                 .ToDictionaryAsync(customer => customer.UserId!.Value, customer => new { customer.Id, customer.FullName }, cancellationToken);
 
+        // Approved records marked to accrue: credited (original lot exists) or approved before the wallet existed.
+        var accruingIds = records
+            .Where(record => record.Status == ServiceRecordStatus.Approved && record.AccruesLoyaltyPoints)
+            .Select(record => record.Id)
+            .ToArray();
+        var creditedIds = accruingIds.Length == 0
+            ? []
+            : (await _dbContext.LoyaltyLots.AsNoTracking()
+                .Where(lot => lot.SourceType == LoyaltySourceType.ServiceRecord && lot.OriginLotId == null && accruingIds.Contains(lot.SourceId))
+                .Select(lot => lot.SourceId)
+                .ToListAsync(cancellationToken))
+            .ToHashSet();
+
         return records.Select(record =>
         {
             var suggestion = record.Status == ServiceRecordStatus.Pending
@@ -934,7 +963,10 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                 record.RejectedByUserId is { } rejectedBy ? userNames.GetValueOrDefault(rejectedBy) : null,
                 record.Version,
                 suggestion?.Id,
-                suggestion?.FullName);
+                suggestion?.FullName,
+                record.Status == ServiceRecordStatus.Approved && record.AccruesLoyaltyPoints
+                    ? creditedIds.Contains(record.Id) ? "Credited" : "PredatesWallet"
+                    : null);
         }).ToArray();
     }
 }

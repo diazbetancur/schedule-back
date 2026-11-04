@@ -370,6 +370,43 @@ public sealed class ServiceRecordsServiceTests : IDisposable
   }
 
   [Fact]
+  public async Task ApprovingAPaidServiceThatAccrues_CreditsItsSnapshotOnce_WithTheValidityOfTheAccrualDay()
+  {
+    await EnableLoyaltyAsync();
+    var customer = await CreateCustomerAsync();
+    var record = (await RegisterAsync()).Single();
+    var request = Approve(record, "Paid", chargedAmount: 25000, customerId: customer.Id, accrues: true);
+
+    var approved = await _service.ApproveAsync(_admin.Id, record.Id, request);
+    var retried = await _service.ApproveAsync(_admin.Id, record.Id, request);
+
+    Assert.Equal(("Credited", "Credited"), (approved.LoyaltyAccrualStatus, retried.LoyaltyAccrualStatus));
+    var lot = await _dbContext.LoyaltyLots.SingleAsync();
+    Assert.Equal((customer.Id, LoyaltySourceType.ServiceRecord, record.Id, 10, 10), (lot.CustomerId, lot.SourceType, lot.SourceId, lot.InitialPoints, lot.RemainingPoints));
+    var accruedOn = DateOnly.FromDateTime(BogotaClock.ToLocal(lot.AccruedAt));
+    Assert.Equal((accruedOn, 365, accruedOn.AddDays(364)), (lot.AccruedOn, lot.ValidityDays, lot.ExpiresOn));
+    var movement = await _dbContext.LoyaltyMovements.SingleAsync();
+    Assert.Equal((LoyaltyMovementType.Accrual, 10, lot.Id, _admin.Id), (movement.Type, movement.Points, movement.LotId!.Value, movement.PerformedByUserId!.Value));
+  }
+
+  [Fact]
+  public async Task ARecordApprovedBeforeTheWallet_IsShownAsNotCredited_AndIsNeverCreditedRetroactively()
+  {
+    await EnableLoyaltyAsync();
+    var customer = await CreateCustomerAsync();
+    var record = (await RegisterAsync()).Single();
+    await _service.ApproveAsync(_admin.Id, record.Id, Approve(record, "Paid", chargedAmount: 25000, customerId: customer.Id, accrues: true));
+
+    // As if it had been approved before stage 4: marked to accrue, but no lot.
+    _dbContext.LoyaltyMovements.RemoveRange(_dbContext.LoyaltyMovements);
+    _dbContext.LoyaltyLots.RemoveRange(_dbContext.LoyaltyLots);
+    await _dbContext.SaveChangesAsync();
+
+    Assert.Equal("PredatesWallet", (await _service.GetByIdAsync(record.Id)).LoyaltyAccrualStatus);
+    Assert.Equal(0, await _dbContext.LoyaltyLots.CountAsync());
+  }
+
+  [Fact]
   public async Task Points_AreRefused_ForAnythingButAnEligiblePaidService()
   {
     await EnableLoyaltyAsync();

@@ -2,6 +2,7 @@ using Barbershop.Application.Customer;
 using Barbershop.Application.Customers.Admin;
 using Barbershop.Application.Customers.Claims;
 using Barbershop.Application.Email;
+using Barbershop.Application.Loyalty.Wallet;
 using Barbershop.Application.Finance.Admin;
 using Barbershop.Application.Landing;
 using Barbershop.Application.Loyalty.Admin;
@@ -128,6 +129,9 @@ public static class DependencyInjection
         services.AddOptions<NotificationWorkerOptions>()
             .Bind(configuration.GetSection(NotificationWorkerOptions.SectionName));
         services.AddHostedService<NotificationBackgroundWorker>();
+        services.AddOptions<LoyaltyExpirationWorkerOptions>()
+            .Bind(configuration.GetSection(LoyaltyExpirationWorkerOptions.SectionName));
+        services.AddHostedService<LoyaltyExpirationBackgroundWorker>();
         services.AddScoped<IUserNotificationsService, UserNotificationsService>();
         services.TryAddScoped<ICurrentUserAccessor, NullCurrentUserAccessor>();
         services.AddScoped<IAppointmentNotificationService, AppointmentNotificationService>();
@@ -149,6 +153,9 @@ public static class DependencyInjection
         services.AddScoped<IAdminCustomerClaimsService>(serviceProvider => serviceProvider.GetRequiredService<CustomerClaimsService>());
         services.AddScoped<IAdminMembershipPlansService, MembershipPlanManagementService>();
         services.AddScoped<IAdminLoyaltySettingsService, LoyaltySettingsService>();
+        services.AddScoped<LoyaltyWalletService>();
+        services.AddScoped<IMyLoyaltyService>(serviceProvider => serviceProvider.GetRequiredService<LoyaltyWalletService>());
+        services.AddScoped<IAdminCustomerLoyaltyService>(serviceProvider => serviceProvider.GetRequiredService<LoyaltyWalletService>());
         services.AddScoped<IAdminMembershipsService, MembershipSalesService>();
         services.AddScoped<MembershipLedgerService>();
         services.AddScoped<IAdminMembershipLedgerService>(serviceProvider => serviceProvider.GetRequiredService<MembershipLedgerService>());

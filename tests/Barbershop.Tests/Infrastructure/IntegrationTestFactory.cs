@@ -32,6 +32,8 @@ public sealed class IntegrationTestFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("SeedAdmin__Enabled", "false");
         // The background notification worker would race ResetDatabaseAsync (which drops the database).
         Environment.SetEnvironmentVariable("NotificationWorker__Enabled", "false");
+        // Same for the loyalty expiration job; LoyaltyExpirationWorkerPostgresTests enables it on purpose.
+        Environment.SetEnvironmentVariable("LoyaltyExpirationWorker__Enabled", "false");
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)

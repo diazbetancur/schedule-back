@@ -14,6 +14,8 @@ using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 
+using Barbershop.Tests.Infrastructure;
+
 namespace Barbershop.Tests.Features.Memberships;
 
 public sealed class MembershipSalesServiceTests : IDisposable
@@ -140,7 +142,7 @@ public sealed class MembershipSalesServiceTests : IDisposable
     var target = await CreateCustomerAsync("Destino");
     var source = await CreateCustomerAsync("Origen");
     var plan = await CreatePoolPlanAsync();
-    await _customers.MergeAsync(_adminId, target.Id, new CustomerMergeRequest(source.Id));
+    await _customers.MergeWithPreviewAsync(_adminId, target.Id, source.Id);
 
     await Assert.ThrowsAsync<ConflictException>(() =>
         _service.SellAsync(_adminId, source.Id, new MembershipSaleRequest(plan.Id, _today)));
@@ -522,7 +524,7 @@ public sealed class MembershipSalesServiceTests : IDisposable
     Assert.Contains(preview.Warnings, warning => warning.Contains("1 membresía(s)"));
     Assert.Contains(preview.Warnings, warning => warning.Contains("primera compra") && warning.Contains("Oro"));
 
-    await _customers.MergeAsync(_adminId, target.Id, new CustomerMergeRequest(source.Id));
+    await _customers.MergeWithPreviewAsync(_adminId, target.Id, source.Id);
 
     Assert.Empty(await _service.GetCustomerMembershipsAsync(source.Id));
     Assert.Equal(2, (await _service.GetCustomerMembershipsAsync(target.Id)).Count);

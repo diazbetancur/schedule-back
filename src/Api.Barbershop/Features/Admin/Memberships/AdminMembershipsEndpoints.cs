@@ -64,7 +64,10 @@ public static class AdminMembershipsEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
+        // The first link is the payment evidence that credits the membership's points (ADR-0014), so it also needs
+        // the critical memberships.payments.confirm permission, checked against the database. Unlinking is unchanged.
         memberships.MapPut("/{membershipId:guid}/income-link", LinkIncomeAsync)
+            .RequireAuthorization(PermissionPolicyNames.MembershipPaymentsConfirm)
             .WithName("LinkAdminMembershipIncome")
             .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)

@@ -100,7 +100,7 @@ public sealed class AdminCustomersHttpIntegrationTests
     Assert.Equal(customerAccount.UserId, preview.AccountToTransfer!.UserId);
 
     using var mergeResponse = await context.Client.PostAsJsonAsync(
-        $"/api/v1/admin/customers/{target.Id}/merge", new CustomerMergeRequest(source.Id));
+        $"/api/v1/admin/customers/{target.Id}/merge", new CustomerMergeRequest(source.Id, preview.PreviewToken));
     Assert.Equal(HttpStatusCode.OK, mergeResponse.StatusCode);
     var merged = (await mergeResponse.Content.ReadFromJsonAsync<CustomerDetailView>())!;
     Assert.Equal(customerAccount.UserId, merged.LinkedAccount!.UserId);

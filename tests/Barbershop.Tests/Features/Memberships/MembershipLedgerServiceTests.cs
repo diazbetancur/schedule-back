@@ -14,6 +14,8 @@ using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 
+using Barbershop.Tests.Infrastructure;
+
 namespace Barbershop.Tests.Features.Memberships;
 
 public sealed class MembershipLedgerServiceTests : IDisposable
@@ -387,7 +389,7 @@ public sealed class MembershipLedgerServiceTests : IDisposable
     var membership = await _memberships.SellAsync(_adminId, source.Id, new MembershipSaleRequest(plan.Id, _today, ActivateNow: true));
     var consumed = await ConsumeAsync(membership.Id, _haircut.Id, 2);
 
-    await _customers.MergeAsync(_adminId, target.Id, new CustomerMergeRequest(source.Id));
+    await _customers.MergeWithPreviewAsync(_adminId, target.Id, source.Id);
 
     var moved = await _memberships.GetByIdAsync(membership.Id);
     Assert.Equal(target.Id, moved.CustomerId);

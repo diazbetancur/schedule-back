@@ -17,6 +17,8 @@ using Barbershop.Infrastructure.ServiceRecords;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 
+using Barbershop.Tests.Infrastructure;
+
 namespace Barbershop.Tests.Features.Customers;
 
 /// <summary>Own profile, claims and their review. Locks and real concurrency are in CustomerClaimsHttpIntegrationTests.</summary>
@@ -214,7 +216,7 @@ public sealed class CustomerClaimsServiceTests : IDisposable
     await _customers.LinkAccountAsync(_admin.Id, linked.Id, new CustomerLinkAccountRequest(owner.Id, true));
     var merged = await _customers.CreateAsync(_admin.Id, new CustomerCreateRequest("Fusionado", "3002222222", "fusion@example.com"));
     var survivor = await _customers.CreateAsync(_admin.Id, new CustomerCreateRequest("Superviviente", "3003333333", "super@example.com"));
-    await _customers.MergeAsync(_admin.Id, survivor.Id, new CustomerMergeRequest(merged.Id));
+    await _customers.MergeWithPreviewAsync(_admin.Id, survivor.Id, merged.Id);
 
     var user = await AddCustomerAccountAsync("Reclamante");
     var claim = await _claims.GetByIdAsync((await SubmitClaimAsync(user)).Id);
@@ -315,7 +317,7 @@ public sealed class CustomerClaimsServiceTests : IDisposable
     var survivor = await _customers.CreateAsync(_admin.Id, new CustomerCreateRequest("Carla Pérez", "3009990000", "carla.p@example.com"));
     var customersBefore = await _dbContext.Customers.CountAsync();
 
-    await _customers.MergeAsync(_admin.Id, survivor.Id, new CustomerMergeRequest(historical.Id));
+    await _customers.MergeWithPreviewAsync(_admin.Id, survivor.Id, historical.Id);
 
     // Nothing deleted; the membership follows the survivor and keeps who bought it; the account moves with it.
     Assert.Equal(customersBefore, await _dbContext.Customers.CountAsync());

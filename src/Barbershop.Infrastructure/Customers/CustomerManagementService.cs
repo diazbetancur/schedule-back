@@ -4,6 +4,7 @@ using Barbershop.Application.Customers.Admin;
 using Barbershop.Domain.Customers;
 using Barbershop.Domain.Memberships;
 using Barbershop.Domain.Users;
+using Barbershop.Infrastructure.Loyalty;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -28,11 +29,13 @@ internal sealed class CustomerManagementService : IAdminCustomersService
 
     private readonly AppDbContext _dbContext;
     private readonly TimeProvider _timeProvider;
+    private readonly LoyaltyWalletService _wallet;
 
     public CustomerManagementService(AppDbContext dbContext, TimeProvider timeProvider)
     {
         _dbContext = dbContext;
         _timeProvider = timeProvider;
+        _wallet = new LoyaltyWalletService(dbContext, timeProvider);
     }
 
     public async Task<IReadOnlyList<CustomerListItem>> SearchAsync(string? query, CancellationToken cancellationToken = default)
@@ -416,6 +419,27 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         CustomerMergeRequest request,
         CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(request.PreviewToken))
+        {
+            throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["previewToken"] = ["Revisa la vista previa de la fusión antes de confirmarla."]
+            });
+        }
+
+        // Lock order: customer profiles (ascending id) → the source's memberships, as linking and annulling do. The
+        // preview is rebuilt under those locks: if anything it showed changed, the merge is refused (ADR-0013 D7).
+        // Two saves inside one transaction: the source must leave the "live linked profiles" unique
+        // index before the target takes over its account, and PostgreSQL checks that index per statement.
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await _wallet.LockCustomersAsync([targetCustomerId, request.SourceCustomerId], cancellationToken);
+        if (_dbContext.Database.IsNpgsql())
+        {
+            await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT 1 FROM public.customer_memberships WHERE \"CustomerId\" = {request.SourceCustomerId} ORDER BY \"Id\" FOR UPDATE",
+                cancellationToken);
+        }
+
         var target = await LoadAsync(targetCustomerId, cancellationToken);
         var source = await LoadAsync(request.SourceCustomerId, cancellationToken);
 
@@ -425,11 +449,13 @@ internal sealed class CustomerManagementService : IAdminCustomersService
             throw new ConflictException(preview.BlockingReasons[0]);
         }
 
-        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        if (!string.Equals(preview.PreviewToken, request.PreviewToken, StringComparison.Ordinal))
+        {
+            throw new ConflictException(
+                "Los clientes cambiaron desde la vista previa (puntos, deuda, lotes, membresías o cuentas). Genera una vista previa nueva antes de fusionar.");
+        }
 
-        // Two saves inside one transaction: the source must leave the "live linked profiles" unique
-        // index before the target takes over its account, and PostgreSQL checks that index per statement.
-        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
 
         Guid? transferredUserId = source.UserId is not null && target.UserId is null
             ? source.UnlinkAccount(utcNow)
@@ -462,6 +488,9 @@ internal sealed class CustomerManagementService : IAdminCustomersService
 
         _dbContext.CustomerEvents.Add(new CustomerEvent(
             target.Id, CustomerEventType.MergedFrom, currentUserId, utcNow, userId: transferredUserId, relatedCustomerId: source.Id));
+
+        // Usable points and outstanding debt follow too, with new movements; expired points stay behind.
+        await _wallet.TransferForMergeInCurrentTransactionAsync(source.Id, target.Id, currentUserId, utcNow, cancellationToken);
         await SaveChangesAsync(cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
@@ -504,10 +533,10 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         {
             warnings.Add("Se conservan el nombre, teléfono y correo del cliente destino. El cliente origen quedará marcado como fusionado y no se elimina.");
 
-            var sourceMemberships = await _dbContext.CustomerMemberships.CountAsync(membership => membership.CustomerId == source.Id, cancellationToken);
-            if (sourceMemberships > 0)
+            var sourceMembershipCount = await _dbContext.CustomerMemberships.CountAsync(membership => membership.CustomerId == source.Id, cancellationToken);
+            if (sourceMembershipCount > 0)
             {
-                warnings.Add($"{sourceMemberships} membresía(s) del cliente origen pasarán al cliente destino, con sus saldos, obsequios e historial.");
+                warnings.Add($"{sourceMembershipCount} membresía(s) del cliente origen pasarán al cliente destino, con sus saldos, obsequios e historial.");
             }
 
             // Both profiles may already have received a first-purchase gift for the same plan; both are kept.
@@ -529,13 +558,35 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         var users = await LoadUsersAsync(LinkUserIds(target).Concat(LinkUserIds(source)), cancellationToken);
         var sourceItem = MapListItem(source, users);
 
+        // Points (ADR-0013 D7). Pending redemptions will block the merge here once redemptions exist (D5, stage 5).
+        var (loyalty, walletFingerprint) = await _wallet.BuildMergePreviewAsync(source.Id, target.Id, cancellationToken);
+        if (loyalty.SourceExpiredPointsNotMoved > 0)
+        {
+            warnings.Add($"{loyalty.SourceExpiredPointsNotMoved} punto(s) vencido(s) del cliente origen no se traspasan.");
+        }
+
+        // Everything the admin saw: both profiles (versions, links, merge state), the source's memberships and points.
+        var sourceMemberships = await _dbContext.CustomerMemberships.AsNoTracking()
+            .Where(membership => membership.CustomerId == source.Id)
+            .OrderBy(membership => membership.Id)
+            .Select(membership => membership.Id)
+            .ToListAsync(cancellationToken);
+        var fingerprint = string.Join(
+            '|',
+            $"T{target.Id}:{target.Version}:{target.UserId}:{target.MergedIntoCustomerId}",
+            $"S{source.Id}:{source.Version}:{source.UserId}:{source.MergedIntoCustomerId}",
+            $"M{string.Join(',', sourceMemberships)}",
+            walletFingerprint);
+
         return new CustomerMergePreview(
             MapListItem(target, users),
             sourceItem,
             blockingReasons.Count == 0,
             blockingReasons,
             warnings,
-            transfersAccount ? sourceItem.LinkedAccount : null);
+            transfersAccount ? sourceItem.LinkedAccount : null,
+            loyalty,
+            LoyaltyWalletService.HashToken(fingerprint));
     }
 
     private static void EnsureIdentityVerified(bool identityVerified)

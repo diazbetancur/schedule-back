@@ -23,6 +23,15 @@ internal sealed class CustomerMembershipConfiguration : IEntityTypeConfiguration
       tableBuilder.HasCheckConstraint(
           "ck_customer_memberships_annulled_has_audit",
           "\"Status\" <> 'Annulled' OR (\"AnnulledAt\" IS NOT NULL AND \"AnnulledByUserId\" IS NOT NULL AND \"AnnulmentReason\" IS NOT NULL)");
+      tableBuilder.HasCheckConstraint(
+          "ck_customer_memberships_loyalty_snapshot_range",
+          "\"LoyaltyPointsSnapshot\" IS NULL OR \"LoyaltyPointsSnapshot\" >= 0");
+      // A decision always has its date, and only a membership with a positive snapshot can have accrued.
+      tableBuilder.HasCheckConstraint(
+          "ck_customer_memberships_loyalty_decision_shape",
+          "(\"LoyaltyDecision\" IS NULL AND \"LoyaltyDecidedAt\" IS NULL) "
+          + "OR (\"LoyaltyDecision\" IS NOT NULL AND \"LoyaltyDecidedAt\" IS NOT NULL AND (\"LoyaltyDecision\" <> 'Accrued' "
+          + "OR (\"LoyaltyPointsSnapshot\" IS NOT NULL AND \"LoyaltyPointsSnapshot\" > 0)))");
     });
 
     builder.HasKey(x => x.Id);
@@ -42,6 +51,8 @@ internal sealed class CustomerMembershipConfiguration : IEntityTypeConfiguration
     builder.Property(x => x.AnnulmentReason).HasMaxLength(500);
     builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
     builder.Property(x => x.UpdatedAt).HasColumnType("timestamp with time zone");
+    builder.Property(x => x.LoyaltyDecision).HasConversion<string>().HasMaxLength(32);
+    builder.Property(x => x.LoyaltyDecidedAt).HasColumnType("timestamp with time zone");
     builder.Property(x => x.Version).IsRowVersion();
 
     // First-purchase checks look up a customer's memberships of one plan.

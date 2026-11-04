@@ -7,6 +7,8 @@ using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 
+using Barbershop.Tests.Infrastructure;
+
 namespace Barbershop.Tests.Features.Customers;
 
 public sealed class CustomerManagementServiceTests : IDisposable
@@ -75,7 +77,7 @@ public sealed class CustomerManagementServiceTests : IDisposable
     Assert.Single(await _service.SearchAsync("ANA@EXAMPLE"));
     Assert.Equal(2, (await _service.SearchAsync("3001234567")).Count);
 
-    await _service.MergeAsync(_adminId, carlos.Id, new CustomerMergeRequest(duplicate.Id));
+    await _service.MergeWithPreviewAsync(_adminId, carlos.Id, duplicate.Id);
 
     var afterMerge = await _service.SearchAsync("carlos");
     Assert.Equal(carlos.Id, Assert.Single(afterMerge).Id);
@@ -122,7 +124,7 @@ public sealed class CustomerManagementServiceTests : IDisposable
     Assert.Equal("Carlos Andrés Pérez", updated.FullName);
     Assert.Equal("carlos.andres@example.com", updated.Email);
 
-    await _service.MergeAsync(_adminId, target.Id, new CustomerMergeRequest(source.Id));
+    await _service.MergeWithPreviewAsync(_adminId, target.Id, source.Id);
 
     await Assert.ThrowsAsync<ConflictException>(() =>
         _service.UpdateAsync(source.Id, new CustomerUpdateRequest("Otro", "3001234567", "otro@example.com")));
@@ -274,7 +276,7 @@ public sealed class CustomerManagementServiceTests : IDisposable
     Assert.True(preview.CanMerge);
     Assert.Equal(user.Id, preview.AccountToTransfer!.UserId);
 
-    var merged = await _service.MergeAsync(_adminId, target.Id, new CustomerMergeRequest(source.Id));
+    var merged = await _service.MergeWithPreviewAsync(_adminId, target.Id, source.Id);
 
     Assert.Equal(user.Id, merged.LinkedAccount!.UserId);
     var mergedFrom = Assert.Single(merged.Events, customerEvent => customerEvent.Type == nameof(CustomerEventType.MergedFrom));
@@ -299,7 +301,7 @@ public sealed class CustomerManagementServiceTests : IDisposable
     var source = await CreateCustomerAsync("Origen", "3001234567", "origen@example.com");
     await _service.LinkAccountAsync(_adminId, target.Id, new CustomerLinkAccountRequest(user.Id, true));
 
-    var merged = await _service.MergeAsync(_adminId, target.Id, new CustomerMergeRequest(source.Id));
+    var merged = await _service.MergeWithPreviewAsync(_adminId, target.Id, source.Id);
 
     Assert.Equal(user.Id, merged.LinkedAccount!.UserId);
     Assert.Null(Assert.Single(merged.Events, customerEvent => customerEvent.Type == nameof(CustomerEventType.MergedFrom)).UserId);
@@ -320,7 +322,7 @@ public sealed class CustomerManagementServiceTests : IDisposable
     Assert.NotEmpty(preview.BlockingReasons);
 
     await Assert.ThrowsAsync<ConflictException>(() =>
-        _service.MergeAsync(_adminId, target.Id, new CustomerMergeRequest(source.Id)));
+        _service.MergeWithPreviewAsync(_adminId, target.Id, source.Id));
     Assert.Null((await _service.GetByIdAsync(source.Id)).MergedIntoCustomerId);
   }
 
@@ -332,14 +334,14 @@ public sealed class CustomerManagementServiceTests : IDisposable
     var other = await CreateCustomerAsync("Otro", "3001234567", "otro@example.com");
 
     await Assert.ThrowsAsync<ConflictException>(() =>
-        _service.MergeAsync(_adminId, target.Id, new CustomerMergeRequest(target.Id)));
+        _service.MergeWithPreviewAsync(_adminId, target.Id, target.Id));
 
-    await _service.MergeAsync(_adminId, target.Id, new CustomerMergeRequest(source.Id));
+    await _service.MergeWithPreviewAsync(_adminId, target.Id, source.Id);
 
     await Assert.ThrowsAsync<ConflictException>(() =>
-        _service.MergeAsync(_adminId, other.Id, new CustomerMergeRequest(source.Id)));
+        _service.MergeWithPreviewAsync(_adminId, other.Id, source.Id));
     await Assert.ThrowsAsync<ConflictException>(() =>
-        _service.MergeAsync(_adminId, source.Id, new CustomerMergeRequest(other.Id)));
+        _service.MergeWithPreviewAsync(_adminId, source.Id, other.Id));
   }
 
   [Fact]

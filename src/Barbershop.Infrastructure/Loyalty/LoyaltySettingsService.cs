@@ -40,7 +40,8 @@ internal sealed class LoyaltySettingsService : IAdminLoyaltySettingsService
         }
 
         var change = settings.Update(
-            request.IsEnabled, request.PointsValidityDays, changedByUserId, _timeProvider.GetUtcNow().UtcDateTime);
+            request.IsEnabled, request.PointsValidityDays, changedByUserId, _timeProvider.GetUtcNow().UtcDateTime,
+            request.RedemptionApprovalDays, request.RedemptionDeliveryDays);
         if (change is null)
         {
             return await MapAsync(settings, cancellationToken);
@@ -80,7 +81,11 @@ internal sealed class LoyaltySettingsService : IAdminLoyaltySettingsService
                 change.PreviousIsEnabled,
                 change.NewIsEnabled,
                 change.PreviousPointsValidityDays,
-                change.NewPointsValidityDays))
+                change.NewPointsValidityDays,
+                change.PreviousRedemptionApprovalDays,
+                change.NewRedemptionApprovalDays,
+                change.PreviousRedemptionDeliveryDays,
+                change.NewRedemptionDeliveryDays))
             .ToArray();
     }
 
@@ -94,6 +99,19 @@ internal sealed class LoyaltySettingsService : IAdminLoyaltySettingsService
             [
                 $"La vigencia de los puntos debe ser un número entero de días entre {LoyaltySettings.MinPointsValidityDays} y {LoyaltySettings.MaxPointsValidityDays}."
             ];
+        }
+
+        // Only requests made afterwards take new deadlines: each redemption keeps the ones applied (ADR-0015 R7).
+        if (request.RedemptionApprovalDays is < LoyaltySettings.MinRedemptionDays or > LoyaltySettings.MaxRedemptionDays)
+        {
+            errors["redemptionApprovalDays"] =
+                [$"El plazo para aprobar canjes debe ser un número entero de días entre {LoyaltySettings.MinRedemptionDays} y {LoyaltySettings.MaxRedemptionDays}."];
+        }
+
+        if (request.RedemptionDeliveryDays is < LoyaltySettings.MinRedemptionDays or > LoyaltySettings.MaxRedemptionDays)
+        {
+            errors["redemptionDeliveryDays"] =
+                [$"El plazo para entregar canjes debe ser un número entero de días entre {LoyaltySettings.MinRedemptionDays} y {LoyaltySettings.MaxRedemptionDays}."];
         }
 
         if (request.Version is null)
@@ -126,7 +144,8 @@ internal sealed class LoyaltySettingsService : IAdminLoyaltySettingsService
         }
 
         return new LoyaltySettingsView(
-            settings.IsEnabled, settings.PointsValidityDays, settings.Version, settings.UpdatedAt, updatedByName);
+            settings.IsEnabled, settings.PointsValidityDays, settings.Version, settings.UpdatedAt, updatedByName,
+            settings.RedemptionApprovalDays, settings.RedemptionDeliveryDays);
     }
 
     private async Task<Dictionary<Guid, string>> LoadUserNamesAsync(IEnumerable<Guid> userIds, CancellationToken cancellationToken)

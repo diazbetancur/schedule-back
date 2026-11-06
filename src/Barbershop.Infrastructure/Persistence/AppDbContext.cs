@@ -66,6 +66,10 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<LoyaltyDebt> LoyaltyDebts => Set<LoyaltyDebt>();
     public DbSet<LoyaltyAdjustment> LoyaltyAdjustments => Set<LoyaltyAdjustment>();
     public DbSet<LoyaltyMovement> LoyaltyMovements => Set<LoyaltyMovement>();
+    public DbSet<LoyaltyReward> LoyaltyRewards => Set<LoyaltyReward>();
+    public DbSet<LoyaltyRewardChange> LoyaltyRewardChanges => Set<LoyaltyRewardChange>();
+    public DbSet<LoyaltyRedemption> LoyaltyRedemptions => Set<LoyaltyRedemption>();
+    public DbSet<LoyaltyRedemptionAllocation> LoyaltyRedemptionAllocations => Set<LoyaltyRedemptionAllocation>();
     public DbSet<ServiceRecord> ServiceRecords => Set<ServiceRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

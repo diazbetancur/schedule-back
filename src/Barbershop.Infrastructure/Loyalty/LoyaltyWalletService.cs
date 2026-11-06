@@ -4,6 +4,7 @@ using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Loyalty.Wallet;
 using Barbershop.Domain.Common;
 using Barbershop.Domain.Loyalty;
+using Barbershop.Domain.Memberships;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -13,8 +14,9 @@ namespace Barbershop.Infrastructure.Loyalty;
 /// <summary>
 /// The points wallet (ADR-0013, ADR-0014). Movements are append-only history; the remaining points of a lot and the
 /// outstanding points of a debt are projections updated in the same transaction as the movement that changes them.
-/// Every change to a wallet first takes the lock of its customer profile. Lock order across the app: income →
-/// customer profiles (ascending id) → memberships; lots and debts are covered by their profile's lock.
+/// Every change to a wallet first takes the lock of its customer profile. Global lock order (ADR-0014, ADR-0015):
+/// service record → income → customer profiles (ascending id) → redemptions → memberships; lots, debts, reservations
+/// and redemptions of a profile are only changed under that profile's lock.
 /// </summary>
 internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLoyaltyService
 {
@@ -236,7 +238,7 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
     /// The common rule (ADR-0013 D4): outstanding debts, oldest first by <see cref="LoyaltyDebt.IncurredAt"/>, are settled with usable points, soonest expiry
     /// first. Each settlement is one movement against one debt and one lot, and neither can go below zero.
     /// </summary>
-    private async Task SettleDebtsAsync(Guid customerId, Guid? performedByUserId, DateTime utcNow, CancellationToken cancellationToken)
+    internal async Task SettleDebtsAsync(Guid customerId, Guid? performedByUserId, DateTime utcNow, CancellationToken cancellationToken)
     {
         var debts = (await TrackedAsync(_dbContext.LoyaltyDebts, debt => debt.CustomerId == customerId && debt.OutstandingPoints > 0, cancellationToken))
             .Where(debt => debt.OutstandingPoints > 0)
@@ -270,6 +272,133 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
                     lotId: lot.Id, debtId: debt.Id, performedByUserId: performedByUserId));
             }
         }
+    }
+
+    // ── Redemption reservations (ADR-0015) ─────────────────────────────────────────────────────
+
+    /// <summary>Usable free points minus outstanding debt (R9), including changes not saved yet.</summary>
+    internal async Task<int> AvailablePointsAsync(Guid customerId, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        var usable = (await TrackedUsableLotsAsync(customerId, utcNow, cancellationToken)).Sum(lot => lot.RemainingPoints);
+        var owed = (await TrackedAsync(_dbContext.LoyaltyDebts, debt => debt.CustomerId == customerId && debt.OutstandingPoints > 0, cancellationToken))
+            .Sum(debt => debt.OutstandingPoints);
+        return usable - owed;
+    }
+
+    /// <summary>
+    /// Reserves <paramref name="points"/> for a redemption from the usable lots of the profile the caller locked,
+    /// soonest expiry first, recording how many came from each lot. The available balance (usable minus debt) must
+    /// cover them; reserved points leave the free balance, so the expiration job never takes them.
+    /// </summary>
+    internal async Task ReserveInCurrentTransactionAsync(
+        Guid lockedCustomerId, Guid redemptionId, int points, Guid performedByUserId, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        EnsureTransaction();
+        var available = await AvailablePointsAsync(lockedCustomerId, utcNow, cancellationToken);
+        if (points > available)
+        {
+            throw new ConflictException(
+                $"No hay puntos suficientes: la recompensa cuesta {points} y hay {Math.Max(0, available)} disponible(s).");
+        }
+
+        var pending = points;
+        foreach (var lot in await TrackedUsableLotsAsync(lockedCustomerId, utcNow, cancellationToken))
+        {
+            if (pending == 0)
+            {
+                break;
+            }
+
+            var taken = Math.Min(pending, lot.RemainingPoints);
+            lot.Reserve(taken);
+            pending -= taken;
+            _dbContext.LoyaltyRedemptionAllocations.Add(new LoyaltyRedemptionAllocation(redemptionId, lot.Id, taken));
+            _dbContext.LoyaltyMovements.Add(new LoyaltyMovement(
+                lockedCustomerId, LoyaltyMovementType.RedemptionHold, taken, utcNow,
+                lotId: lot.Id, performedByUserId: performedByUserId, redemptionId: redemptionId));
+        }
+    }
+
+    /// <summary>
+    /// Gives back exactly what the redemption reserved, to the same lots. Points released into a lot already past its
+    /// expiry expire in this same transaction (even if the lot's free balance expired before), and points of a lot
+    /// whose membership was annulled meanwhile are withdrawn: nothing comes back usable that should not. Usable
+    /// points released then settle debts with the common rule. The caller holds the profile lock and makes this
+    /// happen once (the redemption's transition, and a unique index per lot, redemption and movement type).
+    /// </summary>
+    internal async Task ReleaseReservationInCurrentTransactionAsync(
+        Guid lockedCustomerId, Guid redemptionId, Guid? performedByUserId, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        EnsureTransaction();
+        var today = BogotaDate(utcNow);
+        var (allocations, lots) = await LoadReservationAsync(lockedCustomerId, redemptionId, cancellationToken);
+
+        var membershipIds = lots.Values.Where(lot => lot.SourceType == LoyaltySourceType.Membership).Select(lot => lot.SourceId).Distinct().ToArray();
+        var annulled = membershipIds.Length == 0
+            ? new HashSet<Guid>()
+            : (await _dbContext.CustomerMemberships.AsNoTracking()
+                .Where(membership => membershipIds.Contains(membership.Id) && membership.Status == MembershipStatus.Annulled)
+                .Select(membership => membership.Id)
+                .ToListAsync(cancellationToken))
+            .ToHashSet();
+
+        foreach (var allocation in allocations)
+        {
+            var lot = lots[allocation.LotId];
+            lot.Release(allocation.Points);
+            _dbContext.LoyaltyMovements.Add(new LoyaltyMovement(
+                lockedCustomerId, LoyaltyMovementType.RedemptionRelease, allocation.Points, utcNow,
+                lotId: lot.Id, performedByUserId: performedByUserId, redemptionId: redemptionId));
+
+            if (lot.IsExpiredOn(today))
+            {
+                lot.Take(allocation.Points);
+                _dbContext.LoyaltyMovements.Add(new LoyaltyMovement(
+                    lockedCustomerId, LoyaltyMovementType.Expiration, allocation.Points, utcNow, lotId: lot.Id, redemptionId: redemptionId));
+            }
+            else if (lot.SourceType == LoyaltySourceType.Membership && annulled.Contains(lot.SourceId))
+            {
+                lot.Take(allocation.Points);
+                _dbContext.LoyaltyMovements.Add(new LoyaltyMovement(
+                    lockedCustomerId, LoyaltyMovementType.MembershipAnnulmentWithdrawal, allocation.Points, utcNow,
+                    lotId: lot.Id, performedByUserId: performedByUserId, reason: "Membresía anulada mientras los puntos estaban reservados.",
+                    redemptionId: redemptionId));
+            }
+        }
+
+        await SettleDebtsAsync(lockedCustomerId, performedByUserId, utcNow, cancellationToken);
+    }
+
+    /// <summary>A delivery consumes the reservation lot by lot; the free balance is not debited again.</summary>
+    internal async Task ConsumeReservationInCurrentTransactionAsync(
+        Guid lockedCustomerId, Guid redemptionId, Guid performedByUserId, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        EnsureTransaction();
+        var (allocations, lots) = await LoadReservationAsync(lockedCustomerId, redemptionId, cancellationToken);
+        foreach (var allocation in allocations)
+        {
+            lots[allocation.LotId].ConsumeReserved(allocation.Points);
+            _dbContext.LoyaltyMovements.Add(new LoyaltyMovement(
+                lockedCustomerId, LoyaltyMovementType.RedemptionConsumed, allocation.Points, utcNow,
+                lotId: allocation.LotId, performedByUserId: performedByUserId, redemptionId: redemptionId));
+        }
+    }
+
+    private async Task<(IReadOnlyList<LoyaltyRedemptionAllocation> Allocations, Dictionary<Guid, LoyaltyLot> Lots)> LoadReservationAsync(
+        Guid lockedCustomerId, Guid redemptionId, CancellationToken cancellationToken)
+    {
+        var allocations = await TrackedAsync(
+            _dbContext.LoyaltyRedemptionAllocations, allocation => allocation.RedemptionId == redemptionId, cancellationToken);
+        var lotIds = allocations.Select(allocation => allocation.LotId).ToArray();
+        var lots = (await TrackedAsync(_dbContext.LoyaltyLots, lot => lotIds.Contains(lot.Id), cancellationToken))
+            .ToDictionary(lot => lot.Id);
+        if (lots.Values.Any(lot => lot.CustomerId != lockedCustomerId))
+        {
+            // Pending redemptions block merges, so their lots never move; anything else means the data changed under us.
+            throw new ConflictException("Los puntos reservados están en otro perfil. Recarga e intenta de nuevo.");
+        }
+
+        return (allocations.OrderBy(allocation => allocation.LotId).ToList(), lots);
     }
 
     // ── Expiration (daily job) ─────────────────────────────────────────────────────────────────
@@ -409,7 +538,7 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
             lots.Select(lot => new LoyaltyLotView(
                     lot.Id, lot.SourceType.ToString(), lot.SourceId, labels[lot.Id], lot.InitialPoints, lot.RemainingPoints,
                     lot.UsablePointsOn(today), lot.AccruedOn, lot.ValidityDays, lot.ExpiresOn, lot.IsExpiredOn(today),
-                    lot.OriginLotId, lot.OriginCustomerId))
+                    lot.OriginLotId, lot.OriginCustomerId, lot.ReservedPoints))
                 .ToArray(),
             debts.Select(debt => new LoyaltyDebtView(
                     debt.Id, debt.Origin.ToString(), debt.Amount, debt.OutstandingPoints, debt.OriginDebtId, debt.OriginCustomerId, debt.CreatedAt, debt.IncurredAt))
@@ -418,8 +547,19 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
                     movement.Id, movement.Type.ToString(), movement.Points, movement.LotId, movement.DebtId, movement.Reason,
                     movement.RelatedCustomerId,
                     movement.PerformedByUserId is { } userId ? userNames.GetValueOrDefault(userId) : null,
-                    movement.PerformedAt))
-                .ToArray());
+                    movement.PerformedAt,
+                    movement.RedemptionId))
+                .ToArray(),
+            lots.Sum(lot => lot.ReservedPoints),
+            await LoyaltyRedemptionService.MapAsync(
+                _dbContext,
+                await _dbContext.LoyaltyRedemptions.AsNoTracking()
+                    .Where(redemption => redemption.CustomerId == customerId)
+                    .OrderByDescending(redemption => redemption.RequestedAt)
+                    .Take(MaxMovementsListed)
+                    .ToListAsync(cancellationToken),
+                today,
+                cancellationToken));
     }
 
     public async Task<MyLoyaltyView> GetMineAsync(Guid currentUserId, CancellationToken cancellationToken = default)
@@ -435,6 +575,9 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
         }
 
         var today = Today();
+        var reserved = await _dbContext.LoyaltyLots.AsNoTracking()
+            .Where(lot => lot.CustomerId == customerId)
+            .SumAsync(lot => lot.ReservedPoints, cancellationToken);
         var lots = (await _dbContext.LoyaltyLots.AsNoTracking()
                 .Where(lot => lot.CustomerId == customerId && lot.RemainingPoints > 0)
                 .ToListAsync(cancellationToken))
@@ -460,7 +603,8 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
             lots.Where(lot => lot.ExpiresOn <= today.AddDays(ExpiringSoonDays)).Sum(lot => lot.RemainingPoints),
             lots.Count == 0 ? null : lots[0].ExpiresOn,
             lots.Select(lot => new MyLoyaltyLotView(lot.RemainingPoints, lot.AccruedOn, lot.ExpiresOn, labels[lot.Id])).ToArray(),
-            movements.Select(movement => new MyLoyaltyMovementView(movement.Type.ToString(), movement.Points, movement.PerformedAt)).ToArray());
+            movements.Select(movement => new MyLoyaltyMovementView(movement.Type.ToString(), movement.Points, movement.PerformedAt)).ToArray(),
+            reserved);
     }
 
     // ── Manual adjustments ─────────────────────────────────────────────────────────────────────
@@ -624,7 +768,7 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
             .Select(settings => settings.PointsValidityDays)
             .SingleAsync(cancellationToken);
 
-    private async Task<IReadOnlyList<LoyaltyLot>> TrackedUsableLotsAsync(Guid customerId, DateTime utcNow, CancellationToken cancellationToken)
+    internal async Task<IReadOnlyList<LoyaltyLot>> TrackedUsableLotsAsync(Guid customerId, DateTime utcNow, CancellationToken cancellationToken)
     {
         var today = BogotaDate(utcNow);
         return (await TrackedAsync(_dbContext.LoyaltyLots, lot => lot.CustomerId == customerId && lot.RemainingPoints > 0, cancellationToken))
@@ -682,5 +826,5 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
 
     private DateOnly Today() => BogotaDate(_timeProvider.GetUtcNow().UtcDateTime);
 
-    private static DateOnly BogotaDate(DateTime utc) => DateOnly.FromDateTime(BogotaClock.ToLocal(utc));
+    internal static DateOnly BogotaDate(DateTime utc) => DateOnly.FromDateTime(BogotaClock.ToLocal(utc));
 }

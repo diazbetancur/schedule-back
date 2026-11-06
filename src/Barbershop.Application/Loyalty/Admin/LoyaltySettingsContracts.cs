@@ -6,9 +6,17 @@ public sealed record LoyaltySettingsView(
     int PointsValidityDays,
     uint Version,
     DateTime? UpdatedAt,
-    string? UpdatedByName);
+    string? UpdatedByName,
+    int RedemptionApprovalDays = 30,
+    int RedemptionDeliveryDays = 30);
 
-public sealed record LoyaltySettingsUpdateRequest(bool IsEnabled, int PointsValidityDays, uint? Version);
+/// <summary>Null redemption deadlines keep the current ones (clients that predate them do not send them).</summary>
+public sealed record LoyaltySettingsUpdateRequest(
+    bool IsEnabled,
+    int PointsValidityDays,
+    uint? Version,
+    int? RedemptionApprovalDays = null,
+    int? RedemptionDeliveryDays = null);
 
 public sealed record LoyaltySettingsChangeView(
     Guid Id,
@@ -18,4 +26,8 @@ public sealed record LoyaltySettingsChangeView(
     bool PreviousIsEnabled,
     bool NewIsEnabled,
     int PreviousPointsValidityDays,
-    int NewPointsValidityDays);
+    int NewPointsValidityDays,
+    int? PreviousRedemptionApprovalDays = null,
+    int? NewRedemptionApprovalDays = null,
+    int? PreviousRedemptionDeliveryDays = null,
+    int? NewRedemptionDeliveryDays = null);

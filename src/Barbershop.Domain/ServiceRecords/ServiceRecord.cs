@@ -1,4 +1,5 @@
 using Barbershop.Domain.Common;
+using Barbershop.Domain.Finance;
 
 namespace Barbershop.Domain.ServiceRecords;
 
@@ -99,8 +100,15 @@ public sealed class ServiceRecord
   /// <summary>The single membership consumption created by the confirmation of a membership consumption.</summary>
   public Guid? MembershipConsumptionId { get; private set; }
 
-  /// <summary>Reserved for loyalty rewards (redemptions arrive in a later stage); never set yet.</summary>
+  /// <summary>For a loyalty reward: the approved redemption this confirmation delivered (one record per redemption).</summary>
   public Guid? LoyaltyRedemptionId { get; private set; }
+
+  // For a loyalty reward only (ADR-0015 R14): the professional's commission the business covers, computed with the
+  // service's base price and split at confirmation and the same rule as an income. Informative: no income, expense
+  // or payment is created.
+  public int? RewardBasePriceSnapshot { get; private set; }
+  public int? RewardBusinessPercentageSnapshot { get; private set; }
+  public int? RewardProfessionalCommission { get; private set; }
 
   /// <summary>The administrator's decision; only a paid service with an identified customer and points can accrue.</summary>
   public bool AccruesLoyaltyPoints { get; private set; }
@@ -134,6 +142,15 @@ public sealed class ServiceRecord
     IncomeEntryId = approval.IncomeEntryId;
     CustomerMembershipId = approval.CustomerMembershipId;
     MembershipConsumptionId = approval.MembershipConsumptionId;
+    LoyaltyRedemptionId = approval.LoyaltyRedemptionId;
+    if (approval.OperationType == ServiceRecordOperationType.LoyaltyReward)
+    {
+      RewardBasePriceSnapshot = approval.RewardBasePriceSnapshot;
+      RewardBusinessPercentageSnapshot = approval.RewardBusinessPercentageSnapshot;
+      RewardProfessionalCommission = approval.RewardBasePriceSnapshot!.Value
+          - IncomeEntry.BusinessShare(approval.RewardBasePriceSnapshot.Value, approval.RewardBusinessPercentageSnapshot!.Value);
+    }
+
     AccruesLoyaltyPoints = approval.AccruesLoyaltyPoints;
     LoyaltyPointsSnapshot = approval.AccruesLoyaltyPoints ? approval.LoyaltyPointsSnapshot : null;
     ReviewNotes = DomainValidation.Optional(approval.ReviewNotes, MaxNotesLength);
@@ -174,21 +191,29 @@ public sealed record ServiceRecordApproval(
     Guid? MembershipConsumptionId,
     bool AccruesLoyaltyPoints,
     int? LoyaltyPointsSnapshot,
-    string? ReviewNotes)
+    string? ReviewNotes,
+    Guid? LoyaltyRedemptionId = null,
+    int? RewardBasePriceSnapshot = null,
+    int? RewardBusinessPercentageSnapshot = null)
 {
   internal void EnsureConsistent()
   {
     var valid = OperationType switch
     {
       ServiceRecordOperationType.Paid =>
-          ChargedAmount is > 0 && IncomeEntryId is not null && CustomerMembershipId is null && MembershipConsumptionId is null,
+          ChargedAmount is > 0 && IncomeEntryId is not null && CustomerMembershipId is null && MembershipConsumptionId is null
+          && NoReward,
       ServiceRecordOperationType.MembershipConsumption =>
           ChargedAmount is null && IncomeEntryId is null && CustomerId is not null
-          && CustomerMembershipId is not null && MembershipConsumptionId is not null,
+          && CustomerMembershipId is not null && MembershipConsumptionId is not null && NoReward,
       ServiceRecordOperationType.Courtesy =>
-          ChargedAmount is null && IncomeEntryId is null && CustomerMembershipId is null && MembershipConsumptionId is null,
-      // Redemptions (and the business covering the professional's commission) arrive in a later stage.
-      ServiceRecordOperationType.LoyaltyReward => false,
+          ChargedAmount is null && IncomeEntryId is null && CustomerMembershipId is null && MembershipConsumptionId is null
+          && NoReward,
+      // No money and no points; the business covers the professional's commission (ADR-0009, ADR-0015).
+      ServiceRecordOperationType.LoyaltyReward =>
+          ChargedAmount is null && IncomeEntryId is null && CustomerMembershipId is null && MembershipConsumptionId is null
+          && CustomerId is not null && LoyaltyRedemptionId is not null
+          && RewardBasePriceSnapshot is >= 0 && RewardBusinessPercentageSnapshot is >= 0 and <= 100,
       _ => false
     };
 
@@ -204,6 +229,8 @@ public sealed record ServiceRecordApproval(
       throw new InvalidOperationException("Only a paid service of an identified customer with configured points can accrue loyalty points.");
     }
   }
+
+  private bool NoReward => LoyaltyRedemptionId is null && RewardBasePriceSnapshot is null && RewardBusinessPercentageSnapshot is null;
 }
 
 public enum ServiceRecordStatus
@@ -224,6 +251,6 @@ public enum ServiceRecordOperationType
   /// <summary>Given for free: no income, no commission, no points.</summary>
   Courtesy = 3,
 
-  /// <summary>A redeemed loyalty reward; prepared for a later stage and not confirmable yet.</summary>
+  /// <summary>Delivers an approved service reward: no income, no points; the business covers the commission.</summary>
   LoyaltyReward = 4
 }

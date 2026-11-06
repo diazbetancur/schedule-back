@@ -1,6 +1,7 @@
 using Barbershop.Domain.Appointments;
 using Barbershop.Domain.Customers;
 using Barbershop.Domain.Finance;
+using Barbershop.Domain.Loyalty;
 using Barbershop.Domain.Memberships;
 using Barbershop.Domain.ServiceRecords;
 using Barbershop.Domain.Services;
@@ -33,7 +34,20 @@ internal sealed class ServiceRecordConfiguration : IEntityTypeConfiguration<Serv
           + "OR (\"OperationType\" = 'MembershipConsumption' AND \"ChargedAmount\" IS NULL AND \"IncomeEntryId\" IS NULL "
           + "AND \"ApprovedCustomerId\" IS NOT NULL AND \"CustomerMembershipId\" IS NOT NULL AND \"MembershipConsumptionId\" IS NOT NULL) "
           + "OR (\"OperationType\" = 'Courtesy' AND \"ChargedAmount\" IS NULL AND \"IncomeEntryId\" IS NULL "
-          + "AND \"CustomerMembershipId\" IS NULL AND \"MembershipConsumptionId\" IS NULL)");
+          + "AND \"CustomerMembershipId\" IS NULL AND \"MembershipConsumptionId\" IS NULL) "
+          + "OR (\"OperationType\" = 'LoyaltyReward' AND \"ChargedAmount\" IS NULL AND \"IncomeEntryId\" IS NULL "
+          + "AND \"ApprovedCustomerId\" IS NOT NULL AND \"CustomerMembershipId\" IS NULL AND \"MembershipConsumptionId\" IS NULL)");
+      // Only a loyalty reward names a redemption and keeps the commission the business covers (ADR-0015 R13, R14).
+      tableBuilder.HasCheckConstraint(
+          "ck_service_records_reward_shape",
+          "(\"OperationType\" IS NOT NULL AND \"OperationType\" = 'LoyaltyReward' AND \"LoyaltyRedemptionId\" IS NOT NULL "
+          + "AND \"RewardBasePriceSnapshot\" IS NOT NULL AND \"RewardBasePriceSnapshot\" >= 0 "
+          + "AND \"RewardBusinessPercentageSnapshot\" IS NOT NULL AND \"RewardBusinessPercentageSnapshot\" >= 0 "
+          + "AND \"RewardBusinessPercentageSnapshot\" <= 100 "
+          + "AND \"RewardProfessionalCommission\" IS NOT NULL AND \"RewardProfessionalCommission\" >= 0) "
+          + "OR ((\"OperationType\" IS NULL OR \"OperationType\" <> 'LoyaltyReward') AND \"LoyaltyRedemptionId\" IS NULL "
+          + "AND \"RewardBasePriceSnapshot\" IS NULL AND \"RewardBusinessPercentageSnapshot\" IS NULL "
+          + "AND \"RewardProfessionalCommission\" IS NULL)");
       tableBuilder.HasCheckConstraint(
           "ck_service_records_loyalty_points",
           "\"AccruesLoyaltyPoints\" = false "
@@ -64,6 +78,7 @@ internal sealed class ServiceRecordConfiguration : IEntityTypeConfiguration<Serv
     // Each confirmed record owns its income or consumption, and nothing else may share it.
     builder.HasIndex(x => x.IncomeEntryId).IsUnique().HasFilter("\"IncomeEntryId\" IS NOT NULL");
     builder.HasIndex(x => x.MembershipConsumptionId).IsUnique().HasFilter("\"MembershipConsumptionId\" IS NOT NULL");
+    builder.HasIndex(x => x.LoyaltyRedemptionId).IsUnique().HasFilter("\"LoyaltyRedemptionId\" IS NOT NULL");
 
     builder.HasIndex(x => new { x.Status, x.RegisteredAt });
     builder.HasIndex(x => new { x.StaffProfileId, x.RegisteredAt });
@@ -79,5 +94,6 @@ internal sealed class ServiceRecordConfiguration : IEntityTypeConfiguration<Serv
     builder.HasOne<IncomeEntry>().WithMany().HasForeignKey(x => x.IncomeEntryId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<CustomerMembership>().WithMany().HasForeignKey(x => x.CustomerMembershipId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<MembershipConsumption>().WithMany().HasForeignKey(x => x.MembershipConsumptionId).OnDelete(DeleteBehavior.Restrict);
+    builder.HasOne<LoyaltyRedemption>().WithMany().HasForeignKey(x => x.LoyaltyRedemptionId).OnDelete(DeleteBehavior.Restrict);
   }
 }

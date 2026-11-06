@@ -558,8 +558,21 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         var users = await LoadUsersAsync(LinkUserIds(target).Concat(LinkUserIds(source)), cancellationToken);
         var sourceItem = MapListItem(source, users);
 
-        // Points (ADR-0013 D7). Pending redemptions will block the merge here once redemptions exist (D5, stage 5).
+        // Points (ADR-0013 D7). A pending redemption (requested or approved) in either profile blocks the merge (D5).
         var (loyalty, walletFingerprint) = await _wallet.BuildMergePreviewAsync(source.Id, target.Id, cancellationToken);
+        var (sourcePending, targetPending, redemptionsFingerprint) = await new LoyaltyRedemptionService(_dbContext, _timeProvider)
+            .PendingForMergeAsync(source.Id, target.Id, cancellationToken);
+        if (sourcePending > 0)
+        {
+            blockingReasons.Add(
+                $"El cliente origen tiene {sourcePending} canje(s) de puntos pendiente(s) de aprobación o de entrega. Resuélvelos antes de fusionar.");
+        }
+
+        if (targetPending > 0)
+        {
+            blockingReasons.Add(
+                $"El cliente destino tiene {targetPending} canje(s) de puntos pendiente(s) de aprobación o de entrega. Resuélvelos antes de fusionar.");
+        }
         if (loyalty.SourceExpiredPointsNotMoved > 0)
         {
             warnings.Add($"{loyalty.SourceExpiredPointsNotMoved} punto(s) vencido(s) del cliente origen no se traspasan.");
@@ -576,7 +589,8 @@ internal sealed class CustomerManagementService : IAdminCustomersService
             $"T{target.Id}:{target.Version}:{target.UserId}:{target.MergedIntoCustomerId}",
             $"S{source.Id}:{source.Version}:{source.UserId}:{source.MergedIntoCustomerId}",
             $"M{string.Join(',', sourceMemberships)}",
-            walletFingerprint);
+            walletFingerprint,
+            redemptionsFingerprint);
 
         return new CustomerMergePreview(
             MapListItem(target, users),

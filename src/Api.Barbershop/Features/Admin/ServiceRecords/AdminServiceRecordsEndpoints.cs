@@ -3,6 +3,8 @@ using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Customers.Admin;
 using Barbershop.Application.ServiceRecords;
+using Barbershop.Domain.ServiceRecords;
+using Microsoft.AspNetCore.Authorization;
 
 namespace Api.Barbershop.Features.Admin.ServiceRecords;
 
@@ -56,6 +58,13 @@ public static class AdminServiceRecordsEndpoints
         serviceRecords.MapGet("/{serviceRecordId:guid}/related", GetRelatedAsync)
             .WithName("GetAdminServiceRecordRelated")
             .Produces<ServiceRecordRelatedView>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
+
+        serviceRecords.MapGet("/redemption-options", GetRedemptionOptionsAsync)
+            .WithName("GetAdminServiceRecordRedemptionOptions")
+            .Produces<IReadOnlyList<ServiceRecordRedemptionOption>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
@@ -126,10 +135,26 @@ public static class AdminServiceRecordsEndpoints
         Guid serviceRecordId, IAdminServiceRecordsService service, CancellationToken cancellationToken)
         => service.GetByIdAsync(serviceRecordId, cancellationToken);
 
-    private static Task<ServiceRecordView> ApproveAsync(
+    private static Task<IReadOnlyList<ServiceRecordRedemptionOption>> GetRedemptionOptionsAsync(
+        Guid customerId, Guid? serviceId, IAdminServiceRecordsService service, CancellationToken cancellationToken)
+        => service.GetRedemptionOptionsAsync(customerId, serviceId, cancellationToken);
+
+    /// <summary>
+    /// Confirming a record as a loyalty reward delivers a redemption, so it also needs the critical
+    /// loyalty.redemptions.deliver permission, checked against the database (ADR-0015 R13).
+    /// </summary>
+    private static async Task<ServiceRecordView> ApproveAsync(
         Guid serviceRecordId, ServiceRecordApproveRequest request, ClaimsPrincipal user,
-        IAdminServiceRecordsService service, CancellationToken cancellationToken)
-        => service.ApproveAsync(user.GetRequiredUserId(), serviceRecordId, request, cancellationToken);
+        IAdminServiceRecordsService service, IAuthorizationService authorization, CancellationToken cancellationToken)
+    {
+        if (string.Equals(request.OperationType?.Trim(), nameof(ServiceRecordOperationType.LoyaltyReward), StringComparison.OrdinalIgnoreCase)
+            && !(await authorization.AuthorizeAsync(user, PermissionPolicyNames.LoyaltyRedemptionsDeliver)).Succeeded)
+        {
+            throw new UnauthorizedAccessException("No tienes permiso para entregar recompensas de fidelización.");
+        }
+
+        return await service.ApproveAsync(user.GetRequiredUserId(), serviceRecordId, request, cancellationToken);
+    }
 
     private static Task<ServiceRecordView> RejectAsync(
         Guid serviceRecordId, ServiceRecordRejectRequest request, ClaimsPrincipal user,

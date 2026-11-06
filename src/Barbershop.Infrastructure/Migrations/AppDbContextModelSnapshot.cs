@@ -808,6 +808,9 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<int>("RemainingPoints")
                         .HasColumnType("integer");
 
+                    b.Property<int>("ReservedPoints")
+                        .HasColumnType("integer");
+
                     b.Property<Guid>("SourceId")
                         .HasColumnType("uuid");
 
@@ -849,6 +852,8 @@ namespace Barbershop.Infrastructure.Migrations
                             t.HasCheckConstraint("ck_loyalty_lots_origin_shape", "(\"OriginLotId\" IS NULL AND \"OriginCustomerId\" IS NULL) OR (\"OriginLotId\" IS NOT NULL AND \"OriginCustomerId\" IS NOT NULL)");
 
                             t.HasCheckConstraint("ck_loyalty_lots_remaining_range", "\"RemainingPoints\" >= 0 AND \"RemainingPoints\" <= \"InitialPoints\"");
+
+                            t.HasCheckConstraint("ck_loyalty_lots_reserved_range", "\"ReservedPoints\" >= 0 AND \"RemainingPoints\" + \"ReservedPoints\" <= \"InitialPoints\"");
                         });
                 });
 
@@ -882,6 +887,9 @@ namespace Barbershop.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<Guid?>("RedemptionId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid?>("RelatedCustomerId")
                         .HasColumnType("uuid");
 
@@ -898,6 +906,8 @@ namespace Barbershop.Infrastructure.Migrations
 
                     b.HasIndex("PerformedByUserId");
 
+                    b.HasIndex("RedemptionId");
+
                     b.HasIndex("CustomerId", "PerformedAt");
 
                     b.HasIndex("DebtId", "LotId")
@@ -913,11 +923,18 @@ namespace Barbershop.Infrastructure.Migrations
                     b.HasIndex("LotId", "Type")
                         .IsUnique()
                         .HasDatabaseName("IX_loyalty_movements_once_per_lot")
-                        .HasFilter("\"Type\" IN ('Accrual', 'MergeTransferIn', 'AdjustmentCredit', 'Expiration', 'MembershipAnnulmentWithdrawal', 'MergeTransferOut')");
+                        .HasFilter("\"Type\" IN ('Accrual', 'MergeTransferIn', 'AdjustmentCredit', 'Expiration', 'MembershipAnnulmentWithdrawal', 'MergeTransferOut') AND \"RedemptionId\" IS NULL");
+
+                    b.HasIndex("LotId", "RedemptionId", "Type")
+                        .IsUnique()
+                        .HasDatabaseName("IX_loyalty_movements_once_per_lot_and_redemption")
+                        .HasFilter("\"RedemptionId\" IS NOT NULL");
 
                     b.ToTable("loyalty_movements", "public", t =>
                         {
                             t.HasCheckConstraint("ck_loyalty_movements_points_positive", "\"Points\" > 0");
+
+                            t.HasCheckConstraint("ck_loyalty_movements_redemption_shape", "\"Type\" NOT IN ('RedemptionHold', 'RedemptionRelease', 'RedemptionConsumed') OR (\"RedemptionId\" IS NOT NULL AND \"LotId\" IS NOT NULL)");
 
                             t.HasCheckConstraint("ck_loyalty_movements_target", "\"LotId\" IS NOT NULL OR \"DebtId\" IS NOT NULL");
                         });
@@ -958,6 +975,326 @@ namespace Barbershop.Infrastructure.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyRedemption", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("ApprovalDays")
+                        .HasColumnType("integer");
+
+                    b.Property<DateOnly>("ApproveBy")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("ApprovedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ApprovedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly?>("ApprovedOn")
+                        .HasColumnType("date");
+
+                    b.Property<string>("CancellationReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTime?>("CancelledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("CancelledByCustomer")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid?>("CancelledByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly?>("DeliverBy")
+                        .HasColumnType("date");
+
+                    b.Property<DateTime?>("DeliveredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("DeliveredByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("DeliveryDays")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("ExpiredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("IdempotencyKey")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("InPersonVerified")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("PointsCost")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("RejectedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("RejectedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("RejectionReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTime>("RequestedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("RequestedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("RequestedOn")
+                        .HasColumnType("date");
+
+                    b.Property<Guid>("RewardId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("RewardKindSnapshot")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("RewardNameSnapshot")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<Guid?>("ServiceIdSnapshot")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ServiceNameSnapshot")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<Guid?>("ServiceRecordId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ApprovedByUserId");
+
+                    b.HasIndex("CancelledByUserId");
+
+                    b.HasIndex("DeliveredByUserId");
+
+                    b.HasIndex("RejectedByUserId");
+
+                    b.HasIndex("RewardId");
+
+                    b.HasIndex("ServiceRecordId")
+                        .IsUnique()
+                        .HasFilter("\"ServiceRecordId\" IS NOT NULL");
+
+                    b.HasIndex("CustomerId", "Status");
+
+                    b.HasIndex("RequestedByUserId", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("Status", "RequestedAt");
+
+                    b.ToTable("loyalty_redemptions", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_loyalty_redemptions_cost_positive", "\"PointsCost\" > 0");
+
+                            t.HasCheckConstraint("ck_loyalty_redemptions_counter_verified", "\"Channel\" <> 'Counter' OR \"InPersonVerified\" = true");
+
+                            t.HasCheckConstraint("ck_loyalty_redemptions_days_range", "\"ApprovalDays\" >= 1 AND \"ApprovalDays\" <= 365 AND \"DeliveryDays\" >= 1 AND \"DeliveryDays\" <= 365");
+
+                            t.HasCheckConstraint("ck_loyalty_redemptions_kind_shape", "(\"RewardKindSnapshot\" = 'Service' AND \"ServiceIdSnapshot\" IS NOT NULL AND \"ServiceNameSnapshot\" IS NOT NULL) OR (\"RewardKindSnapshot\" = 'Other' AND \"ServiceIdSnapshot\" IS NULL AND \"ServiceNameSnapshot\" IS NULL)");
+
+                            t.HasCheckConstraint("ck_loyalty_redemptions_service_record_shape", "\"ServiceRecordId\" IS NULL OR (\"Status\" = 'Delivered' AND \"RewardKindSnapshot\" = 'Service')");
+
+                            t.HasCheckConstraint("ck_loyalty_redemptions_status_shape", "(\"Status\" = 'Requested' AND \"ApprovedAt\" IS NULL AND \"DeliveredAt\" IS NULL AND \"RejectedAt\" IS NULL AND \"CancelledAt\" IS NULL AND \"ExpiredAt\" IS NULL) OR (\"Status\" = 'Approved' AND \"ApprovedAt\" IS NOT NULL AND \"ApprovedByUserId\" IS NOT NULL AND \"ApprovedOn\" IS NOT NULL AND \"DeliverBy\" IS NOT NULL AND \"DeliveredAt\" IS NULL AND \"RejectedAt\" IS NULL AND \"CancelledAt\" IS NULL AND \"ExpiredAt\" IS NULL) OR (\"Status\" = 'Delivered' AND \"ApprovedAt\" IS NOT NULL AND \"DeliveredAt\" IS NOT NULL AND \"DeliveredByUserId\" IS NOT NULL AND \"RejectedAt\" IS NULL AND \"CancelledAt\" IS NULL AND \"ExpiredAt\" IS NULL AND ((\"RewardKindSnapshot\" = 'Service' AND \"ServiceRecordId\" IS NOT NULL) OR (\"RewardKindSnapshot\" = 'Other' AND \"ServiceRecordId\" IS NULL))) OR (\"Status\" = 'Rejected' AND \"RejectedAt\" IS NOT NULL AND \"RejectedByUserId\" IS NOT NULL AND \"RejectionReason\" IS NOT NULL AND \"ApprovedAt\" IS NULL AND \"DeliveredAt\" IS NULL AND \"CancelledAt\" IS NULL AND \"ExpiredAt\" IS NULL) OR (\"Status\" = 'Cancelled' AND \"CancelledAt\" IS NOT NULL AND \"CancelledByUserId\" IS NOT NULL AND \"DeliveredAt\" IS NULL AND \"RejectedAt\" IS NULL AND \"ExpiredAt\" IS NULL) OR (\"Status\" = 'Expired' AND \"ExpiredAt\" IS NOT NULL AND \"DeliveredAt\" IS NULL AND \"RejectedAt\" IS NULL AND \"CancelledAt\" IS NULL)");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyRedemptionAllocation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("LotId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Points")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("RedemptionId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("LotId");
+
+                    b.HasIndex("RedemptionId", "LotId")
+                        .IsUnique();
+
+                    b.ToTable("loyalty_redemption_allocations", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_loyalty_redemption_allocations_points_positive", "\"Points\" > 0");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyReward", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<int>("PointsCost")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("ServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UpdatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<uint>("Version")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedByUserId");
+
+                    b.HasIndex("ServiceId");
+
+                    b.HasIndex("UpdatedByUserId");
+
+                    b.HasIndex("IsActive", "Name");
+
+                    b.ToTable("loyalty_rewards", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_loyalty_rewards_cost_range", "\"PointsCost\" >= 1 AND \"PointsCost\" <= 100000");
+
+                            t.HasCheckConstraint("ck_loyalty_rewards_kind_shape", "(\"Kind\" = 'Service' AND \"ServiceId\" IS NOT NULL) OR (\"Kind\" = 'Other' AND \"ServiceId\" IS NULL)");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyRewardChange", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ChangeType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTime>("ChangedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("ChangedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("NewDescription")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<bool>("NewIsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("NewKind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("NewName")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<int>("NewPointsCost")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("NewServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("PreviousDescription")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<bool?>("PreviousIsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("PreviousKind")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("PreviousName")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<int?>("PreviousPointsCost")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid?>("PreviousServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("RewardId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ChangedByUserId");
+
+                    b.HasIndex("RewardId", "ChangedAt");
+
+                    b.ToTable("loyalty_reward_changes", "public");
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltySettings", b =>
                 {
                     b.Property<int>("Id")
@@ -971,6 +1308,16 @@ namespace Barbershop.Infrastructure.Migrations
 
                     b.Property<int>("PointsValidityDays")
                         .HasColumnType("integer");
+
+                    b.Property<int>("RedemptionApprovalDays")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(30);
+
+                    b.Property<int>("RedemptionDeliveryDays")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(30);
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -988,6 +1335,8 @@ namespace Barbershop.Infrastructure.Migrations
 
                     b.ToTable("loyalty_settings", "public", t =>
                         {
+                            t.HasCheckConstraint("ck_loyalty_settings_redemption_days_range", "\"RedemptionApprovalDays\" >= 1 AND \"RedemptionApprovalDays\" <= 365 AND \"RedemptionDeliveryDays\" >= 1 AND \"RedemptionDeliveryDays\" <= 365");
+
                             t.HasCheckConstraint("ck_loyalty_settings_singleton", "\"Id\" = 1");
 
                             t.HasCheckConstraint("ck_loyalty_settings_validity_range", "\"PointsValidityDays\" >= 1 AND \"PointsValidityDays\" <= 3650");
@@ -999,7 +1348,9 @@ namespace Barbershop.Infrastructure.Migrations
                             Id = 1,
                             CreatedAt = new DateTime(2026, 11, 3, 0, 0, 0, 0, DateTimeKind.Utc),
                             IsEnabled = false,
-                            PointsValidityDays = 365
+                            PointsValidityDays = 365,
+                            RedemptionApprovalDays = 30,
+                            RedemptionDeliveryDays = 30
                         });
                 });
 
@@ -1020,10 +1371,22 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<int>("NewPointsValidityDays")
                         .HasColumnType("integer");
 
+                    b.Property<int?>("NewRedemptionApprovalDays")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("NewRedemptionDeliveryDays")
+                        .HasColumnType("integer");
+
                     b.Property<bool>("PreviousIsEnabled")
                         .HasColumnType("boolean");
 
                     b.Property<int>("PreviousPointsValidityDays")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("PreviousRedemptionApprovalDays")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("PreviousRedemptionDeliveryDays")
                         .HasColumnType("integer");
 
                     b.HasKey("Id");
@@ -1913,6 +2276,15 @@ namespace Barbershop.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<int?>("RewardBasePriceSnapshot")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("RewardBusinessPercentageSnapshot")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("RewardProfessionalCommission")
+                        .HasColumnType("integer");
+
                     b.Property<Guid>("ServiceId")
                         .HasColumnType("uuid");
 
@@ -1953,6 +2325,10 @@ namespace Barbershop.Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("\"IncomeEntryId\" IS NOT NULL");
 
+                    b.HasIndex("LoyaltyRedemptionId")
+                        .IsUnique()
+                        .HasFilter("\"LoyaltyRedemptionId\" IS NOT NULL");
+
                     b.HasIndex("MembershipConsumptionId")
                         .IsUnique()
                         .HasFilter("\"MembershipConsumptionId\" IS NOT NULL");
@@ -1970,7 +2346,9 @@ namespace Barbershop.Infrastructure.Migrations
                         {
                             t.HasCheckConstraint("ck_service_records_loyalty_points", "\"AccruesLoyaltyPoints\" = false OR (\"OperationType\" = 'Paid' AND \"ApprovedCustomerId\" IS NOT NULL AND \"LoyaltyPointsSnapshot\" IS NOT NULL AND \"LoyaltyPointsSnapshot\" > 0)");
 
-                            t.HasCheckConstraint("ck_service_records_operation_shape", "\"OperationType\" IS NULL OR (\"OperationType\" = 'Paid' AND \"ChargedAmount\" IS NOT NULL AND \"ChargedAmount\" > 0 AND \"IncomeEntryId\" IS NOT NULL AND \"CustomerMembershipId\" IS NULL AND \"MembershipConsumptionId\" IS NULL) OR (\"OperationType\" = 'MembershipConsumption' AND \"ChargedAmount\" IS NULL AND \"IncomeEntryId\" IS NULL AND \"ApprovedCustomerId\" IS NOT NULL AND \"CustomerMembershipId\" IS NOT NULL AND \"MembershipConsumptionId\" IS NOT NULL) OR (\"OperationType\" = 'Courtesy' AND \"ChargedAmount\" IS NULL AND \"IncomeEntryId\" IS NULL AND \"CustomerMembershipId\" IS NULL AND \"MembershipConsumptionId\" IS NULL)");
+                            t.HasCheckConstraint("ck_service_records_operation_shape", "\"OperationType\" IS NULL OR (\"OperationType\" = 'Paid' AND \"ChargedAmount\" IS NOT NULL AND \"ChargedAmount\" > 0 AND \"IncomeEntryId\" IS NOT NULL AND \"CustomerMembershipId\" IS NULL AND \"MembershipConsumptionId\" IS NULL) OR (\"OperationType\" = 'MembershipConsumption' AND \"ChargedAmount\" IS NULL AND \"IncomeEntryId\" IS NULL AND \"ApprovedCustomerId\" IS NOT NULL AND \"CustomerMembershipId\" IS NOT NULL AND \"MembershipConsumptionId\" IS NOT NULL) OR (\"OperationType\" = 'Courtesy' AND \"ChargedAmount\" IS NULL AND \"IncomeEntryId\" IS NULL AND \"CustomerMembershipId\" IS NULL AND \"MembershipConsumptionId\" IS NULL) OR (\"OperationType\" = 'LoyaltyReward' AND \"ChargedAmount\" IS NULL AND \"IncomeEntryId\" IS NULL AND \"ApprovedCustomerId\" IS NOT NULL AND \"CustomerMembershipId\" IS NULL AND \"MembershipConsumptionId\" IS NULL)");
+
+                            t.HasCheckConstraint("ck_service_records_reward_shape", "(\"OperationType\" IS NOT NULL AND \"OperationType\" = 'LoyaltyReward' AND \"LoyaltyRedemptionId\" IS NOT NULL AND \"RewardBasePriceSnapshot\" IS NOT NULL AND \"RewardBasePriceSnapshot\" >= 0 AND \"RewardBusinessPercentageSnapshot\" IS NOT NULL AND \"RewardBusinessPercentageSnapshot\" >= 0 AND \"RewardBusinessPercentageSnapshot\" <= 100 AND \"RewardProfessionalCommission\" IS NOT NULL AND \"RewardProfessionalCommission\" >= 0) OR ((\"OperationType\" IS NULL OR \"OperationType\" <> 'LoyaltyReward') AND \"LoyaltyRedemptionId\" IS NULL AND \"RewardBasePriceSnapshot\" IS NULL AND \"RewardBusinessPercentageSnapshot\" IS NULL AND \"RewardProfessionalCommission\" IS NULL)");
 
                             t.HasCheckConstraint("ck_service_records_status_shape", "(\"Status\" = 'Pending' AND \"OperationType\" IS NULL AND \"ApprovedAt\" IS NULL AND \"RejectedAt\" IS NULL) OR (\"Status\" = 'Approved' AND \"OperationType\" IS NOT NULL AND \"ApprovedAt\" IS NOT NULL AND \"ApprovedByUserId\" IS NOT NULL AND \"ApprovedServiceId\" IS NOT NULL AND \"ApprovedStaffProfileId\" IS NOT NULL AND \"ApprovedPerformedOn\" IS NOT NULL AND \"RejectedAt\" IS NULL) OR (\"Status\" = 'Rejected' AND \"OperationType\" IS NULL AND \"RejectionReason\" IS NOT NULL AND \"RejectedAt\" IS NOT NULL AND \"RejectedByUserId\" IS NOT NULL AND \"ApprovedAt\" IS NULL)");
                         });
@@ -2766,6 +3144,101 @@ namespace Barbershop.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("PerformedByUserId")
                         .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Loyalty.LoyaltyRedemption", null)
+                        .WithMany()
+                        .HasForeignKey("RedemptionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyRedemption", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("ApprovedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("CancelledByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Customers.CustomerProfile", null)
+                        .WithMany()
+                        .HasForeignKey("CustomerId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("DeliveredByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("RejectedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("RequestedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Loyalty.LoyaltyReward", null)
+                        .WithMany()
+                        .HasForeignKey("RewardId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyRedemptionAllocation", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Loyalty.LoyaltyLot", null)
+                        .WithMany()
+                        .HasForeignKey("LotId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Loyalty.LoyaltyRedemption", null)
+                        .WithMany()
+                        .HasForeignKey("RedemptionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyReward", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("CreatedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Services.Service", null)
+                        .WithMany()
+                        .HasForeignKey("ServiceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("UpdatedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Loyalty.LoyaltyRewardChange", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("ChangedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Loyalty.LoyaltyReward", null)
+                        .WithMany()
+                        .HasForeignKey("RewardId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Media.MediaAsset", b =>
@@ -3021,6 +3494,11 @@ namespace Barbershop.Infrastructure.Migrations
                     b.HasOne("Barbershop.Domain.Finance.IncomeEntry", null)
                         .WithMany()
                         .HasForeignKey("IncomeEntryId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Loyalty.LoyaltyRedemption", null)
+                        .WithMany()
+                        .HasForeignKey("LoyaltyRedemptionId")
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("Barbershop.Domain.Memberships.MembershipConsumption", null)

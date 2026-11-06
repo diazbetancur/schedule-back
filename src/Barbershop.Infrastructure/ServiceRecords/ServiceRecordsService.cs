@@ -38,6 +38,7 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
     private readonly MembershipLedgerService _ledger;
     private readonly TimeProvider _timeProvider;
     private readonly LoyaltyWalletService _wallet;
+    private readonly LoyaltyRedemptionService _redemptions;
 
     public ServiceRecordsService(AppDbContext dbContext, MembershipLedgerService ledger, TimeProvider timeProvider)
     {
@@ -45,6 +46,7 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
         _ledger = ledger;
         _timeProvider = timeProvider;
         _wallet = new LoyaltyWalletService(dbContext, timeProvider);
+        _redemptions = new LoyaltyRedemptionService(dbContext, timeProvider);
     }
 
     // ── Professional ────────────────────────────────────────────────────────────────────────────
@@ -600,6 +602,10 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
         return await GetByIdAsync(serviceRecordId, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<ServiceRecordRedemptionOption>> GetRedemptionOptionsAsync(
+        Guid customerId, Guid? serviceId, CancellationToken cancellationToken = default)
+        => await _redemptions.GetServiceRedemptionOptionsAsync(customerId, serviceId, cancellationToken);
+
     private async Task<ServiceRecordApproval> BuildApprovalAsync(
         Guid currentUserId,
         ServiceRecord record,
@@ -645,6 +651,11 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             {
                 errors["customerMembershipId"] = ["La membresía no pertenece al cliente indicado."];
             }
+        }
+
+        if (operationType == ServiceRecordOperationType.LoyaltyReward && request.CustomerId is null)
+        {
+            errors["customerId"] = ["Elige el cliente que canjeó la recompensa."];
         }
 
         int? pointsSnapshot = null;
@@ -696,8 +707,17 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                     cancellationToken);
                 consumptionId = consumption.Id;
                 break;
+
+            case ServiceRecordOperationType.LoyaltyReward:
+                // Delivers the approved redemption (lock order: record → customer profile → redemption) and consumes
+                // its reserved points. No income, no consumption, no points: the business covers the commission.
+                await _redemptions.DeliverServiceRewardInCurrentTransactionAsync(
+                    request.LoyaltyRedemptionId!.Value, request.CustomerId!.Value, service!.Id, record.Id, currentUserId, utcNow,
+                    cancellationToken);
+                break;
         }
 
+        var isReward = operationType == ServiceRecordOperationType.LoyaltyReward;
         return new ServiceRecordApproval(
             operationType,
             service!.Id,
@@ -711,7 +731,11 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             consumptionId,
             request.AccruesLoyaltyPoints,
             pointsSnapshot,
-            request.Notes?.Trim());
+            request.Notes?.Trim(),
+            isReward ? request.LoyaltyRedemptionId : null,
+            // Snapshots of the confirmed service right now, as a paid service's income would take them (R14).
+            isReward ? service.BasePrice : null,
+            isReward ? service.BusinessPercentage : null);
     }
 
     private static ServiceRecordOperationType ValidateApproveShape(ServiceRecordApproveRequest request)
@@ -721,12 +745,7 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
 
         if (operationType is null)
         {
-            errors["operationType"] = ["Elige el tipo de operación: servicio pagado, consumo de membresía o cortesía."];
-        }
-        else if (operationType == ServiceRecordOperationType.LoyaltyReward)
-        {
-            errors["operationType"] =
-                ["Las recompensas de fidelización todavía no se pueden confirmar: llegan junto con las redenciones."];
+            errors["operationType"] = ["Elige el tipo de operación: servicio pagado, consumo de membresía, cortesía o recompensa."];
         }
 
         if (request.ServiceId == Guid.Empty)
@@ -756,7 +775,8 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                 errors["customerMembershipId"] = ["Un servicio pagado no se descuenta de una membresía."];
             }
         }
-        else if (operationType is ServiceRecordOperationType.MembershipConsumption or ServiceRecordOperationType.Courtesy)
+        else if (operationType is ServiceRecordOperationType.MembershipConsumption or ServiceRecordOperationType.Courtesy
+                 or ServiceRecordOperationType.LoyaltyReward)
         {
             if (request.ChargedAmount is not null)
             {
@@ -786,6 +806,23 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             errors["customerMembershipId"] = ["Una cortesía no se descuenta de una membresía."];
         }
 
+        if (operationType == ServiceRecordOperationType.LoyaltyReward)
+        {
+            if (request.LoyaltyRedemptionId is null || request.LoyaltyRedemptionId == Guid.Empty)
+            {
+                errors["loyaltyRedemptionId"] = ["Elige la solicitud de canje aprobada que se entrega con este servicio."];
+            }
+
+            if (request.CustomerMembershipId is not null)
+            {
+                errors["customerMembershipId"] = ["Una recompensa no se descuenta de una membresía."];
+            }
+        }
+        else if (request.LoyaltyRedemptionId is not null)
+        {
+            errors["loyaltyRedemptionId"] = ["Solo una recompensa se vincula con una solicitud de canje."];
+        }
+
         if (request.Notes is { Length: > ServiceRecord.MaxNotesLength })
         {
             errors["notes"] = [$"Las notas deben tener {ServiceRecord.MaxNotesLength} caracteres o menos."];
@@ -812,6 +849,7 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             && record.ApprovedPerformedOn == request.PerformedOn
             && record.ChargedAmount == request.ChargedAmount
             && record.CustomerMembershipId == request.CustomerMembershipId
+            && record.LoyaltyRedemptionId == request.LoyaltyRedemptionId
             && record.AccruesLoyaltyPoints == request.AccruesLoyaltyPoints;
 
     private async Task<ServiceRecord> LoadLockedAsync(Guid serviceRecordId, CancellationToken cancellationToken)
@@ -909,6 +947,13 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                 .ToListAsync(cancellationToken))
             .ToHashSet();
 
+        var redemptionIds = records.Where(record => record.LoyaltyRedemptionId is not null).Select(record => record.LoyaltyRedemptionId!.Value).ToArray();
+        var rewardNames = redemptionIds.Length == 0
+            ? new Dictionary<Guid, string>()
+            : await _dbContext.LoyaltyRedemptions.AsNoTracking()
+                .Where(redemption => redemptionIds.Contains(redemption.Id))
+                .ToDictionaryAsync(redemption => redemption.Id, redemption => redemption.RewardNameSnapshot, cancellationToken);
+
         return records.Select(record =>
         {
             var suggestion = record.Status == ServiceRecordStatus.Pending
@@ -939,7 +984,12 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                     record.LoyaltyPointsSnapshot,
                     record.ReviewNotes,
                     record.ApprovedAt!.Value,
-                    userNames.GetValueOrDefault(record.ApprovedByUserId!.Value));
+                    userNames.GetValueOrDefault(record.ApprovedByUserId!.Value),
+                    record.LoyaltyRedemptionId,
+                    record.LoyaltyRedemptionId is { } redemptionId ? rewardNames.GetValueOrDefault(redemptionId) : null,
+                    record.RewardBasePriceSnapshot,
+                    record.RewardBusinessPercentageSnapshot,
+                    record.RewardProfessionalCommission);
             }
 
             return new ServiceRecordView(

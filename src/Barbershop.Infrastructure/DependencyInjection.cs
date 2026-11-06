@@ -2,6 +2,7 @@ using Barbershop.Application.Customer;
 using Barbershop.Application.Customers.Admin;
 using Barbershop.Application.Customers.Claims;
 using Barbershop.Application.Email;
+using Barbershop.Application.Loyalty.Redemptions;
 using Barbershop.Application.Loyalty.Wallet;
 using Barbershop.Application.Finance.Admin;
 using Barbershop.Application.Landing;
@@ -156,6 +157,10 @@ public static class DependencyInjection
         services.AddScoped<LoyaltyWalletService>();
         services.AddScoped<IMyLoyaltyService>(serviceProvider => serviceProvider.GetRequiredService<LoyaltyWalletService>());
         services.AddScoped<IAdminCustomerLoyaltyService>(serviceProvider => serviceProvider.GetRequiredService<LoyaltyWalletService>());
+        services.AddScoped<LoyaltyRedemptionService>();
+        services.AddScoped<IAdminLoyaltyRewardsService>(serviceProvider => serviceProvider.GetRequiredService<LoyaltyRedemptionService>());
+        services.AddScoped<IAdminLoyaltyRedemptionsService>(serviceProvider => serviceProvider.GetRequiredService<LoyaltyRedemptionService>());
+        services.AddScoped<IMyLoyaltyRedemptionsService>(serviceProvider => serviceProvider.GetRequiredService<LoyaltyRedemptionService>());
         services.AddScoped<IAdminMembershipsService, MembershipSalesService>();
         services.AddScoped<MembershipLedgerService>();
         services.AddScoped<IAdminMembershipLedgerService>(serviceProvider => serviceProvider.GetRequiredService<MembershipLedgerService>());

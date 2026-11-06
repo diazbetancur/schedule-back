@@ -17,7 +17,8 @@ public sealed record LoyaltyLotView(
     DateOnly ExpiresOn,
     bool IsExpired,
     Guid? OriginLotId,
-    Guid? OriginCustomerId);
+    Guid? OriginCustomerId,
+    int ReservedPoints = 0);
 
 /// <summary><c>IncurredAt</c>: when the original debt arose (kept through merges; it sets the settlement order).</summary>
 public sealed record LoyaltyDebtView(
@@ -39,7 +40,8 @@ public sealed record LoyaltyMovementView(
     string? Reason,
     Guid? RelatedCustomerId,
     string? PerformedByName,
-    DateTime PerformedAt);
+    DateTime PerformedAt,
+    Guid? RedemptionId = null);
 
 /// <summary>
 /// The wallet of one profile. A merged profile keeps its own history (mostly closed by the merge);
@@ -56,7 +58,9 @@ public sealed record LoyaltyWalletView(
     DateOnly? NextExpiresOn,
     IReadOnlyList<LoyaltyLotView> Lots,
     IReadOnlyList<LoyaltyDebtView> Debts,
-    IReadOnlyList<LoyaltyMovementView> Movements);
+    IReadOnlyList<LoyaltyMovementView> Movements,
+    int ReservedPoints = 0,
+    IReadOnlyList<Barbershop.Application.Loyalty.Redemptions.LoyaltyRedemptionView>? Redemptions = null);
 
 /// <summary>A manual credit or debit; the debit never goes beyond the available balance.</summary>
 public sealed record LoyaltyAdjustmentRequest(string? Direction, int Points, string? Reason, Guid IdempotencyKey);
@@ -74,7 +78,8 @@ public sealed record MyLoyaltyView(
     int ExpiringSoonPoints,
     DateOnly? NextExpiresOn,
     IReadOnlyList<MyLoyaltyLotView> Lots,
-    IReadOnlyList<MyLoyaltyMovementView> Movements);
+    IReadOnlyList<MyLoyaltyMovementView> Movements,
+    int ReservedPoints = 0);
 
 /// <summary>A lot a merge would move to the surviving profile, with its own expiry.</summary>
 public sealed record MergeLoyaltyLotPreview(Guid LotId, string SourceLabel, int Points, DateOnly ExpiresOn, bool ExpiresSoon);

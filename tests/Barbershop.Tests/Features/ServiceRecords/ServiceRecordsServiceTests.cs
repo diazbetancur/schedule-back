@@ -337,14 +337,16 @@ public sealed class ServiceRecordsServiceTests : IDisposable
   }
 
   [Fact]
-  public async Task ALoyaltyReward_CannotBeConfirmedYet()
+  public async Task ALoyaltyReward_NeedsAnApprovedRedemption_AndACustomer()
   {
+    // Since stage 5 (ADR-0015 R13) a reward is confirmable, but only delivering an approved redemption; the full
+    // flow is in LoyaltyRedemptionServiceTests.
     var record = (await RegisterAsync()).Single();
 
     var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
         _service.ApproveAsync(_admin.Id, record.Id, Approve(record, "LoyaltyReward")));
 
-    Assert.Contains("operationType", exception.Errors.Keys);
+    Assert.Contains("loyaltyRedemptionId", exception.Errors.Keys);
     Assert.Equal("Pending", (await _service.GetByIdAsync(record.Id)).Status);
   }
 

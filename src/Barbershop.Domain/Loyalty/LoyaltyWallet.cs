@@ -48,7 +48,16 @@ public enum LoyaltyMovementType
   DebtMergeTransferIn = 10,
 
   /// <summary>Opens a debt of its own (reserved for reversing points already spent, ADR-0010; not created yet).</summary>
-  DebtOpened = 11
+  DebtOpened = 11,
+
+  /// <summary>Moves points of a lot from its free balance to its reservation for a redemption (ADR-0015).</summary>
+  RedemptionHold = 12,
+
+  /// <summary>Returns exactly what a redemption reserved from a lot to its free balance, once (rejection, cancellation, expiry).</summary>
+  RedemptionRelease = 13,
+
+  /// <summary>A delivered redemption consumes its reservation; the free balance is not touched again.</summary>
+  RedemptionConsumed = 14
 }
 
 /// <summary>Why a debt exists. Stage 4 creates none of its own: debts only move with merges and get settled.</summary>
@@ -126,7 +135,13 @@ public sealed class LoyaltyLot
   public Guid SourceId { get; private set; }
 
   public int InitialPoints { get; private set; }
+
+  /// <summary>Free balance: what can still be used, expired or moved. Reserved points are not part of it.</summary>
   public int RemainingPoints { get; private set; }
+
+  /// <summary>Points held for pending redemptions (ADR-0015); they leave the free balance and do not expire while held.</summary>
+  public int ReservedPoints { get; private set; }
+
   public DateTime AccruedAt { get; private set; }
 
   /// <summary>Bogotá date of the original accrual.</summary>
@@ -158,6 +173,29 @@ public sealed class LoyaltyLot
   {
     DomainValidation.EnsureRange(points, 1, RemainingPoints, nameof(points));
     RemainingPoints -= points;
+  }
+
+  /// <summary>Moves free points to the reservation of a redemption.</summary>
+  public void Reserve(int points)
+  {
+    DomainValidation.EnsureRange(points, 1, RemainingPoints, nameof(points));
+    RemainingPoints -= points;
+    ReservedPoints += points;
+  }
+
+  /// <summary>Gives reserved points back to the free balance (they may expire right after, if the lot is past its expiry).</summary>
+  public void Release(int points)
+  {
+    DomainValidation.EnsureRange(points, 1, ReservedPoints, nameof(points));
+    ReservedPoints -= points;
+    RemainingPoints += points;
+  }
+
+  /// <summary>A delivery consumes reserved points; the free balance is unchanged.</summary>
+  public void ConsumeReserved(int points)
+  {
+    DomainValidation.EnsureRange(points, 1, ReservedPoints, nameof(points));
+    ReservedPoints -= points;
   }
 }
 
@@ -277,7 +315,8 @@ public sealed class LoyaltyMovement
       Guid? performedByUserId = null,
       Guid? adjustmentId = null,
       Guid? relatedCustomerId = null,
-      string? reason = null)
+      string? reason = null,
+      Guid? redemptionId = null)
   {
     if (lotId is null && debtId is null)
     {
@@ -293,6 +332,7 @@ public sealed class LoyaltyMovement
     AdjustmentId = adjustmentId;
     RelatedCustomerId = relatedCustomerId;
     Reason = reason;
+    RedemptionId = redemptionId;
     PerformedAt = DomainValidation.EnsureUtc(performedAt, nameof(performedAt));
   }
 
@@ -312,14 +352,27 @@ public sealed class LoyaltyMovement
   public Guid? RelatedCustomerId { get; private set; }
 
   public string? Reason { get; private set; }
+
+  /// <summary>The redemption a hold, release or consumption belongs to (also set on an expiration or withdrawal of released points).</summary>
+  public Guid? RedemptionId { get; private set; }
+
   public DateTime PerformedAt { get; private set; }
 
   /// <summary>+1 when the movement puts points into its lot, −1 when it takes them out (0 for debt-only movements).</summary>
   public static int LotSign(LoyaltyMovementType type) => type switch
   {
-    LoyaltyMovementType.Accrual or LoyaltyMovementType.MergeTransferIn or LoyaltyMovementType.AdjustmentCredit => 1,
+    LoyaltyMovementType.Accrual or LoyaltyMovementType.MergeTransferIn or LoyaltyMovementType.AdjustmentCredit
+        or LoyaltyMovementType.RedemptionRelease => 1,
     LoyaltyMovementType.Expiration or LoyaltyMovementType.MembershipAnnulmentWithdrawal or LoyaltyMovementType.AdjustmentDebit
-        or LoyaltyMovementType.MergeTransferOut or LoyaltyMovementType.DebtSettlement => -1,
+        or LoyaltyMovementType.MergeTransferOut or LoyaltyMovementType.DebtSettlement or LoyaltyMovementType.RedemptionHold => -1,
+    _ => 0
+  };
+
+  /// <summary>+1 when the movement adds to the lot's reservation, −1 when it releases or consumes it.</summary>
+  public static int ReservedSign(LoyaltyMovementType type) => type switch
+  {
+    LoyaltyMovementType.RedemptionHold => 1,
+    LoyaltyMovementType.RedemptionRelease or LoyaltyMovementType.RedemptionConsumed => -1,
     _ => 0
   };
 

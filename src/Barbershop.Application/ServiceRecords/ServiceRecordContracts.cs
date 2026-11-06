@@ -35,7 +35,12 @@ public sealed record ServiceRecordApprovalView(
     int? LoyaltyPointsSnapshot,
     string? ReviewNotes,
     DateTime ApprovedAt,
-    string? ApprovedByName);
+    string? ApprovedByName,
+    Guid? LoyaltyRedemptionId = null,
+    string? RewardName = null,
+    int? RewardBasePriceSnapshot = null,
+    int? RewardBusinessPercentageSnapshot = null,
+    int? RewardProfessionalCommission = null);
 
 /// <summary>
 /// <c>SuggestedCustomerId</c>: for a pending record without customer registered from an appointment booked by an app
@@ -71,7 +76,9 @@ public sealed record ServiceRecordView(
 /// <summary>
 /// Confirms a pending record. Service, professional, customer and date may be corrected; the registered values are
 /// kept. <c>ChargedAmount</c> is required (greater than zero) for "Paid" and must be omitted otherwise;
-/// <c>CustomerMembershipId</c> is required for "MembershipConsumption". <c>Version</c> is the one read.
+/// <c>CustomerMembershipId</c> is required for "MembershipConsumption"; <c>LoyaltyRedemptionId</c> (an approved
+/// service redemption of the same customer and service) is required for "LoyaltyReward", which also needs the
+/// critical loyalty.redemptions.deliver permission. <c>Version</c> is the one read.
 /// </summary>
 public sealed record ServiceRecordApproveRequest(
     uint? Version,
@@ -83,7 +90,8 @@ public sealed record ServiceRecordApproveRequest(
     int? ChargedAmount,
     Guid? CustomerMembershipId,
     bool AccruesLoyaltyPoints,
-    string? Notes);
+    string? Notes,
+    Guid? LoyaltyRedemptionId = null);
 
 public sealed record ServiceRecordRejectRequest(uint? Version, string? Reason);
 
@@ -95,6 +103,17 @@ public sealed record ServiceRecordOptionsView(
     IReadOnlyList<ServiceRecordServiceOption> Services,
     IReadOnlyList<ServiceRecordStaffOption> Staff,
     bool LoyaltyProgramEnabled);
+
+/// <summary>An approved service redemption that confirming a record as "LoyaltyReward" can deliver.</summary>
+public sealed record ServiceRecordRedemptionOption(
+    Guid Id,
+    string RewardName,
+    Guid ServiceId,
+    string ServiceName,
+    int PointsCost,
+    DateTime ApprovedAt,
+    DateOnly DeliverBy,
+    bool IsPastDeadline);
 
 public sealed record ServiceRecordMembershipOption(Guid Id, string PlanName, string Status, DateOnly StartsOn, DateOnly EndsOn);
 

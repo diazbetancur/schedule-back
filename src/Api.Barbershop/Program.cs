@@ -1,6 +1,7 @@
 using Api.Barbershop.Features.Admin.Appointments;
 using Api.Barbershop.Features.Admin.CustomerClaims;
 using Api.Barbershop.Features.Admin.CustomerLoyalty;
+using Api.Barbershop.Features.Admin.LoyaltyRedemptions;
 using Api.Barbershop.Features.Admin.Customers;
 using Api.Barbershop.Configuration;
 using Api.Barbershop.Features.Admin.Finance;
@@ -106,6 +107,7 @@ api.MapAdminCustomerLoyaltyEndpoints();
 api.MapAdminMembershipPlansEndpoints();
 api.MapAdminMembershipsEndpoints();
 api.MapAdminLoyaltyEndpoints();
+api.MapAdminLoyaltyRedemptionsEndpoints();
 api.MapAdminServiceRecordsEndpoints();
 api.MapAdminIncomeEndpoints();
 api.MapAdminFixedExpensesEndpoints();

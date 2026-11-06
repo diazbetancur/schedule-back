@@ -30,6 +30,10 @@ public interface IAdminServiceRecordsService
 
     Task<IReadOnlyList<ServiceRecordCustomerOption>> SearchCustomersAsync(string? query, CancellationToken cancellationToken = default);
 
+    /// <summary>Approved service redemptions of the customer (optionally for one service) waiting for delivery.</summary>
+    Task<IReadOnlyList<ServiceRecordRedemptionOption>> GetRedemptionOptionsAsync(
+        Guid customerId, Guid? serviceId, CancellationToken cancellationToken = default);
+
     Task<ServiceRecordView> ApproveAsync(
         Guid currentUserId, Guid serviceRecordId, ServiceRecordApproveRequest request, CancellationToken cancellationToken = default);
 

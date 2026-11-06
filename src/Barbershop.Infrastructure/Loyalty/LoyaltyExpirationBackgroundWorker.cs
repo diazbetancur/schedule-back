@@ -7,8 +7,9 @@ using Microsoft.Extensions.Options;
 namespace Barbershop.Infrastructure.Loyalty;
 
 /// <summary>
-/// Records the expiration of lots past their last valid day. Queries never count expired points even before this
-/// runs, so it only writes history; it is idempotent and safe to run several times a day.
+/// Records the expiration of redemptions past their deadline (releasing their points) and of lots past their last
+/// valid day. Queries never count expired points and approvals and deliveries recheck deadlines even before this
+/// runs; it is idempotent and safe to run several times a day.
 /// </summary>
 internal sealed class LoyaltyExpirationBackgroundWorker : BackgroundService
 {
@@ -44,6 +45,13 @@ internal sealed class LoyaltyExpirationBackgroundWorker : BackgroundService
         try
         {
           using var scope = _scopeFactory.CreateScope();
+          // Redemptions past their deadline first: their release may expire points of lots that are past due too.
+          var expiredRedemptions = await scope.ServiceProvider.GetRequiredService<LoyaltyRedemptionService>().ExpireDueRedemptionsAsync(stoppingToken);
+          if (expiredRedemptions > 0)
+          {
+            _logger.LogInformation("Recorded the expiration of {Count} loyalty redemption(s).", expiredRedemptions);
+          }
+
           var expired = await scope.ServiceProvider.GetRequiredService<LoyaltyWalletService>().ExpireDueLotsAsync(stoppingToken);
           if (expired > 0)
           {

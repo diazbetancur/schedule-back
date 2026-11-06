@@ -14,6 +14,10 @@ internal sealed class LoyaltySettingsConfiguration : IEntityTypeConfiguration<Lo
       tableBuilder.HasCheckConstraint(
           "ck_loyalty_settings_validity_range",
           $"\"PointsValidityDays\" >= {LoyaltySettings.MinPointsValidityDays} AND \"PointsValidityDays\" <= {LoyaltySettings.MaxPointsValidityDays}");
+      tableBuilder.HasCheckConstraint(
+          "ck_loyalty_settings_redemption_days_range",
+          $"\"RedemptionApprovalDays\" >= {LoyaltySettings.MinRedemptionDays} AND \"RedemptionApprovalDays\" <= {LoyaltySettings.MaxRedemptionDays} "
+          + $"AND \"RedemptionDeliveryDays\" >= {LoyaltySettings.MinRedemptionDays} AND \"RedemptionDeliveryDays\" <= {LoyaltySettings.MaxRedemptionDays}");
     });
 
     builder.HasKey(x => x.Id);
@@ -21,6 +25,9 @@ internal sealed class LoyaltySettingsConfiguration : IEntityTypeConfiguration<Lo
     builder.Property(x => x.Id).ValueGeneratedNever();
     builder.Property(x => x.IsEnabled).IsRequired();
     builder.Property(x => x.PointsValidityDays).IsRequired();
+    // The existing row takes the initial deadlines approved by the user (30 and 30 days, ADR-0015 R7).
+    builder.Property(x => x.RedemptionApprovalDays).IsRequired().HasDefaultValue(LoyaltySettings.DefaultRedemptionDays);
+    builder.Property(x => x.RedemptionDeliveryDays).IsRequired().HasDefaultValue(LoyaltySettings.DefaultRedemptionDays);
     builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
     builder.Property(x => x.UpdatedAt).HasColumnType("timestamp with time zone");
     builder.Property(x => x.Version).IsRowVersion();
@@ -31,6 +38,8 @@ internal sealed class LoyaltySettingsConfiguration : IEntityTypeConfiguration<Lo
       Id = LoyaltySettings.SingletonId,
       IsEnabled = false,
       PointsValidityDays = LoyaltySettings.DefaultPointsValidityDays,
+      RedemptionApprovalDays = LoyaltySettings.DefaultRedemptionDays,
+      RedemptionDeliveryDays = LoyaltySettings.DefaultRedemptionDays,
       CreatedAt = new DateTime(2026, 11, 3, 0, 0, 0, DateTimeKind.Utc)
     });
   }

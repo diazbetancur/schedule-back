@@ -78,16 +78,25 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
     /// Registers one consumption inside a transaction the caller already opened (a confirmed service record), with the
     /// same lock, validations and balances as <see cref="ConsumeAsync"/>. Nothing is saved: the caller saves and commits.
     /// The caller guarantees the idempotency key is new (the service record it belongs to is locked and pending).
+    /// <paramref name="expectedCustomerId"/> is the owner the caller validated before locking: it is checked again on the
+    /// row read under the lock, because a merge may have moved the membership meanwhile (it is then a conflict).
     /// </summary>
     internal async Task<MembershipConsumption> RegisterInCurrentTransactionAsync(
         Guid currentUserId,
         Guid membershipId,
         MembershipConsumptionRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? expectedCustomerId = null)
     {
         ValidateShape(request);
         await LockMembershipAsync(membershipId, cancellationToken);
         var membership = await LoadAsync(membershipId, cancellationToken);
+        if (expectedCustomerId is { } owner && membership.CustomerId != owner)
+        {
+            throw new ConflictException(
+                "La membresía cambió de cliente mientras se confirmaba el servicio (por ejemplo, por una fusión). Recarga e intenta de nuevo.");
+        }
+
         return await RegisterAsync(currentUserId, membership, request, cancellationToken);
     }
 

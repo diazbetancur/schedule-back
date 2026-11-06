@@ -700,11 +700,26 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
 
             case ServiceRecordOperationType.MembershipConsumption:
                 // The record id is the consumption's idempotency key: one record, at most one consumption.
+                // Owner and customer were validated before locking, and a merge can move the membership and merge the
+                // profile in between. Global lock order (record → customer profiles → memberships, as the merge):
+                // the profile is locked BEFORE the membership, never after it. Without it, a merge holding the profile
+                // and waiting for the membership deadlocks with this approval, whose save takes a key lock on the same
+                // profile (foreign key). Both checks are repeated under the locks; a change is a 409 and the
+                // transaction rolls back with no approval and no consumption.
+                await _wallet.LockCustomersAsync([request.CustomerId!.Value], cancellationToken);
+                if (!await _dbContext.Customers.AsNoTracking()
+                        .AnyAsync(customer => customer.Id == request.CustomerId && customer.MergedIntoCustomerId == null, cancellationToken))
+                {
+                    throw new ConflictException(
+                        "El cliente fue fusionado en otro perfil mientras se confirmaba el servicio. Recarga e intenta de nuevo con el perfil que se conserva.");
+                }
+
                 var consumption = await _ledger.RegisterInCurrentTransactionAsync(
                     currentUserId,
                     membership!.Id,
                     new MembershipConsumptionRequest(service!.Id, 1, request.PerformedOn, request.StaffProfileId, record.Id),
-                    cancellationToken);
+                    cancellationToken,
+                    expectedCustomerId: request.CustomerId);
                 consumptionId = consumption.Id;
                 break;
 

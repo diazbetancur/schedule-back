@@ -73,13 +73,13 @@ public sealed class CustomerManagementServiceTests : IDisposable
     await CreateCustomerAsync("Ana Gómez", "3109998888", "ana@example.com");
     var duplicate = await CreateCustomerAsync("Carlos P.", "3001234567", "carlos.p@example.com");
 
-    Assert.Equal(2, (await _service.SearchAsync("carlos")).Count);
-    Assert.Single(await _service.SearchAsync("ANA@EXAMPLE"));
-    Assert.Equal(2, (await _service.SearchAsync("3001234567")).Count);
+    Assert.Equal(2, (await _service.SearchAsync("carlos")).TotalCount);
+    Assert.Single((await _service.SearchAsync("ANA@EXAMPLE")).Items);
+    Assert.Equal(2, (await _service.SearchAsync("3001234567")).TotalCount);
 
     await _service.MergeWithPreviewAsync(_adminId, carlos.Id, duplicate.Id);
 
-    var afterMerge = await _service.SearchAsync("carlos");
+    var afterMerge = (await _service.SearchAsync("carlos")).Items;
     Assert.Equal(carlos.Id, Assert.Single(afterMerge).Id);
   }
 

@@ -48,6 +48,11 @@ internal sealed class ServiceRecordConfiguration : IEntityTypeConfiguration<Serv
           + "OR ((\"OperationType\" IS NULL OR \"OperationType\" <> 'LoyaltyReward') AND \"LoyaltyRedemptionId\" IS NULL "
           + "AND \"RewardBasePriceSnapshot\" IS NULL AND \"RewardBusinessPercentageSnapshot\" IS NULL "
           + "AND \"RewardProfessionalCommission\" IS NULL)");
+      // ADR-0016 B4: a record names what was performed: a general service (new registrations) or, for records from
+      // before general services, a rate. Existing rows are not rewritten.
+      tableBuilder.HasCheckConstraint(
+          "ck_service_records_registered_service",
+          "\"ServiceId\" IS NOT NULL OR \"GeneralServiceId\" IS NOT NULL");
       tableBuilder.HasCheckConstraint(
           "ck_service_records_loyalty_points",
           "\"AccruesLoyaltyPoints\" = false "
@@ -90,6 +95,8 @@ internal sealed class ServiceRecordConfiguration : IEntityTypeConfiguration<Serv
     builder.HasOne<CustomerProfile>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<StaffProfile>().WithMany().HasForeignKey(x => x.ApprovedStaffProfileId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<Service>().WithMany().HasForeignKey(x => x.ApprovedServiceId).OnDelete(DeleteBehavior.Restrict);
+    builder.HasOne<GeneralService>().WithMany().HasForeignKey(x => x.GeneralServiceId).OnDelete(DeleteBehavior.Restrict);
+    builder.HasOne<GeneralService>().WithMany().HasForeignKey(x => x.ApprovedGeneralServiceId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<CustomerProfile>().WithMany().HasForeignKey(x => x.ApprovedCustomerId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<IncomeEntry>().WithMany().HasForeignKey(x => x.IncomeEntryId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<CustomerMembership>().WithMany().HasForeignKey(x => x.CustomerMembershipId).OnDelete(DeleteBehavior.Restrict);

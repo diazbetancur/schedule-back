@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Loyalty.Admin;
+using Barbershop.Application.Common.Paging;
 
 namespace Api.Barbershop.Features.Admin.Loyalty;
 
@@ -33,7 +34,7 @@ public static class AdminLoyaltyEndpoints
 
         adminLoyalty.MapGet("/settings/changes", GetSettingsChangesAsync)
             .WithName("GetAdminLoyaltySettingsChanges")
-            .Produces<IReadOnlyList<LoyaltySettingsChangeView>>(StatusCodes.Status200OK)
+            .Produces<PagedResult<LoyaltySettingsChangeView>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
@@ -48,7 +49,7 @@ public static class AdminLoyaltyEndpoints
         LoyaltySettingsUpdateRequest request, ClaimsPrincipal user, IAdminLoyaltySettingsService service, CancellationToken cancellationToken)
         => service.UpdateAsync(user.GetRequiredUserId(), request, cancellationToken);
 
-    private static Task<IReadOnlyList<LoyaltySettingsChangeView>> GetSettingsChangesAsync(
-        IAdminLoyaltySettingsService service, CancellationToken cancellationToken)
-        => service.GetChangesAsync(cancellationToken);
+    private static Task<PagedResult<LoyaltySettingsChangeView>> GetSettingsChangesAsync(
+        [AsParameters] PageQuery query, IAdminLoyaltySettingsService service, CancellationToken cancellationToken)
+        => service.GetChangesAsync(query, cancellationToken);
 }

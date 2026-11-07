@@ -1,5 +1,6 @@
 using System.Net.Mail;
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Customers.Admin;
 using Barbershop.Domain.Customers;
 using Barbershop.Domain.Memberships;
@@ -13,7 +14,6 @@ namespace Barbershop.Infrastructure.Customers;
 
 internal sealed class CustomerManagementService : IAdminCustomersService
 {
-    private const int SearchLimit = 200;
     private const int CandidateLimit = 20;
     private const int MinPhoneDigits = 7;
     private const int PhoneKeyLength = 10;
@@ -38,8 +38,10 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         _wallet = new LoyaltyWalletService(dbContext, timeProvider);
     }
 
-    public async Task<IReadOnlyList<CustomerListItem>> SearchAsync(string? query, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<CustomerListItem>> SearchAsync(
+        string? query, int? page = null, int? pageSize = null, CancellationToken cancellationToken = default)
     {
+        var pageRequest = PageRequest.Create(page, pageSize);
         var customers = _dbContext.Customers.Where(customer => customer.MergedIntoCustomerId == null);
 
         var term = query?.Trim();
@@ -53,13 +55,18 @@ internal sealed class CustomerManagementService : IAdminCustomersService
                 || (digits.Length >= 3 && customer.NormalizedPhone.Contains(digits)));
         }
 
-        var results = await customers
+        return await customers
+            .AsNoTracking()
             .OrderBy(customer => customer.FullName)
-            .Take(SearchLimit)
-            .ToListAsync(cancellationToken);
-
-        var users = await LoadUsersAsync(results.SelectMany(LinkUserIds), cancellationToken);
-        return results.Select(customer => MapListItem(customer, users)).ToArray();
+            .ThenBy(customer => customer.Id)
+            .ToPagedResultAsync(
+                pageRequest,
+                async (results, ct) =>
+                {
+                    var users = await LoadUsersAsync(results.SelectMany(LinkUserIds), ct);
+                    return (IReadOnlyList<CustomerListItem>)results.Select(customer => MapListItem(customer, users)).ToArray();
+                },
+                cancellationToken);
     }
 
     public async Task<CustomerDetailView> GetByIdAsync(Guid customerId, CancellationToken cancellationToken = default)

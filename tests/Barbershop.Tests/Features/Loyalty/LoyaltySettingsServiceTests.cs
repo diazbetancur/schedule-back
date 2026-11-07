@@ -54,7 +54,7 @@ public sealed class LoyaltySettingsServiceTests : IDisposable
     Assert.NotNull(updated.UpdatedAt);
     Assert.Equal(_admin.FullName, updated.UpdatedByName);
 
-    var change = Assert.Single(await _service.GetChangesAsync());
+    var change = Assert.Single((await _service.GetChangesAsync()).Items);
     Assert.False(change.PreviousIsEnabled);
     Assert.True(change.NewIsEnabled);
     Assert.Equal(LoyaltySettings.DefaultPointsValidityDays, change.PreviousPointsValidityDays);
@@ -70,7 +70,7 @@ public sealed class LoyaltySettingsServiceTests : IDisposable
 
     await _service.UpdateAsync(_admin.Id, new LoyaltySettingsUpdateRequest(current.IsEnabled, current.PointsValidityDays, current.Version));
 
-    Assert.Empty(await _service.GetChangesAsync());
+    Assert.Empty((await _service.GetChangesAsync()).Items);
     Assert.Null((await _service.GetAsync()).UpdatedAt);
   }
 
@@ -86,7 +86,7 @@ public sealed class LoyaltySettingsServiceTests : IDisposable
         _service.UpdateAsync(_admin.Id, new LoyaltySettingsUpdateRequest(true, days, current.Version)));
 
     Assert.Contains("pointsValidityDays", exception.Errors.Keys);
-    Assert.Empty(await _service.GetChangesAsync());
+    Assert.Empty((await _service.GetChangesAsync()).Items);
   }
 
   [Theory]
@@ -121,7 +121,7 @@ public sealed class LoyaltySettingsServiceTests : IDisposable
     var after = await _service.GetAsync();
     Assert.False(after.IsEnabled);
     Assert.Equal(LoyaltySettings.DefaultPointsValidityDays, after.PointsValidityDays);
-    Assert.Empty(await _service.GetChangesAsync());
+    Assert.Empty((await _service.GetChangesAsync()).Items);
   }
 
   [Fact]
@@ -133,7 +133,7 @@ public sealed class LoyaltySettingsServiceTests : IDisposable
       version = (await _service.UpdateAsync(_admin.Id, new LoyaltySettingsUpdateRequest(true, days, version))).Version;
     }
 
-    var changes = await _service.GetChangesAsync();
+    var changes = (await _service.GetChangesAsync()).Items;
 
     Assert.Equal([120, 60, 30], changes.Select(change => change.NewPointsValidityDays));
     Assert.Equal([60, 30, LoyaltySettings.DefaultPointsValidityDays], changes.Select(change => change.PreviousPointsValidityDays));

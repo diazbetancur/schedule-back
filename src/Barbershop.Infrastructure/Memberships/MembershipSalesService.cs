@@ -1,4 +1,5 @@
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Memberships.Admin;
 using Barbershop.Domain.Common;
 using Barbershop.Domain.Customers;
@@ -33,23 +34,62 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
         _wallet = new LoyaltyWalletService(dbContext, timeProvider);
     }
 
-    public async Task<IReadOnlyList<CustomerMembershipSummaryView>> GetCustomerMembershipsAsync(Guid customerId, CancellationToken cancellationToken = default)
+    /// <summary>Newest first (registration time, then id). The status filter uses the displayed status.</summary>
+    public async Task<PagedResult<CustomerMembershipSummaryView>> GetCustomerMembershipsAsync(
+        Guid customerId, MembershipListQuery query, CancellationToken cancellationToken = default)
     {
+        var page = PageRequest.Create(query.Page, query.PageSize);
+        var status = ListFilters.ParseOption(query.Status, "status", MembershipDisplayStatuses.All);
+        // Memberships are current items, not a history: no default date, so a membership sold long ago that is still
+        // active is never hidden. A sale range, when given, is limited like every date filter (30 days).
+        var soldRange = HistoryRange.ResolveOptional(query.SoldFrom, query.SoldTo, "soldFrom", "soldTo");
+
         if (!await _dbContext.Customers.AnyAsync(customer => customer.Id == customerId, cancellationToken))
         {
             throw new NotFoundException("El cliente no existe.");
         }
 
-        var memberships = await _dbContext.CustomerMemberships
+        var today = Today();
+        var memberships = _dbContext.CustomerMemberships.AsNoTracking()
+            .Where(membership => membership.CustomerId == customerId);
+
+        if (query.PlanId is { } planId)
+        {
+            memberships = memberships.Where(membership => membership.MembershipPlanId == planId);
+        }
+
+        if (soldRange?.From is { } soldFrom)
+        {
+            memberships = memberships.Where(membership => membership.SoldOn >= soldFrom);
+        }
+
+        if (soldRange?.To is { } soldTo)
+        {
+            memberships = memberships.Where(membership => membership.SoldOn <= soldTo);
+        }
+
+        // Same rules as DisplayStatus, translated to SQL.
+        memberships = status switch
+        {
+            MembershipDisplayStatuses.Annulled => memberships.Where(m => m.Status == MembershipStatus.Annulled),
+            MembershipDisplayStatuses.PendingActivation => memberships.Where(m => m.Status == MembershipStatus.PendingActivation),
+            MembershipDisplayStatuses.Scheduled => memberships.Where(m => m.Status == MembershipStatus.Active && today < m.StartsOn),
+            MembershipDisplayStatuses.Expired => memberships.Where(m => m.Status == MembershipStatus.Active && today >= m.StartsOn && today > m.EndsOn),
+            MembershipDisplayStatuses.Active => memberships.Where(m => m.Status == MembershipStatus.Active && today >= m.StartsOn && today <= m.EndsOn),
+            _ => memberships,
+        };
+
+        return await memberships
             .Include(membership => membership.Allowances)
             .Include(membership => membership.Gifts)
-            .Where(membership => membership.CustomerId == customerId)
             .OrderByDescending(membership => membership.CreatedAt)
+            .ThenByDescending(membership => membership.Id)
             .AsSplitQuery()
-            .ToListAsync(cancellationToken);
+            .ToPagedResultAsync(page, membership => MapSummary(membership, today), cancellationToken);
+    }
 
-        var today = Today();
-        return memberships.Select(membership => new CustomerMembershipSummaryView(
+    private static CustomerMembershipSummaryView MapSummary(CustomerMembership membership, DateOnly today)
+        => new(
                 membership.Id,
                 membership.CustomerId,
                 membership.PlanName,
@@ -64,9 +104,7 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
                 membership.Allowances.Where(line => line.Origin == MembershipAllowanceOrigin.Gift).Sum(line => line.GrantedQuantity),
                 membership.Gifts.Count(gift => gift.Kind == MembershipGiftKind.Physical),
                 membership.IncomeEntryId,
-                membership.CreatedAt))
-            .ToArray();
-    }
+                membership.CreatedAt);
 
     public async Task<CustomerMembershipDetailView> GetByIdAsync(Guid membershipId, CancellationToken cancellationToken = default)
     {

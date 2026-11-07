@@ -15,7 +15,8 @@ public static class AdminIncomeEndpoints
 
         adminIncome.MapGet(string.Empty, GetAsync)
             .WithName("GetAdminIncome")
-            .Produces<IReadOnlyList<IncomeEntryView>>(StatusCodes.Status200OK)
+            .Produces<IncomeEntriesPage>(StatusCodes.Status200OK)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
@@ -44,12 +45,11 @@ public static class AdminIncomeEndpoints
         return api;
     }
 
-    private static Task<IReadOnlyList<IncomeEntryView>> GetAsync(
-        DateOnly? date,
-        Guid? staffProfileId,
+    private static Task<IncomeEntriesPage> GetAsync(
+        [AsParameters] IncomeListQuery query,
         IAdminIncomeService service,
         CancellationToken cancellationToken)
-        => service.GetAsync(date, staffProfileId, cancellationToken);
+        => service.GetAsync(query, cancellationToken);
 
     private static async Task<IResult> CreateAsync(
         IncomeEntryCreateRequest request,

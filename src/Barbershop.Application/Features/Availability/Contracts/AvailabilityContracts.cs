@@ -40,9 +40,16 @@ public sealed record PublicAvailabilitySlotResponse(
     DateTime StartAtUtc,
     DateTime EndAtUtc);
 
+/// <summary>
+/// Slots of one service (or of a fixed duration, to reschedule an existing appointment). Each slot lasts
+/// <c>SlotDurationMinutes</c> and starts on a <c>SlotStepMinutes</c> grid counted from the start of its availability
+/// rule (ADR-0016 F1).
+/// </summary>
 public sealed record PublicAvailabilitySlotsResponse(
     Guid StaffProfileId,
     DateOnly From,
     DateOnly To,
     int SlotDurationMinutes,
-    IReadOnlyList<PublicAvailabilitySlotResponse> Slots);
+    IReadOnlyList<PublicAvailabilitySlotResponse> Slots,
+    Guid? GeneralServiceId = null,
+    int SlotStepMinutes = 15);

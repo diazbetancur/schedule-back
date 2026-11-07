@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Loyalty.Wallet;
 using Barbershop.Domain.Common;
 using Barbershop.Domain.Loyalty;
@@ -24,8 +25,9 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
     internal const int MaxMergeChainDepth = 32;
 
     internal const int ExpiringSoonDays = 30;
-    private const int MaxMovementsListed = 200;
-    private const int MaxOwnMovementsListed = 50;
+    /// <summary>Redemptions embedded in the admin wallet (a per-customer view, not a paginated history).</summary>
+    /// <summary>Closed redemptions shown in the wallet summary; the full list is the paginated redemptions page.</summary>
+    internal const int RecentRedemptionsPreviewSize = 10;
 
     private readonly AppDbContext _dbContext;
     private readonly TimeProvider _timeProvider;
@@ -515,14 +517,11 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
             .ToListAsync(cancellationToken);
         var movements = await _dbContext.LoyaltyMovements.AsNoTracking()
             .Where(movement => movement.CustomerId == customerId)
-            .OrderByDescending(movement => movement.PerformedAt).ThenBy(movement => movement.Type)
-            .Take(MaxMovementsListed)
+            .OrderByDescending(movement => movement.PerformedAt).ThenBy(movement => movement.Type).ThenBy(movement => movement.Id)
+            .Take(LoyaltyMovementListQuery.RecentPreviewSize)
             .ToListAsync(cancellationToken);
 
-        var userIds = movements.Where(movement => movement.PerformedByUserId is not null).Select(movement => movement.PerformedByUserId!.Value).Distinct().ToArray();
-        var userNames = await _dbContext.Users.AsNoTracking()
-            .Where(user => userIds.Contains(user.Id))
-            .ToDictionaryAsync(user => user.Id, user => user.FullName, cancellationToken);
+        var movementViews = await MapMovementsAsync(movements, cancellationToken);
         var labels = await SourceLabelsAsync(lots, cancellationToken);
         var usableLots = lots.Where(lot => lot.UsablePointsOn(today) > 0).ToList();
 
@@ -543,23 +542,114 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
             debts.Select(debt => new LoyaltyDebtView(
                     debt.Id, debt.Origin.ToString(), debt.Amount, debt.OutstandingPoints, debt.OriginDebtId, debt.OriginCustomerId, debt.CreatedAt, debt.IncurredAt))
                 .ToArray(),
-            movements.Select(movement => new LoyaltyMovementView(
-                    movement.Id, movement.Type.ToString(), movement.Points, movement.LotId, movement.DebtId, movement.Reason,
-                    movement.RelatedCustomerId,
-                    movement.PerformedByUserId is { } userId ? userNames.GetValueOrDefault(userId) : null,
-                    movement.PerformedAt,
-                    movement.RedemptionId))
-                .ToArray(),
+            movementViews,
             lots.Sum(lot => lot.ReservedPoints),
             await LoyaltyRedemptionService.MapAsync(
                 _dbContext,
-                await _dbContext.LoyaltyRedemptions.AsNoTracking()
-                    .Where(redemption => redemption.CustomerId == customerId)
-                    .OrderByDescending(redemption => redemption.RequestedAt)
-                    .Take(MaxMovementsListed)
-                    .ToListAsync(cancellationToken),
+                await RedemptionsSummaryAsync(customerId, cancellationToken),
                 today,
                 cancellationToken));
+    }
+
+    /// <summary>
+    /// Summary of the wallet: every pending redemption (requested or approved, however old, because they still need
+    /// work) plus the <see cref="RecentRedemptionsPreviewSize"/> most recent closed ones, newest first. The complete
+    /// list is the paginated redemptions page filtered by customer.
+    /// </summary>
+    private async Task<List<LoyaltyRedemption>> RedemptionsSummaryAsync(Guid customerId, CancellationToken cancellationToken)
+    {
+        var ofCustomer = _dbContext.LoyaltyRedemptions.AsNoTracking().Where(redemption => redemption.CustomerId == customerId);
+        var pending = await ofCustomer
+            .Where(redemption => redemption.Status == LoyaltyRedemptionStatus.Requested || redemption.Status == LoyaltyRedemptionStatus.Approved)
+            .ToListAsync(cancellationToken);
+        var recentClosed = await ofCustomer
+            .Where(redemption => redemption.Status != LoyaltyRedemptionStatus.Requested && redemption.Status != LoyaltyRedemptionStatus.Approved)
+            .OrderByDescending(redemption => redemption.RequestedAt).ThenByDescending(redemption => redemption.Id)
+            .Take(RecentRedemptionsPreviewSize)
+            .ToListAsync(cancellationToken);
+        return pending.Concat(recentClosed)
+            .OrderByDescending(redemption => redemption.RequestedAt).ThenByDescending(redemption => redemption.Id)
+            .ToList();
+    }
+
+    public async Task<PagedResult<LoyaltyMovementView>> GetMovementsAsync(
+        Guid customerId, LoyaltyMovementListQuery query, CancellationToken cancellationToken = default)
+    {
+        var (page, movements) = ParseMovementQuery(query);
+        if (!await _dbContext.Customers.AnyAsync(customer => customer.Id == customerId, cancellationToken))
+        {
+            throw new NotFoundException("El cliente no existe.");
+        }
+
+        return await movements(customerId).ToPagedResultAsync(page, MapMovementsAsync, cancellationToken);
+    }
+
+    public async Task<PagedResult<MyLoyaltyMovementView>> GetMyMovementsAsync(
+        Guid currentUserId, LoyaltyMovementListQuery query, CancellationToken cancellationToken = default)
+    {
+        var (page, movements) = ParseMovementQuery(query);
+        var profileId = await _dbContext.Customers.AsNoTracking()
+            .Where(customer => customer.UserId == currentUserId && customer.MergedIntoCustomerId == null)
+            .Select(customer => (Guid?)customer.Id)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (profileId is not { } customerId)
+        {
+            return new PagedResult<MyLoyaltyMovementView>([], page.Page, page.PageSize, 0);
+        }
+
+        return await movements(customerId).ToPagedResultAsync(
+            page, movement => new MyLoyaltyMovementView(movement.Type.ToString(), movement.Points, movement.PerformedAt), cancellationToken);
+    }
+
+    /// <summary>Validates the filters and returns the filtered, totally ordered movements of one profile (newest first).</summary>
+    private (PageRequest Page, Func<Guid, IQueryable<LoyaltyMovement>> Movements) ParseMovementQuery(LoyaltyMovementListQuery query)
+    {
+        var page = PageRequest.Create(query.Page, query.PageSize);
+        var type = ListFilters.ParseEnum<LoyaltyMovementType>(query.Type, "type");
+        // A history: the last 30 days by default and at most 30 days per query (any period). Balances never depend on it.
+        var range = HistoryRange.Resolve(query.From, query.To, Today());
+        DateTime? fromUtc = PagingExtensions.StartOfBogotaDayUtc(range.From);
+        DateTime? toUtc = PagingExtensions.EndOfBogotaDayUtc(range.To);
+
+        return (page, customerId =>
+        {
+            var movements = _dbContext.LoyaltyMovements.AsNoTracking().Where(movement => movement.CustomerId == customerId);
+            if (type is { } wanted)
+            {
+                movements = movements.Where(movement => movement.Type == wanted);
+            }
+
+            if (fromUtc is { } start)
+            {
+                movements = movements.Where(movement => movement.PerformedAt >= start);
+            }
+
+            if (toUtc is { } end)
+            {
+                movements = movements.Where(movement => movement.PerformedAt < end);
+            }
+
+            return movements
+                .OrderByDescending(movement => movement.PerformedAt)
+                .ThenBy(movement => movement.Type)
+                .ThenBy(movement => movement.Id);
+        });
+    }
+
+    private async Task<IReadOnlyList<LoyaltyMovementView>> MapMovementsAsync(
+        IReadOnlyList<LoyaltyMovement> movements, CancellationToken cancellationToken)
+    {
+        var userIds = movements.Where(movement => movement.PerformedByUserId is not null).Select(movement => movement.PerformedByUserId!.Value).Distinct().ToArray();
+        var userNames = await _dbContext.Users.AsNoTracking()
+            .Where(user => userIds.Contains(user.Id))
+            .ToDictionaryAsync(user => user.Id, user => user.FullName, cancellationToken);
+        return movements.Select(movement => new LoyaltyMovementView(
+                movement.Id, movement.Type.ToString(), movement.Points, movement.LotId, movement.DebtId, movement.Reason,
+                movement.RelatedCustomerId,
+                movement.PerformedByUserId is { } userId ? userNames.GetValueOrDefault(userId) : null,
+                movement.PerformedAt,
+                movement.RedemptionId))
+            .ToArray();
     }
 
     public async Task<MyLoyaltyView> GetMineAsync(Guid currentUserId, CancellationToken cancellationToken = default)
@@ -589,8 +679,8 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
             .SumAsync(candidate => candidate.OutstandingPoints, cancellationToken);
         var movements = await _dbContext.LoyaltyMovements.AsNoTracking()
             .Where(movement => movement.CustomerId == customerId)
-            .OrderByDescending(movement => movement.PerformedAt)
-            .Take(MaxOwnMovementsListed)
+            .OrderByDescending(movement => movement.PerformedAt).ThenBy(movement => movement.Type).ThenBy(movement => movement.Id)
+            .Take(LoyaltyMovementListQuery.RecentPreviewSize)
             .Select(movement => new { movement.Type, movement.Points, movement.PerformedAt })
             .ToListAsync(cancellationToken);
         var labels = await SourceLabelsAsync(lots, cancellationToken);

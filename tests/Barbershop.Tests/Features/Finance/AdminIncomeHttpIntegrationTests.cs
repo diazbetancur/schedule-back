@@ -11,6 +11,7 @@ using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
+using Barbershop.Domain.Services;
 
 namespace Barbershop.Tests.Features.Finance;
 
@@ -59,24 +60,24 @@ public sealed class AdminIncomeHttpIntegrationTests
     Assert.Equal(8000, created.BusinessAmount);
     Assert.Equal(12000, created.ProfessionalAmount);
 
-    using var listResponse = await context.Client.GetAsync($"/api/v1/admin/income?date={Today:yyyy-MM-dd}");
+    using var listResponse = await context.Client.GetAsync($"/api/v1/admin/income?from={Today:yyyy-MM-dd}&to={Today:yyyy-MM-dd}");
     Assert.Equal(HttpStatusCode.OK, listResponse.StatusCode);
-    var list = await listResponse.Content.ReadFromJsonAsync<List<IncomeEntryView>>();
+    var list = await listResponse.Content.ReadPageItemsAsync<IncomeEntryView>();
     Assert.Contains(list!, e => e.Id == created.Id);
 
-    using var otherDay = await context.Client.GetAsync($"/api/v1/admin/income?date={Today.AddDays(-1):yyyy-MM-dd}");
-    var otherList = await otherDay.Content.ReadFromJsonAsync<List<IncomeEntryView>>();
+    using var otherDay = await context.Client.GetAsync($"/api/v1/admin/income?from={Today.AddDays(-1):yyyy-MM-dd}&to={Today.AddDays(-1):yyyy-MM-dd}");
+    var otherList = await otherDay.Content.ReadPageItemsAsync<IncomeEntryView>();
     Assert.DoesNotContain(otherList!, e => e.Id == created.Id);
 
-    using var byStaff = await context.Client.GetAsync($"/api/v1/admin/income?date={Today:yyyy-MM-dd}&staffProfileId={staffId}");
-    var byStaffList = await byStaff.Content.ReadFromJsonAsync<List<IncomeEntryView>>();
+    using var byStaff = await context.Client.GetAsync($"/api/v1/admin/income?from={Today:yyyy-MM-dd}&to={Today:yyyy-MM-dd}&staffProfileId={staffId}");
+    var byStaffList = await byStaff.Content.ReadPageItemsAsync<IncomeEntryView>();
     Assert.Contains(byStaffList!, e => e.Id == created.Id);
 
     using var deleteResponse = await context.Client.DeleteAsync($"/api/v1/admin/income/{created.Id}");
     Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
 
-    using var afterDelete = await context.Client.GetAsync($"/api/v1/admin/income?date={Today:yyyy-MM-dd}");
-    var afterList = await afterDelete.Content.ReadFromJsonAsync<List<IncomeEntryView>>();
+    using var afterDelete = await context.Client.GetAsync($"/api/v1/admin/income?from={Today:yyyy-MM-dd}&to={Today:yyyy-MM-dd}");
+    var afterList = await afterDelete.Content.ReadPageItemsAsync<IncomeEntryView>();
     Assert.DoesNotContain(afterList!, e => e.Id == created.Id);
   }
 
@@ -115,7 +116,7 @@ public sealed class AdminIncomeHttpIntegrationTests
   {
     using var scope = factory.Services.CreateScope();
     var service = scope.ServiceProvider.GetRequiredService<IAdminServicesService>();
-    var created = await service.CreateAsync(new ServiceCreateRequest(name, basePrice, businessPercentage));
+    var created = await service.CreateAsync(new ServiceCreateRequest(name, basePrice, businessPercentage, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
     return created.Id;
   }
 

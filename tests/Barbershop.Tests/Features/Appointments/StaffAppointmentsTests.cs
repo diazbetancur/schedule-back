@@ -12,7 +12,10 @@ using Barbershop.Infrastructure.Identity;
 using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.Staff;
 using Microsoft.AspNetCore.Identity;
+using Barbershop.Application.Common.Exceptions;
+using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
@@ -35,6 +38,7 @@ public sealed class StaffAppointmentsTests : IDisposable
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning))
             .Options;
 
         _dbContext = new AppDbContext(options);
@@ -84,18 +88,22 @@ public sealed class StaffAppointmentsTests : IDisposable
             staff.UserId,
             new StaffManualAppointmentCreateRequest(
                 ToUtc(nextDay, 14, 0),
-                null,
+                Corte,
                 "Walk In",
                 "walk-in@example.com",
                 "+5491100000010",
                 "No beard trim"));
 
         Assert.Equal(staff.StaffProfileId, created.StaffProfileId);
+        Assert.Equal(Corte, created.GeneralServiceId);
+        Assert.Equal("Corte", created.GeneralServiceName);
+        Assert.Equal(30, created.ReservedDurationMinutes);
+        Assert.Equal(ToUtc(nextDay, 14, 30), created.EndsAtUtc);
         Assert.Equal(AppointmentSource.Manual, created.Source);
         Assert.Equal(AppointmentStatus.Confirmed, created.Status);
         Assert.Equal("Walk In", created.CustomerName);
 
-        var slots = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay);
+        var slots = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
         Assert.DoesNotContain(slots.Slots, slot => slot.StartAtUtc == ToUtc(nextDay, 14, 0));
     }
 
@@ -112,7 +120,7 @@ public sealed class StaffAppointmentsTests : IDisposable
         var created = await _adminAppointmentsService.CreateAsync(new AdminManualAppointmentCreateRequest(
             firstStaff.StaffProfileId,
             ToUtc(nextDay, 9, 0),
-            ToUtc(nextDay, 9, 30),
+            Corte,
             "Customer A",
             "customer-a@example.com",
             null,
@@ -124,7 +132,6 @@ public sealed class StaffAppointmentsTests : IDisposable
                 created.Id,
                 new AppointmentUpdateRequest(
                     ToUtc(nextDay, 9, 30),
-                    ToUtc(nextDay, 10, 0),
                     "Customer B",
                     "customer-b@example.com",
                     null,
@@ -142,7 +149,7 @@ public sealed class StaffAppointmentsTests : IDisposable
         var created = await _adminAppointmentsService.CreateAsync(new AdminManualAppointmentCreateRequest(
             staff.StaffProfileId,
             ToUtc(nextDay, 9, 0),
-            ToUtc(nextDay, 9, 30),
+            Corte,
             "Original Name",
             "original@example.com",
             "+5491100000020",
@@ -152,7 +159,6 @@ public sealed class StaffAppointmentsTests : IDisposable
             created.Id,
             new AppointmentUpdateRequest(
                 ToUtc(nextDay, 10, 0),
-                ToUtc(nextDay, 10, 30),
                 "Updated Name",
                 "updated@example.com",
                 "+5491100000030",
@@ -165,6 +171,7 @@ public sealed class StaffAppointmentsTests : IDisposable
         Assert.Equal("Updated Name", updated.CustomerName);
         Assert.Equal("updated@example.com", updated.CustomerEmail);
         Assert.Equal(ToUtc(nextDay, 10, 0), updated.StartsAtUtc);
+        Assert.Equal(ToUtc(nextDay, 10, 30), updated.EndsAtUtc);
         Assert.Equal(AppointmentStatus.NoShow, statusUpdated.Status);
     }
 
@@ -183,7 +190,7 @@ public sealed class StaffAppointmentsTests : IDisposable
             staff.UserId,
             new StaffManualAppointmentCreateRequest(
                 ToUtc(nextDay, 9, 0),
-                ToUtc(nextDay, 9, 30),
+                Corte,
                 "Status Customer",
                 null,
                 null,
@@ -209,7 +216,7 @@ public sealed class StaffAppointmentsTests : IDisposable
             staff.UserId,
             new StaffManualAppointmentCreateRequest(
                 ToUtc(nextDay, 9, 0),
-                ToUtc(nextDay, 9, 30),
+                Corte,
                 "Snapshot Customer",
                 "snapshot@example.com",
                 "+5491100000040",
@@ -219,7 +226,7 @@ public sealed class StaffAppointmentsTests : IDisposable
         Assert.Equal("snapshot@example.com", created.CustomerEmail);
         Assert.Equal("+5491100000040", created.CustomerPhone);
 
-        var beforeCancel = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay);
+        var beforeCancel = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
         Assert.DoesNotContain(beforeCancel.Slots, slot => slot.StartAtUtc == ToUtc(nextDay, 9, 0));
 
         await _staffAppointmentsService.UpdateStatusForCurrentStaffAsync(
@@ -227,15 +234,133 @@ public sealed class StaffAppointmentsTests : IDisposable
             created.Id,
             new AppointmentStatusUpdateRequest(AppointmentStatus.Cancelled));
 
-        var afterCancel = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay);
+        var afterCancel = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
         Assert.Contains(afterCancel.Slots, slot => slot.StartAtUtc == ToUtc(nextDay, 9, 0));
+    }
+
+    [Fact]
+    public async Task ManualCreate_StaffCannotChangeTheDuration_AdminCan()
+    {
+        var staff = await CreateStaffAsync("duration-staff@example.com", "Duration Staff", "Duration Staff");
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 12, 0)]);
+
+        var rejected = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+            _staffAppointmentsService.CreateForCurrentStaffAsync(
+                staff.UserId,
+                new StaffManualAppointmentCreateRequest(ToUtc(nextDay, 9, 0), Corte, "Walk In", null, null, null, 45)));
+        Assert.Contains("durationMinutes", rejected.Errors.Keys);
+
+        // Sending exactly the offering's duration is accepted.
+        var same = await _staffAppointmentsService.CreateForCurrentStaffAsync(
+            staff.UserId,
+            new StaffManualAppointmentCreateRequest(ToUtc(nextDay, 9, 0), Corte, "Walk In", null, null, null, 30));
+        Assert.Equal(30, same.ReservedDurationMinutes);
+
+        var longer = await _adminAppointmentsService.CreateAsync(new AdminManualAppointmentCreateRequest(
+            staff.StaffProfileId, ToUtc(nextDay, 10, 0), Corte, "Admin Customer", null, null, null, 50));
+        Assert.Equal(50, longer.ReservedDurationMinutes);
+        Assert.Equal(ToUtc(nextDay, 10, 50), longer.EndsAtUtc);
+
+        var outOfRange = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+            _adminAppointmentsService.CreateAsync(new AdminManualAppointmentCreateRequest(
+                staff.StaffProfileId, ToUtc(nextDay, 11, 0), Corte, "Admin Customer", null, null, null, 300)));
+        Assert.Contains("durationMinutes", outOfRange.Errors.Keys);
+    }
+
+    [Fact]
+    public async Task ManualCreate_RequiresAServiceTheProfessionalOffers()
+    {
+        var staff = await CreateStaffAsync("offer-staff@example.com", "Offer Staff", "Offer Staff");
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 12, 0)]);
+        var beard = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Barba");
+
+        var missing = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+            _adminAppointmentsService.CreateAsync(new AdminManualAppointmentCreateRequest(
+                staff.StaffProfileId, ToUtc(nextDay, 9, 0), Guid.Empty, "Customer", null, null, null)));
+        Assert.Contains("generalServiceId", missing.Errors.Keys);
+
+        await Assert.ThrowsAsync<ConflictException>(() =>
+            _staffAppointmentsService.CreateForCurrentStaffAsync(
+                staff.UserId,
+                new StaffManualAppointmentCreateRequest(ToUtc(nextDay, 9, 0), beard.Id, "Customer", null, null, null)));
+
+        // An inactive offering is not bookable either.
+        await ServiceOfferingTestData.OfferAsync(_dbContext, staff.StaffProfileId, beard.Id, 20, isActive: false);
+        await Assert.ThrowsAsync<ConflictException>(() =>
+            _adminAppointmentsService.CreateAsync(new AdminManualAppointmentCreateRequest(
+                staff.StaffProfileId, ToUtc(nextDay, 9, 0), beard.Id, "Customer", null, null, null)));
+
+        var options = await _adminAppointmentsService.GetServiceOptionsAsync(staff.StaffProfileId);
+        var option = Assert.Single(options);
+        Assert.Equal((Corte, "Corte", 30), (option.GeneralServiceId, option.Name, option.DurationMinutes));
+    }
+
+    [Fact]
+    public async Task Update_KeepsReservedDuration_ChangesServiceWithItsDuration_AndOnlyAdminOverrides()
+    {
+        var staff = await CreateStaffAsync("update-staff@example.com", "Update Staff", "Update Staff");
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 13, 0)]);
+        var beard = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Barba");
+        await ServiceOfferingTestData.OfferAsync(_dbContext, staff.StaffProfileId, beard.Id, 20);
+
+        var created = await _staffAppointmentsService.CreateForCurrentStaffAsync(
+            staff.UserId, new StaffManualAppointmentCreateRequest(ToUtc(nextDay, 9, 0), Corte, "Customer", null, null, null));
+
+        // The offering changes afterwards: the appointment keeps the 30 minutes it reserved (D11).
+        var offering = await _dbContext.StaffServiceOfferings.SingleAsync(item => item.StaffProfileId == staff.StaffProfileId && item.GeneralServiceId == Corte);
+        offering.Update(60, true, CurrentUtc.UtcDateTime);
+        await _dbContext.SaveChangesAsync();
+
+        var moved = await _staffAppointmentsService.UpdateForCurrentStaffAsync(
+            staff.UserId, created.Id, new AppointmentUpdateRequest(ToUtc(nextDay, 10, 0), "Customer", null, null, null));
+        Assert.Equal((30, ToUtc(nextDay, 10, 30)), (moved.ReservedDurationMinutes!.Value, moved.EndsAtUtc));
+
+        var staffOverride = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+            _staffAppointmentsService.UpdateForCurrentStaffAsync(
+                staff.UserId, created.Id, new AppointmentUpdateRequest(ToUtc(nextDay, 10, 0), "Customer", null, null, null, null, 45)));
+        Assert.Contains("durationMinutes", staffOverride.Errors.Keys);
+
+        var otherService = await _staffAppointmentsService.UpdateForCurrentStaffAsync(
+            staff.UserId, created.Id, new AppointmentUpdateRequest(ToUtc(nextDay, 10, 0), "Customer", null, null, null, beard.Id));
+        Assert.Equal((beard.Id, "Barba", 20), (otherService.GeneralServiceId!.Value, otherService.GeneralServiceName, otherService.ReservedDurationMinutes!.Value));
+        Assert.Equal(ToUtc(nextDay, 10, 20), otherService.EndsAtUtc);
+
+        var adminOverride = await _adminAppointmentsService.UpdateAsync(
+            created.Id, new AppointmentUpdateRequest(ToUtc(nextDay, 11, 0), "Customer", null, null, null, null, 75));
+        Assert.Equal((beard.Id, 75, ToUtc(nextDay, 12, 15)), (adminOverride.GeneralServiceId!.Value, adminOverride.ReservedDurationMinutes!.Value, adminOverride.EndsAtUtc));
+    }
+
+    [Fact]
+    public async Task Update_OfAnAppointmentFromBeforeServices_KeepsItsLengthAndHasNoService()
+    {
+        var staff = await CreateStaffAsync("legacy-staff@example.com", "Legacy Staff", "Legacy Staff");
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 13, 0)]);
+        var legacy = new Appointment(
+            staff.StaffProfileId, "Legacy", ToUtc(nextDay, 9, 0), ToUtc(nextDay, 9, 40), AppointmentStatus.Confirmed,
+            AppointmentSource.Manual, CurrentUtc.UtcDateTime);
+        _dbContext.Appointments.Add(legacy);
+        await _dbContext.SaveChangesAsync();
+
+        var moved = await _staffAppointmentsService.UpdateForCurrentStaffAsync(
+            staff.UserId, legacy.Id, new AppointmentUpdateRequest(ToUtc(nextDay, 11, 0), "Legacy", null, null, null));
+
+        Assert.Equal(ToUtc(nextDay, 11, 40), moved.EndsAtUtc);
+        Assert.Null(moved.GeneralServiceId);
+        Assert.Null(moved.ReservedDurationMinutes);
     }
 
     private static AvailabilityRuleRequest Rule(DayOfWeek dayOfWeek, int startHour, int startMinute, int endHour, int endMinute)
         => new((int)dayOfWeek, new TimeOnly(startHour, startMinute), new TimeOnly(endHour, endMinute), true);
 
+    private static Guid Corte => ServiceOfferingTestData.Corte;
+
     private async Task<StaffManagementView> CreateStaffAsync(string email, string fullName, string displayName)
-        => await _adminStaffService.CreateAsync(new AdminStaffCreateRequest(
+    {
+        var staff = await _adminStaffService.CreateAsync(new AdminStaffCreateRequest(
             fullName,
             email,
             displayName,
@@ -246,6 +371,9 @@ public sealed class StaffAppointmentsTests : IDisposable
             null,
             null,
             true));
+        await ServiceOfferingTestData.OfferCorteAsync(_dbContext, staff.StaffProfileId);
+        return staff;
+    }
 
     private static DateOnly CurrentDate => DateOnly.FromDateTime(CurrentUtc.UtcDateTime);
 

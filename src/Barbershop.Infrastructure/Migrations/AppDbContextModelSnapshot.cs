@@ -50,9 +50,19 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<DateTime>("EndsAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("GeneralServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("GeneralServiceNameSnapshot")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
                     b.Property<string>("Notes")
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)");
+
+                    b.Property<int?>("ReservedDurationMinutes")
+                        .HasColumnType("integer");
 
                     b.Property<string>("Source")
                         .IsRequired()
@@ -77,10 +87,14 @@ namespace Barbershop.Infrastructure.Migrations
 
                     b.HasIndex("CustomerUserId");
 
+                    b.HasIndex("GeneralServiceId");
+
                     b.HasIndex("StaffProfileId", "StartsAt");
 
                     b.ToTable("appointments", "public", t =>
                         {
+                            t.HasCheckConstraint("ck_appointments_reserved_service", "(\"GeneralServiceId\" IS NULL AND \"GeneralServiceNameSnapshot\" IS NULL AND \"ReservedDurationMinutes\" IS NULL) OR (\"GeneralServiceId\" IS NOT NULL AND \"GeneralServiceNameSnapshot\" IS NOT NULL AND \"ReservedDurationMinutes\" IS NOT NULL AND \"ReservedDurationMinutes\" >= 10 AND \"ReservedDurationMinutes\" <= 240 AND \"EndsAt\" = \"StartsAt\" + make_interval(mins => \"ReservedDurationMinutes\"))");
+
                             t.HasCheckConstraint("ck_appointments_time_range", "\"StartsAt\" < \"EndsAt\"");
                         });
                 });
@@ -2116,6 +2130,129 @@ namespace Barbershop.Infrastructure.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Products.Product", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CategoryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<Guid?>("ImageMediaAssetId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<int>("Price")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("PublicCode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ImageMediaAssetId");
+
+                    b.HasIndex("PublicCode")
+                        .IsUnique();
+
+                    b.HasIndex("CategoryId", "NormalizedName")
+                        .IsUnique()
+                        .HasDatabaseName("ux_products_category_normalized_name_live")
+                        .HasFilter("\"IsDeleted\" = false");
+
+                    b.ToTable("products", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_products_price_non_negative", "\"Price\" >= 0");
+
+                            t.HasCheckConstraint("ck_products_public_code_format", "\"PublicCode\" ~ '^[a-z0-9]{4,16}$'");
+
+                            t.HasCheckConstraint("ck_products_sort_order_range", "\"SortOrder\" >= 0 AND \"SortOrder\" <= 9999");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Products.ProductCategory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<string>("PublicCode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedName")
+                        .IsUnique()
+                        .HasDatabaseName("ux_product_categories_normalized_name_live")
+                        .HasFilter("\"IsDeleted\" = false");
+
+                    b.HasIndex("PublicCode")
+                        .IsUnique();
+
+                    b.ToTable("product_categories", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_product_categories_public_code_format", "\"PublicCode\" ~ '^[a-z0-9]{4,16}$'");
+
+                            t.HasCheckConstraint("ck_product_categories_sort_order_range", "\"SortOrder\" >= 0 AND \"SortOrder\" <= 9999");
+                        });
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Scheduling.StaffAvailabilityRule", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2201,6 +2338,9 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<Guid?>("ApprovedCustomerId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("ApprovedGeneralServiceId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateOnly?>("ApprovedPerformedOn")
                         .HasColumnType("date");
 
@@ -2226,6 +2366,9 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<string>("CustomerNameSnapshot")
                         .HasMaxLength(120)
                         .HasColumnType("character varying(120)");
+
+                    b.Property<Guid?>("GeneralServiceId")
+                        .HasColumnType("uuid");
 
                     b.Property<Guid?>("IncomeEntryId")
                         .HasColumnType("uuid");
@@ -2285,7 +2428,7 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<int?>("RewardProfessionalCommission")
                         .HasColumnType("integer");
 
-                    b.Property<Guid>("ServiceId")
+                    b.Property<Guid?>("ServiceId")
                         .HasColumnType("uuid");
 
                     b.Property<string>("ServiceNameSnapshot")
@@ -2313,6 +2456,8 @@ namespace Barbershop.Infrastructure.Migrations
 
                     b.HasIndex("ApprovedCustomerId");
 
+                    b.HasIndex("ApprovedGeneralServiceId");
+
                     b.HasIndex("ApprovedServiceId");
 
                     b.HasIndex("ApprovedStaffProfileId");
@@ -2320,6 +2465,8 @@ namespace Barbershop.Infrastructure.Migrations
                     b.HasIndex("CustomerId");
 
                     b.HasIndex("CustomerMembershipId");
+
+                    b.HasIndex("GeneralServiceId");
 
                     b.HasIndex("IncomeEntryId")
                         .IsUnique()
@@ -2348,9 +2495,85 @@ namespace Barbershop.Infrastructure.Migrations
 
                             t.HasCheckConstraint("ck_service_records_operation_shape", "\"OperationType\" IS NULL OR (\"OperationType\" = 'Paid' AND \"ChargedAmount\" IS NOT NULL AND \"ChargedAmount\" > 0 AND \"IncomeEntryId\" IS NOT NULL AND \"CustomerMembershipId\" IS NULL AND \"MembershipConsumptionId\" IS NULL) OR (\"OperationType\" = 'MembershipConsumption' AND \"ChargedAmount\" IS NULL AND \"IncomeEntryId\" IS NULL AND \"ApprovedCustomerId\" IS NOT NULL AND \"CustomerMembershipId\" IS NOT NULL AND \"MembershipConsumptionId\" IS NOT NULL) OR (\"OperationType\" = 'Courtesy' AND \"ChargedAmount\" IS NULL AND \"IncomeEntryId\" IS NULL AND \"CustomerMembershipId\" IS NULL AND \"MembershipConsumptionId\" IS NULL) OR (\"OperationType\" = 'LoyaltyReward' AND \"ChargedAmount\" IS NULL AND \"IncomeEntryId\" IS NULL AND \"ApprovedCustomerId\" IS NOT NULL AND \"CustomerMembershipId\" IS NULL AND \"MembershipConsumptionId\" IS NULL)");
 
+                            t.HasCheckConstraint("ck_service_records_registered_service", "\"ServiceId\" IS NOT NULL OR \"GeneralServiceId\" IS NOT NULL");
+
                             t.HasCheckConstraint("ck_service_records_reward_shape", "(\"OperationType\" IS NOT NULL AND \"OperationType\" = 'LoyaltyReward' AND \"LoyaltyRedemptionId\" IS NOT NULL AND \"RewardBasePriceSnapshot\" IS NOT NULL AND \"RewardBasePriceSnapshot\" >= 0 AND \"RewardBusinessPercentageSnapshot\" IS NOT NULL AND \"RewardBusinessPercentageSnapshot\" >= 0 AND \"RewardBusinessPercentageSnapshot\" <= 100 AND \"RewardProfessionalCommission\" IS NOT NULL AND \"RewardProfessionalCommission\" >= 0) OR ((\"OperationType\" IS NULL OR \"OperationType\" <> 'LoyaltyReward') AND \"LoyaltyRedemptionId\" IS NULL AND \"RewardBasePriceSnapshot\" IS NULL AND \"RewardBusinessPercentageSnapshot\" IS NULL AND \"RewardProfessionalCommission\" IS NULL)");
 
                             t.HasCheckConstraint("ck_service_records_status_shape", "(\"Status\" = 'Pending' AND \"OperationType\" IS NULL AND \"ApprovedAt\" IS NULL AND \"RejectedAt\" IS NULL) OR (\"Status\" = 'Approved' AND \"OperationType\" IS NOT NULL AND \"ApprovedAt\" IS NOT NULL AND \"ApprovedByUserId\" IS NOT NULL AND \"ApprovedServiceId\" IS NOT NULL AND \"ApprovedStaffProfileId\" IS NOT NULL AND \"ApprovedPerformedOn\" IS NOT NULL AND \"RejectedAt\" IS NULL) OR (\"Status\" = 'Rejected' AND \"OperationType\" IS NULL AND \"RejectionReason\" IS NOT NULL AND \"RejectedAt\" IS NOT NULL AND \"RejectedByUserId\" IS NOT NULL AND \"ApprovedAt\" IS NULL)");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Services.GeneralService", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CategoryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("PublicCode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PublicCode")
+                        .IsUnique();
+
+                    b.HasIndex("CategoryId", "NormalizedName")
+                        .IsUnique()
+                        .HasDatabaseName("ux_general_services_category_normalized_name_live")
+                        .HasFilter("\"IsDeleted\" = false");
+
+                    b.ToTable("general_services", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_general_services_public_code_format", "\"PublicCode\" ~ '^[a-z0-9]{4,16}$'");
+
+                            t.HasCheckConstraint("ck_general_services_sort_order_range", "\"SortOrder\" >= 0 AND \"SortOrder\" <= 9999");
+                        });
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("8a4e1c27-6d93-4b0f-a2c5-7e19d3b6f402"),
+                            CategoryId = new Guid("5f0c2a8e-3b1d-4c7a-9e51-0b6d2f4a8c01"),
+                            CreatedAt = new DateTime(2026, 11, 6, 0, 0, 0, 0, DateTimeKind.Utc),
+                            IsActive = true,
+                            IsDeleted = false,
+                            Name = "Corte",
+                            NormalizedName = "CORTE",
+                            PublicCode = "corte",
+                            SortOrder = 0
                         });
                 });
 
@@ -2369,6 +2592,9 @@ namespace Barbershop.Infrastructure.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("GeneralServiceId")
+                        .HasColumnType("uuid");
 
                     b.Property<bool>("IsActive")
                         .ValueGeneratedOnAdd()
@@ -2395,6 +2621,8 @@ namespace Barbershop.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("GeneralServiceId");
+
                     b.HasIndex("Name")
                         .IsUnique()
                         .HasFilter("\"IsDeleted\" = false");
@@ -2406,6 +2634,72 @@ namespace Barbershop.Infrastructure.Migrations
                             t.HasCheckConstraint("ck_services_business_percentage_range", "\"BusinessPercentage\" >= 0 AND \"BusinessPercentage\" <= 100");
 
                             t.HasCheckConstraint("ck_services_loyalty_points_non_negative", "\"LoyaltyPoints\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Services.ServiceCategory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<string>("PublicCode")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedName")
+                        .IsUnique()
+                        .HasDatabaseName("ux_service_categories_normalized_name_live")
+                        .HasFilter("\"IsDeleted\" = false");
+
+                    b.HasIndex("PublicCode")
+                        .IsUnique();
+
+                    b.ToTable("service_categories", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_service_categories_public_code_format", "\"PublicCode\" ~ '^[a-z0-9]{4,16}$'");
+
+                            t.HasCheckConstraint("ck_service_categories_sort_order_range", "\"SortOrder\" >= 0 AND \"SortOrder\" <= 9999");
+                        });
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("5f0c2a8e-3b1d-4c7a-9e51-0b6d2f4a8c01"),
+                            CreatedAt = new DateTime(2026, 11, 6, 0, 0, 0, 0, DateTimeKind.Utc),
+                            IsActive = true,
+                            IsDeleted = false,
+                            Name = "Barbería",
+                            NormalizedName = "BARBERÍA",
+                            PublicCode = "barberia",
+                            SortOrder = 0
                         });
                 });
 
@@ -2529,6 +2823,42 @@ namespace Barbershop.Infrastructure.Migrations
                             t.HasCheckConstraint("ck_staff_services_duration", "\"DurationMinutes\" BETWEEN 15 AND 240");
 
                             t.HasCheckConstraint("ck_staff_services_price_non_negative", "\"Price\" IS NULL OR \"Price\" >= 0");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Staff.StaffServiceOffering", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("DurationMinutes")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("GeneralServiceId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("StaffProfileId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GeneralServiceId");
+
+                    b.HasIndex("StaffProfileId", "GeneralServiceId")
+                        .IsUnique();
+
+                    b.ToTable("staff_service_offerings", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_staff_service_offerings_duration_range", "\"DurationMinutes\" >= 10 AND \"DurationMinutes\" <= 240");
                         });
                 });
 
@@ -2950,6 +3280,11 @@ namespace Barbershop.Infrastructure.Migrations
                         .WithMany("CustomerAppointments")
                         .HasForeignKey("CustomerUserId")
                         .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Barbershop.Domain.Services.GeneralService", null)
+                        .WithMany()
+                        .HasForeignKey("GeneralServiceId")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("Barbershop.Domain.Staff.StaffProfile", "StaffProfile")
                         .WithMany("Appointments")
@@ -3437,6 +3772,20 @@ namespace Barbershop.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Products.Product", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Products.ProductCategory", null)
+                        .WithMany()
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Media.MediaAsset", null)
+                        .WithMany()
+                        .HasForeignKey("ImageMediaAssetId")
+                        .OnDelete(DeleteBehavior.SetNull);
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Scheduling.StaffAvailabilityRule", b =>
                 {
                     b.HasOne("Barbershop.Domain.Staff.StaffProfile", "StaffProfile")
@@ -3471,6 +3820,11 @@ namespace Barbershop.Infrastructure.Migrations
                         .HasForeignKey("ApprovedCustomerId")
                         .OnDelete(DeleteBehavior.Restrict);
 
+                    b.HasOne("Barbershop.Domain.Services.GeneralService", null)
+                        .WithMany()
+                        .HasForeignKey("ApprovedGeneralServiceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("Barbershop.Domain.Services.Service", null)
                         .WithMany()
                         .HasForeignKey("ApprovedServiceId")
@@ -3491,6 +3845,11 @@ namespace Barbershop.Infrastructure.Migrations
                         .HasForeignKey("CustomerMembershipId")
                         .OnDelete(DeleteBehavior.Restrict);
 
+                    b.HasOne("Barbershop.Domain.Services.GeneralService", null)
+                        .WithMany()
+                        .HasForeignKey("GeneralServiceId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("Barbershop.Domain.Finance.IncomeEntry", null)
                         .WithMany()
                         .HasForeignKey("IncomeEntryId")
@@ -3509,12 +3868,29 @@ namespace Barbershop.Infrastructure.Migrations
                     b.HasOne("Barbershop.Domain.Services.Service", null)
                         .WithMany()
                         .HasForeignKey("ServiceId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("Barbershop.Domain.Staff.StaffProfile", null)
                         .WithMany()
                         .HasForeignKey("StaffProfileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Services.GeneralService", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Services.ServiceCategory", null)
+                        .WithMany()
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Services.Service", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Services.GeneralService", null)
+                        .WithMany()
+                        .HasForeignKey("GeneralServiceId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
@@ -3549,6 +3925,21 @@ namespace Barbershop.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("StaffProfile");
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Staff.StaffServiceOffering", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Services.GeneralService", null)
+                        .WithMany()
+                        .HasForeignKey("GeneralServiceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Staff.StaffProfile", null)
+                        .WithMany()
+                        .HasForeignKey("StaffProfileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Users.NotificationCampaign", b =>

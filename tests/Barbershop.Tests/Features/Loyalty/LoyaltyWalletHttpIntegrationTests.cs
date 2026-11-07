@@ -86,7 +86,7 @@ public sealed class LoyaltyWalletHttpIntegrationTests
     }
 
     AuthenticateAs(client, admin.AccessToken);
-    var mine = Assert.Single((await client.GetFromJsonAsync<List<CustomerListItem>>("/api/v1/admin/customers?q=Carla Cliente"))!);
+    var mine = Assert.Single((await client.GetPageItemsAsync<CustomerListItem>("/api/v1/admin/customers?q=Carla Cliente"))!);
     var other = await CreateCustomerAsync(client, admin.AccessToken, "Otra Persona");
 
     var credit = new LoyaltyAdjustmentRequest("Credit", 30, "Compensación por demora", Guid.NewGuid());

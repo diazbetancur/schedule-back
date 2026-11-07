@@ -160,7 +160,7 @@ public sealed class CustomerClaimsServiceTests : IDisposable
 
     // Before approval the customer sees no profile and no memberships.
     var myMemberships = new MyMembershipsService(_dbContext, _memberships);
-    Assert.Empty(await myMemberships.GetMineAsync(user.Id));
+    Assert.Empty((await myMemberships.GetMineAsync(user.Id, new MembershipListQuery())).Items);
 
     var view = await _claims.GetByIdAsync(claim.Id);
     var approved = await _claims.ApproveAsync(_admin.Id, claim.Id,
@@ -172,7 +172,7 @@ public sealed class CustomerClaimsServiceTests : IDisposable
     Assert.Contains(await _dbContext.CustomerEvents.ToListAsync(), customerEvent =>
         customerEvent.CustomerId == historical.Id && customerEvent.Type == CustomerEventType.AccountLinked && customerEvent.UserId == user.Id);
     Assert.Equal(historical.Id, (await _claims.GetStatusAsync(user.Id)).Profile!.Id);
-    Assert.Equal([membership.Id], (await myMemberships.GetMineAsync(user.Id)).Select(item => item.Id));
+    Assert.Equal([membership.Id], (await myMemberships.GetMineAsync(user.Id, new MembershipListQuery())).Items.Select(item => item.Id));
   }
 
   [Fact]
@@ -296,7 +296,7 @@ public sealed class CustomerClaimsServiceTests : IDisposable
     await _dbContext.SaveChangesAsync();
     var records = new ServiceRecordsService(_dbContext, new MembershipLedgerService(_dbContext, _memberships, TimeProvider.System), TimeProvider.System);
     var record = Assert.Single(await records.RegisterAsync(barberUser.Id,
-        new ServiceRecordRegisterRequest(appointment.Id, null, null, [_haircut.Id], null, Guid.NewGuid())));
+        new ServiceRecordRegisterRequest(appointment.Id, null, null, [_haircut.GeneralServiceId], null, Guid.NewGuid())));
     Assert.Null(record.CustomerId);
     Assert.Null(record.SuggestedCustomerId);
 

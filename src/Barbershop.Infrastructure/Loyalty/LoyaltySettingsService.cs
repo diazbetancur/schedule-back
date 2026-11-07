@@ -1,4 +1,5 @@
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Loyalty.Admin;
 using Barbershop.Domain.Loyalty;
 using Barbershop.Infrastructure.Persistence;
@@ -8,7 +9,6 @@ namespace Barbershop.Infrastructure.Loyalty;
 
 internal sealed class LoyaltySettingsService : IAdminLoyaltySettingsService
 {
-    private const int MaxChangesListed = 50;
 
     private const string ConcurrencyConflictMessage =
         "La configuración de fidelización fue modificada por otra persona. Recarga para ver los valores actuales e intenta de nuevo.";
@@ -63,13 +63,20 @@ internal sealed class LoyaltySettingsService : IAdminLoyaltySettingsService
         return await MapAsync(settings, cancellationToken);
     }
 
-    public async Task<IReadOnlyList<LoyaltySettingsChangeView>> GetChangesAsync(CancellationToken cancellationToken = default)
+    public async Task<PagedResult<LoyaltySettingsChangeView>> GetChangesAsync(
+        PageQuery? query = null, CancellationToken cancellationToken = default)
     {
-        var changes = await _dbContext.LoyaltySettingsChanges
+        var page = (query ?? new PageQuery()).ToRequest();
+        return await _dbContext.LoyaltySettingsChanges
             .AsNoTracking()
             .OrderByDescending(change => change.ChangedAt)
-            .Take(MaxChangesListed)
-            .ToListAsync(cancellationToken);
+            .ThenByDescending(change => change.Id)
+            .ToPagedResultAsync(page, MapChangesAsync, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<LoyaltySettingsChangeView>> MapChangesAsync(
+        IReadOnlyList<LoyaltySettingsChange> changes, CancellationToken cancellationToken)
+    {
 
         var names = await LoadUserNamesAsync(changes.Select(change => change.ChangedByUserId), cancellationToken);
         return changes

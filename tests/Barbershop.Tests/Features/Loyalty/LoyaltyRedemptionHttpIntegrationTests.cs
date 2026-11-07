@@ -67,7 +67,7 @@ public sealed class LoyaltyRedemptionHttpIntegrationTests
 
     // Another customer can neither see nor cancel it.
     AuthenticateAs(client, stranger.AccessToken);
-    Assert.Empty((await client.GetFromJsonAsync<List<MyLoyaltyRedemptionView>>("/api/v1/customer/loyalty/redemptions"))!);
+    Assert.Empty((await client.GetPageItemsAsync<MyLoyaltyRedemptionView>("/api/v1/customer/loyalty/redemptions")));
     using (var foreign = await client.PostAsJsonAsync($"/api/v1/customer/loyalty/redemptions/{requested.Id}/cancel", new MyLoyaltyRedemptionCancelRequest(null)))
     {
       Assert.Equal(HttpStatusCode.NotFound, foreign.StatusCode);
@@ -75,7 +75,7 @@ public sealed class LoyaltyRedemptionHttpIntegrationTests
 
     // Approving needs loyalty.redemptions.approve, checked against the database with the same token.
     AuthenticateAs(client, admin.AccessToken);
-    var pending = Assert.Single((await client.GetFromJsonAsync<List<LoyaltyRedemptionView>>("/api/v1/admin/loyalty/redemptions?status=Requested"))!);
+    var pending = Assert.Single((await client.GetPageItemsAsync<LoyaltyRedemptionView>("/api/v1/admin/loyalty/redemptions?status=Requested"))!);
     await SetAdminPermissionAsync(factory, PermissionCodes.LoyaltyRedemptionsApprove, granted: false);
     using (var denied = await client.PostAsJsonAsync($"/api/v1/admin/loyalty/redemptions/{pending.Id}/approve", new LoyaltyRedemptionDecisionRequest(pending.Version)))
     {
@@ -97,14 +97,14 @@ public sealed class LoyaltyRedemptionHttpIntegrationTests
     }
 
     await SetAdminPermissionAsync(factory, PermissionCodes.LoyaltyRedemptionsDeliver, granted: true);
-    Assert.Single((await client.GetFromJsonAsync<List<LoyaltyRedemptionView>>("/api/v1/admin/loyalty/redemptions/deliveries"))!);
+    Assert.Single((await client.GetPageItemsAsync<LoyaltyRedemptionView>("/api/v1/admin/loyalty/redemptions/deliveries")));
     using (var delivered = await client.PostAsJsonAsync($"/api/v1/admin/loyalty/redemptions/{pending.Id}/deliver", new LoyaltyRedemptionDecisionRequest(approved.Version)))
     {
       Assert.Equal(HttpStatusCode.OK, delivered.StatusCode);
     }
 
     AuthenticateAs(client, customer.AccessToken);
-    Assert.Equal("Delivered", Assert.Single((await client.GetFromJsonAsync<List<MyLoyaltyRedemptionView>>("/api/v1/customer/loyalty/redemptions"))!).Status);
+    Assert.Equal("Delivered", Assert.Single((await client.GetPageItemsAsync<MyLoyaltyRedemptionView>("/api/v1/customer/loyalty/redemptions"))).Status);
     points = (await client.GetFromJsonAsync<MyLoyaltyView>("/api/v1/customer/loyalty"))!;
     Assert.Equal((20, 0), (points.AvailablePoints, points.ReservedPoints));
     Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/v1/admin/loyalty/rewards")).StatusCode);
@@ -174,7 +174,7 @@ public sealed class LoyaltyRedemptionHttpIntegrationTests
     }
 
     AuthenticateAs(client, adminToken);
-    var profile = Assert.Single((await client.GetFromJsonAsync<List<CustomerListItem>>($"/api/v1/admin/customers?q={Uri.EscapeDataString(name)}"))!);
+    var profile = Assert.Single((await client.GetPageItemsAsync<CustomerListItem>($"/api/v1/admin/customers?q={Uri.EscapeDataString(name)}"))!);
     return (account, profile.Id);
   }
 

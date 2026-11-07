@@ -58,7 +58,9 @@ public sealed class ServiceRecordsNavigationAndRelationsTests : IDisposable
     _barberUser = new User("Alex Barbero", "alex@example.com", "hash", DateTime.UtcNow);
     var otherUser = new User("Beto Barbero", "beto@example.com", "hash", DateTime.UtcNow);
     _haircut = new Service("Corte", 25000, DateTime.UtcNow, 30);
-    _beard = new Service("Barba", 15000, DateTime.UtcNow, 30);
+    var beardGeneral = new GeneralService(ServiceCatalogDefaults.BarberiaCategoryId, "Barba", null, 1, DateTime.UtcNow);
+    _dbContext.GeneralServices.Add(beardGeneral);
+    _beard = new Service("Barba", 15000, DateTime.UtcNow, 30, beardGeneral.Id);
     _barber = new StaffProfile(_barberUser.Id, "Alex", 30, DateTime.UtcNow);
     _otherBarber = new StaffProfile(otherUser.Id, "Beto", 30, DateTime.UtcNow);
     _dbContext.Users.AddRange(_admin, _barberUser, otherUser);
@@ -80,7 +82,7 @@ public sealed class ServiceRecordsNavigationAndRelationsTests : IDisposable
     _dbContext.StaffProfiles.Add(adminProfile);
     await _dbContext.SaveChangesAsync();
     Assert.Equal(adminProfile.Id, (await _service.GetEligibilityAsync(_admin.Id)).StaffProfileId);
-    var registered = await _service.RegisterAsync(_admin.Id, new ServiceRecordRegisterRequest(null, _today, null, [_haircut.Id], null, Guid.NewGuid()));
+    var registered = await _service.RegisterAsync(_admin.Id, new ServiceRecordRegisterRequest(null, _today, null, [ServiceCatalogDefaults.CorteGeneralServiceId], null, Guid.NewGuid()));
     Assert.Equal(adminProfile.Id, Assert.Single(registered).StaffProfileId);
 
     // An inactive profile can neither register nor list appointments.
@@ -88,7 +90,7 @@ public sealed class ServiceRecordsNavigationAndRelationsTests : IDisposable
     await _dbContext.SaveChangesAsync();
     Assert.False((await _service.GetEligibilityAsync(_barberUser.Id)).HasStaffProfile);
     await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
-        _service.RegisterAsync(_barberUser.Id, new ServiceRecordRegisterRequest(null, _today, null, [_haircut.Id], null, Guid.NewGuid())));
+        _service.RegisterAsync(_barberUser.Id, new ServiceRecordRegisterRequest(null, _today, null, [ServiceCatalogDefaults.CorteGeneralServiceId], null, Guid.NewGuid())));
     await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _service.GetAppointmentsAsync(_barberUser.Id));
   }
 
@@ -104,18 +106,18 @@ public sealed class ServiceRecordsNavigationAndRelationsTests : IDisposable
     await AddAppointmentAsync(_otherBarber, AppointmentStatus.Completed, hoursAgo: 2);    // someone else's
 
     // Registering from a completed appointment works and never changes its status.
-    await _service.RegisterAsync(_barberUser.Id, new ServiceRecordRegisterRequest(completed.Id, null, null, [_haircut.Id], null, Guid.NewGuid()));
+    await _service.RegisterAsync(_barberUser.Id, new ServiceRecordRegisterRequest(completed.Id, null, null, [ServiceCatalogDefaults.CorteGeneralServiceId], null, Guid.NewGuid()));
 
     var options = await _service.GetAppointmentsAsync(_barberUser.Id);
 
     Assert.Equal([confirmed.Id, completed.Id], options.Select(option => option.Id));
-    Assert.Equal([_haircut.Id], options.Single(option => option.Id == completed.Id).RegisteredServiceIds);
+    Assert.Equal([ServiceCatalogDefaults.CorteGeneralServiceId], options.Single(option => option.Id == completed.Id).RegisteredGeneralServiceIds);
     Assert.Equal("Completed", options.Single(option => option.Id == completed.Id).Status);
     Assert.Equal(AppointmentStatus.Completed, (await _dbContext.Appointments.AsNoTracking().SingleAsync(a => a.Id == completed.Id)).Status);
 
     // A service already registered in the completed appointment cannot be registered again.
     await Assert.ThrowsAsync<ConflictException>(() =>
-        _service.RegisterAsync(_barberUser.Id, new ServiceRecordRegisterRequest(completed.Id, null, null, [_haircut.Id], null, Guid.NewGuid())));
+        _service.RegisterAsync(_barberUser.Id, new ServiceRecordRegisterRequest(completed.Id, null, null, [ServiceCatalogDefaults.CorteGeneralServiceId], null, Guid.NewGuid())));
   }
 
   [Fact]
@@ -155,7 +157,7 @@ public sealed class ServiceRecordsNavigationAndRelationsTests : IDisposable
   {
     var appointment = await AddAppointmentAsync(_barber, AppointmentStatus.Confirmed, hoursAgo: 2);
     var record = Assert.Single(await _service.RegisterAsync(_barberUser.Id,
-        new ServiceRecordRegisterRequest(appointment.Id, null, null, [_haircut.Id], null, Guid.NewGuid())));
+        new ServiceRecordRegisterRequest(appointment.Id, null, null, [ServiceCatalogDefaults.CorteGeneralServiceId], null, Guid.NewGuid())));
 
     var tracked = await _dbContext.Appointments.SingleAsync(candidate => candidate.Id == appointment.Id);
     tracked.UpdateStatus(AppointmentStatus.Cancelled, DateTime.UtcNow);
@@ -166,7 +168,7 @@ public sealed class ServiceRecordsNavigationAndRelationsTests : IDisposable
 
   private async Task<ServiceRecordView> RegisterAsync(Service service)
       => Assert.Single(await _service.RegisterAsync(_barberUser.Id,
-          new ServiceRecordRegisterRequest(null, _today, null, [service.Id], null, Guid.NewGuid())));
+          new ServiceRecordRegisterRequest(null, _today, null, [service.GeneralServiceId], null, Guid.NewGuid())));
 
   private async Task<Appointment> AddAppointmentAsync(StaffProfile staff, AppointmentStatus status, int hoursAgo)
   {

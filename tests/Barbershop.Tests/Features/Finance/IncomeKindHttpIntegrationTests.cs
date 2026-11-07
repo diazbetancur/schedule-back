@@ -12,6 +12,7 @@ using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
+using Barbershop.Domain.Services;
 
 namespace Barbershop.Tests.Features.Finance;
 
@@ -99,9 +100,9 @@ public sealed class IncomeKindHttpIntegrationTests
         $"/api/v1/admin/income/{sale.Id}", new IncomeEntryUpdateRequest(serviceId, staffId, 250000, false, Today, "Service"));
     Assert.Equal(HttpStatusCode.UnprocessableEntity, changeKind.StatusCode);
 
-    var day = await context.Client.GetFromJsonAsync<List<IncomeEntryView>>($"/api/v1/admin/income?date={Today:yyyy-MM-dd}");
+    var day = await context.Client.GetPageItemsAsync<IncomeEntryView>($"/api/v1/admin/income?from={Today:yyyy-MM-dd}&to={Today:yyyy-MM-dd}");
     Assert.Equal(2, day!.Count);
-    var forStaff = await context.Client.GetFromJsonAsync<List<IncomeEntryView>>($"/api/v1/admin/income?date={Today:yyyy-MM-dd}&staffProfileId={staffId}");
+    var forStaff = await context.Client.GetPageItemsAsync<IncomeEntryView>($"/api/v1/admin/income?from={Today:yyyy-MM-dd}&to={Today:yyyy-MM-dd}&staffProfileId={staffId}");
     Assert.Equal("Service", Assert.Single(forStaff!).Kind);
 
     var summary = await context.Client.GetFromJsonAsync<ReportSummaryView>($"/api/v1/admin/reports/summary?from={Today:yyyy-MM-dd}&to={Today:yyyy-MM-dd}");
@@ -122,7 +123,7 @@ public sealed class IncomeKindHttpIntegrationTests
   {
     using var scope = factory.Services.CreateScope();
     var service = scope.ServiceProvider.GetRequiredService<IAdminServicesService>();
-    return (await service.CreateAsync(new ServiceCreateRequest(name, basePrice, businessPercentage))).Id;
+    return (await service.CreateAsync(new ServiceCreateRequest(name, basePrice, businessPercentage, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId))).Id;
   }
 
   private static async Task<Guid> SeedStaffAsync(IntegrationTestFactory factory, string label)

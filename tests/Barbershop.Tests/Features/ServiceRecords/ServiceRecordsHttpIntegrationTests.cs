@@ -15,6 +15,7 @@ using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
+using Barbershop.Domain.Services;
 
 namespace Barbershop.Tests.Features.ServiceRecords;
 
@@ -53,7 +54,7 @@ public sealed class ServiceRecordsHttpIntegrationTests
     var customer = await RegisterAsync(context.Client, "Plain Customer", UniqueEmail("customer"));
     var haircut = await CreateServiceAsync(context.Client, admin.AccessToken, "Corte");
 
-    Assert.Equal(HttpStatusCode.Forbidden, await PostStatusAsync(context.Client, customer.AccessToken, StaffUrl, RegisterRequest(haircut.Id)));
+    Assert.Equal(HttpStatusCode.Forbidden, await PostStatusAsync(context.Client, customer.AccessToken, StaffUrl, RegisterRequest(haircut.GeneralServiceId)));
     Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(context.Client, staff.AccessToken, AdminUrl));
     Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(context.Client, customer.AccessToken, AdminUrl));
     context.Client.DefaultRequestHeaders.Authorization = null;
@@ -62,27 +63,27 @@ public sealed class ServiceRecordsHttpIntegrationTests
       Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
     }
 
-    var first = await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.Id));
-    var second = await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.Id));
+    var first = await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.GeneralServiceId));
+    var second = await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.GeneralServiceId));
 
     // The professional cannot confirm their own registration through the admin routes.
     Assert.Equal(HttpStatusCode.Forbidden,
-        await PostStatusAsync(context.Client, staff.AccessToken, $"{AdminUrl}/{first[0].Id}/approve", Courtesy(first[0])));
+        await PostStatusAsync(context.Client, staff.AccessToken, $"{AdminUrl}/{first[0].Id}/approve", Courtesy(first[0], haircut.Id)));
 
     AuthenticateAs(context.Client, admin.AccessToken);
-    var pending = await context.Client.GetFromJsonAsync<List<ServiceRecordView>>(AdminUrl);
+    var pending = await context.Client.GetPageItemsAsync<ServiceRecordView>(AdminUrl);
     Assert.Equal(2, pending!.Count);
-    Assert.Equal(HttpStatusCode.OK, await PostStatusAsync(context.Client, admin.AccessToken, $"{AdminUrl}/{first[0].Id}/approve", Courtesy(first[0])));
+    Assert.Equal(HttpStatusCode.OK, await PostStatusAsync(context.Client, admin.AccessToken, $"{AdminUrl}/{first[0].Id}/approve", Courtesy(first[0], haircut.Id)));
 
     await RevokeFromAdminRoleAsync(context, PermissionCodes.ServiceRecordsApprove);
 
     // Same admin token, which still carries the claim: the next review is refused.
     Assert.Equal(HttpStatusCode.Forbidden,
-        await PostStatusAsync(context.Client, admin.AccessToken, $"{AdminUrl}/{second[0].Id}/approve", Courtesy(second[0])));
+        await PostStatusAsync(context.Client, admin.AccessToken, $"{AdminUrl}/{second[0].Id}/approve", Courtesy(second[0], haircut.Id)));
     Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(context.Client, admin.AccessToken, AdminUrl));
 
     // Registering is a separate permission and keeps working.
-    Assert.Equal(HttpStatusCode.OK, await PostStatusAsync(context.Client, staff.AccessToken, StaffUrl, RegisterRequest(haircut.Id)));
+    Assert.Equal(HttpStatusCode.OK, await PostStatusAsync(context.Client, staff.AccessToken, StaffUrl, RegisterRequest(haircut.GeneralServiceId)));
   }
 
   [Fact]
@@ -94,15 +95,15 @@ public sealed class ServiceRecordsHttpIntegrationTests
     var admin = await RegisterAdminAsync(context, "concurrency");
     var staff = await RegisterStaffAsync(context, "concurrency");
     var haircut = await CreateServiceAsync(context.Client, admin.AccessToken, "Corte");
-    var same = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.Id)))[0];
-    var different = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.Id)))[0];
+    var same = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.GeneralServiceId)))[0];
+    var different = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.GeneralServiceId)))[0];
 
     AuthenticateAs(context.Client, admin.AccessToken);
-    var sameStatuses = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ => PostAsync(context.Client, $"{AdminUrl}/{same.Id}/approve", Paid(same, 25000))));
+    var sameStatuses = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ => PostAsync(context.Client, $"{AdminUrl}/{same.Id}/approve", Paid(same, haircut.Id, 25000))));
     Assert.All(sameStatuses, status => Assert.Equal(HttpStatusCode.OK, status));
 
     var differentStatuses = await Task.WhenAll(Enumerable.Range(1, 6)
-        .Select(index => PostAsync(context.Client, $"{AdminUrl}/{different.Id}/approve", Paid(different, 10000 * index))));
+        .Select(index => PostAsync(context.Client, $"{AdminUrl}/{different.Id}/approve", Paid(different, haircut.Id, 10000 * index))));
     Assert.Single(differentStatuses, status => status == HttpStatusCode.OK);
     Assert.All(differentStatuses.Where(status => status != HttpStatusCode.OK), status => Assert.Equal(HttpStatusCode.Conflict, status));
 
@@ -124,7 +125,7 @@ public sealed class ServiceRecordsHttpIntegrationTests
     var staff = await RegisterStaffAsync(context, "membership");
     var haircut = await CreateServiceAsync(context.Client, admin.AccessToken, "Corte");
     var (customerId, membershipId) = await SellActiveMembershipAsync(context.Client, admin.AccessToken, haircut.Id);
-    var record = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.Id)))[0];
+    var record = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.GeneralServiceId)))[0];
     var request = new ServiceRecordApproveRequest(
         record.Version, "MembershipConsumption", haircut.Id, record.StaffProfileId, customerId, record.PerformedOn, null, membershipId, false, null);
 
@@ -142,6 +143,33 @@ public sealed class ServiceRecordsHttpIntegrationTests
   }
 
   [Fact]
+  public async Task Approve_RequiresARateOfTheConfirmedGeneralService()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null) return;
+
+    var admin = await RegisterAdminAsync(context, "general");
+    var staff = await RegisterStaffAsync(context, "general");
+    var haircut = await CreateServiceAsync(context.Client, admin.AccessToken, "Corte");
+    var beard = await CreateServiceAsync(context.Client, admin.AccessToken, "Barba", await CreateGeneralServiceAsync(context.Client, admin.AccessToken, "Barba"));
+    var record = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.GeneralServiceId)))[0];
+    Assert.Equal((ServiceCatalogDefaults.CorteGeneralServiceId, (Guid?)null), (record.GeneralServiceId!.Value, record.ServiceId));
+
+    AuthenticateAs(context.Client, admin.AccessToken);
+    var options = await context.Client.GetFromJsonAsync<ServiceRecordOptionsView>($"{AdminUrl}/options");
+    Assert.Contains(options!.Services, rate => rate.Id == beard.Id && rate.GeneralServiceName == "Barba");
+    Assert.Contains(options.GeneralServices, general => general.Id == beard.GeneralServiceId);
+
+    // Barba's rate does not belong to the registered (or the sent) general service Corte.
+    Assert.Equal(HttpStatusCode.Conflict, await PostAsync(context.Client, $"{AdminUrl}/{record.Id}/approve", Paid(record, beard.Id, 15000)));
+    // Correcting the general service to Barba makes Barba's rate valid.
+    Assert.Equal(HttpStatusCode.OK, await PostAsync(context.Client, $"{AdminUrl}/{record.Id}/approve",
+        Paid(record, beard.Id, 15000) with { GeneralServiceId = beard.GeneralServiceId }));
+    var approved = await context.Client.GetFromJsonAsync<ServiceRecordView>($"{AdminUrl}/{record.Id}");
+    Assert.Equal((beard.GeneralServiceId, "Barba"), (approved!.Approval!.GeneralServiceId!.Value, approved.Approval.GeneralServiceName));
+  }
+
+  [Fact]
   public async Task ConcurrentRegistrations_SameKeyStoreOnce_AndTheSameAppointmentServiceOnlyOnce()
   {
     using var context = await CreateContextAsync();
@@ -150,20 +178,20 @@ public sealed class ServiceRecordsHttpIntegrationTests
     var admin = await RegisterAdminAsync(context, "registration");
     var staff = await RegisterStaffAsync(context, "registration");
     var haircut = await CreateServiceAsync(context.Client, admin.AccessToken, "Corte");
-    var beard = await CreateServiceAsync(context.Client, admin.AccessToken, "Barba");
+    var beard = await CreateServiceAsync(context.Client, admin.AccessToken, "Barba", await CreateGeneralServiceAsync(context.Client, admin.AccessToken, "Barba"));
 
     AuthenticateAs(context.Client, staff.AccessToken);
-    var sameKey = RegisterRequest(haircut.Id, beard.Id);
+    var sameKey = RegisterRequest(haircut.GeneralServiceId, beard.GeneralServiceId);
     var retried = await Task.WhenAll(Enumerable.Range(0, 5).Select(_ => PostAsync(context.Client, StaffUrl, sameKey)));
     Assert.All(retried, status => Assert.Equal(HttpStatusCode.OK, status));
 
     var appointmentId = await CreateAppointmentAsync(context, staff.User.Id);
     var racing = await Task.WhenAll(Enumerable.Range(0, 5).Select(_ =>
-        PostAsync(context.Client, StaffUrl, new ServiceRecordRegisterRequest(appointmentId, null, null, [haircut.Id], null, Guid.NewGuid()))));
+        PostAsync(context.Client, StaffUrl, new ServiceRecordRegisterRequest(appointmentId, null, null, [haircut.GeneralServiceId], null, Guid.NewGuid()))));
     Assert.Single(racing, status => status == HttpStatusCode.OK);
     Assert.All(racing.Where(status => status != HttpStatusCode.OK), status => Assert.Equal(HttpStatusCode.Conflict, status));
 
-    var mine = await context.Client.GetFromJsonAsync<List<ServiceRecordView>>(StaffUrl);
+    var mine = await context.Client.GetPageItemsAsync<ServiceRecordView>(StaffUrl);
     Assert.Equal(3, mine!.Count);
     Assert.Single(mine, record => record.AppointmentId == appointmentId);
   }
@@ -177,7 +205,7 @@ public sealed class ServiceRecordsHttpIntegrationTests
     var staff = await RegisterStaffAsync(context, "customer");
     var approver = await RegisterWithCustomRoleAsync(context, "approver", PermissionCodes.ServiceRecordsApprove);
     var serviceId = await AddServiceAsync(context, "Corte");
-    var record = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(serviceId)))[0];
+    var record = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(ServiceCatalogDefaults.CorteGeneralServiceId)))[0];
 
     AuthenticateAs(context.Client, approver.AccessToken);
     var newEmail = UniqueEmail("nuevo");
@@ -247,7 +275,7 @@ public sealed class ServiceRecordsHttpIntegrationTests
     AuthenticateAs(context.Client, admin.AccessToken);
     var before = await context.Client.GetFromJsonAsync<ServiceRecordEligibilityView>($"{StaffUrl}/eligibility");
     Assert.False(before!.HasStaffProfile);
-    Assert.Equal(HttpStatusCode.Forbidden, await PostStatusAsync(context.Client, admin.AccessToken, StaffUrl, RegisterRequest(serviceId)));
+    Assert.Equal(HttpStatusCode.Forbidden, await PostStatusAsync(context.Client, admin.AccessToken, StaffUrl, RegisterRequest(ServiceCatalogDefaults.CorteGeneralServiceId)));
 
     using (var scope = context.Factory.Services.CreateScope())
     {
@@ -258,7 +286,7 @@ public sealed class ServiceRecordsHttpIntegrationTests
 
     Assert.True((await context.Client.GetFromJsonAsync<ServiceRecordEligibilityView>($"{StaffUrl}/eligibility"))!.HasStaffProfile);
     Assert.Equal(HttpStatusCode.OK, await GetStatusAsync(context.Client, admin.AccessToken, $"{StaffUrl}/appointments"));
-    var records = await RegisterRecordsAsync(context.Client, admin.AccessToken, RegisterRequest(serviceId));
+    var records = await RegisterRecordsAsync(context.Client, admin.AccessToken, RegisterRequest(ServiceCatalogDefaults.CorteGeneralServiceId));
     Assert.Equal("Admin Barbero", records[0].StaffName);
     // The Staff-only agenda stays as it was.
     Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(context.Client, admin.AccessToken, "/api/v1/staff/appointments"));
@@ -266,14 +294,17 @@ public sealed class ServiceRecordsHttpIntegrationTests
 
   // ── Helpers ────────────────────────────────────────────────────────────────────────────────
 
-  private ServiceRecordRegisterRequest RegisterRequest(params Guid[] serviceIds)
-      => new(null, _today, "Cliente de paso", serviceIds, null, Guid.NewGuid());
+  /// <summary>Professionals register general services (ADR-0016 F4).</summary>
+  private ServiceRecordRegisterRequest RegisterRequest(params Guid[] generalServiceIds)
+      => new(null, _today, "Cliente de paso", generalServiceIds, null, Guid.NewGuid());
 
-  private static ServiceRecordApproveRequest Courtesy(ServiceRecordView record)
-      => new(record.Version, "Courtesy", record.ServiceId, record.StaffProfileId, null, record.PerformedOn, null, null, false, null);
+  private static ServiceRecordApproveRequest Courtesy(ServiceRecordView record, Guid rateId)
+      => new(record.Version, "Courtesy", rateId, record.StaffProfileId, null, record.PerformedOn, null, null, false, null,
+          GeneralServiceId: record.GeneralServiceId);
 
-  private static ServiceRecordApproveRequest Paid(ServiceRecordView record, int amount)
-      => new(record.Version, "Paid", record.ServiceId, record.StaffProfileId, null, record.PerformedOn, amount, null, false, null);
+  private static ServiceRecordApproveRequest Paid(ServiceRecordView record, Guid rateId, int amount)
+      => new(record.Version, "Paid", rateId, record.StaffProfileId, null, record.PerformedOn, amount, null, false, null,
+          GeneralServiceId: record.GeneralServiceId);
 
   private async Task<TestHttpContext?> CreateContextAsync()
   {
@@ -315,12 +346,22 @@ public sealed class ServiceRecordsHttpIntegrationTests
     return response.StatusCode;
   }
 
-  private static async Task<ServiceView> CreateServiceAsync(HttpClient client, string adminToken, string name)
+  private static async Task<ServiceView> CreateServiceAsync(HttpClient client, string adminToken, string name, Guid? generalServiceId = null)
   {
     AuthenticateAs(client, adminToken);
-    using var response = await client.PostAsJsonAsync("/api/v1/admin/services", new ServiceCreateRequest(name, 25000, 30));
+    using var response = await client.PostAsJsonAsync("/api/v1/admin/services", new ServiceCreateRequest(
+        name, 25000, 30, GeneralServiceId: generalServiceId ?? ServiceCatalogDefaults.CorteGeneralServiceId));
     Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     return (await response.Content.ReadFromJsonAsync<ServiceView>())!;
+  }
+
+  private static async Task<Guid> CreateGeneralServiceAsync(HttpClient client, string adminToken, string name)
+  {
+    AuthenticateAs(client, adminToken);
+    using var response = await client.PostAsJsonAsync(
+        "/api/v1/admin/general-services", new GeneralServiceCreateRequest(ServiceCatalogDefaults.BarberiaCategoryId, name));
+    Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    return (await response.Content.ReadFromJsonAsync<GeneralServiceView>())!.Id;
   }
 
   private async Task<(Guid CustomerId, Guid MembershipId)> SellActiveMembershipAsync(HttpClient client, string adminToken, Guid serviceId)

@@ -1,3 +1,4 @@
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Customers.Admin;
 using Barbershop.Application.Finance.Admin;
@@ -252,10 +253,57 @@ public sealed class MembershipSalesServiceTests : IDisposable
     await _service.SellAsync(_adminId, customer.Id, new MembershipSaleRequest(plan.Id, _today, ActivateNow: true));
     await _service.SellAsync(_adminId, customer.Id, new MembershipSaleRequest(plan.Id, _today, ActivateNow: true));
 
-    var list = await _service.GetCustomerMembershipsAsync(customer.Id);
-    Assert.Equal(2, list.Count);
-    Assert.All(list, membership => Assert.Equal("Active", membership.DisplayStatus));
+    var list = await _service.GetCustomerMembershipsAsync(customer.Id, new MembershipListQuery());
+    Assert.Equal(2, list.TotalCount);
+    Assert.All(list.Items, membership => Assert.Equal("Active", membership.DisplayStatus));
     Assert.Equal(2, await _dbContext.MembershipAllowances.CountAsync());
+  }
+
+  [Fact]
+  public async Task TheCustomerList_IsPaginated_AndFiltersByDisplayedStatusPlanAndSaleDate()
+  {
+    var customer = await CreateCustomerAsync();
+    var gold = await CreatePoolPlanAsync("Oro");
+    var silver = await CreatePoolPlanAsync("Plata");
+
+    var active = await _service.SellAsync(_adminId, customer.Id, new MembershipSaleRequest(gold.Id, _today, ActivateNow: true));
+    var pending = await _service.SellAsync(_adminId, customer.Id, new MembershipSaleRequest(gold.Id, _today));
+    var scheduled = await _service.SellAsync(_adminId, customer.Id, new MembershipSaleRequest(silver.Id, _today.AddDays(10), ActivateNow: true));
+    var expired = await _service.SellAsync(_adminId, customer.Id, new MembershipSaleRequest(
+        silver.Id, _today.AddDays(-200), _today.AddDays(-110), _today.AddDays(-200), ActivateNow: true,
+        ConfirmExpiredActivation: true, ActivationReason: "Venta registrada tarde"));
+    var annulled = await _service.SellAsync(_adminId, customer.Id, new MembershipSaleRequest(gold.Id, _today, ActivateNow: true));
+    await _service.AnnulAsync(_adminId, annulled.Id, new MembershipAnnulRequest("Venta registrada por error"));
+
+    Guid OnlyOne(PagedResult<CustomerMembershipSummaryView> page) => Assert.Single(page.Items).Id;
+    Task<PagedResult<CustomerMembershipSummaryView>> List(MembershipListQuery query) => _service.GetCustomerMembershipsAsync(customer.Id, query);
+
+    Assert.Equal(active.Id, OnlyOne(await List(new MembershipListQuery(Status: "Active"))));
+    Assert.Equal(pending.Id, OnlyOne(await List(new MembershipListQuery(Status: "PendingActivation"))));
+    Assert.Equal(scheduled.Id, OnlyOne(await List(new MembershipListQuery(Status: "scheduled"))));
+    Assert.Equal(expired.Id, OnlyOne(await List(new MembershipListQuery(Status: "Expired"))));
+    Assert.Equal(annulled.Id, OnlyOne(await List(new MembershipListQuery(Status: "Annulled"))));
+    Assert.Equal(2, (await List(new MembershipListQuery(PlanId: silver.Id))).TotalCount);
+    // Memberships are current items: no default dates, so the one sold 200 days ago is listed (see the paging below).
+    // A sale range covers at most 30 days; with one end the window extends 30 days from it.
+    Assert.Equal(expired.Id, OnlyOne(await List(new MembershipListQuery(SoldFrom: _today.AddDays(-210), SoldTo: _today.AddDays(-181)))));
+    Assert.Equal(expired.Id, OnlyOne(await List(new MembershipListQuery(SoldTo: _today.AddDays(-190)))));
+    Assert.Equal(4, (await List(new MembershipListQuery(SoldFrom: _today))).TotalCount);
+    var tooLong = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        List(new MembershipListQuery(SoldFrom: _today.AddDays(-30), SoldTo: _today)));
+    Assert.Contains("soldTo", tooLong.Errors.Keys);
+
+    var seen = new List<Guid>();
+    for (var page = 1; page <= 3; page++)
+    {
+      var result = await List(new MembershipListQuery(Page: page, PageSize: 2));
+      Assert.Equal(5, result.TotalCount);
+      seen.AddRange(result.Items.Select(item => item.Id));
+    }
+
+    Assert.Equal(5, seen.Distinct().Count());
+    await Assert.ThrowsAsync<ValidationProblemException>(() => List(new MembershipListQuery(Status: "Paused")));
+    await Assert.ThrowsAsync<ValidationProblemException>(() => List(new MembershipListQuery(SoldFrom: _today, SoldTo: _today.AddDays(-1))));
   }
 
   [Fact]
@@ -526,8 +574,8 @@ public sealed class MembershipSalesServiceTests : IDisposable
 
     await _customers.MergeWithPreviewAsync(_adminId, target.Id, source.Id);
 
-    Assert.Empty(await _service.GetCustomerMembershipsAsync(source.Id));
-    Assert.Equal(2, (await _service.GetCustomerMembershipsAsync(target.Id)).Count);
+    Assert.Empty((await _service.GetCustomerMembershipsAsync(source.Id, new MembershipListQuery())).Items);
+    Assert.Equal(2, (await _service.GetCustomerMembershipsAsync(target.Id, new MembershipListQuery())).TotalCount);
 
     var moved = await _service.GetByIdAsync(sourceMembership.Id);
     Assert.Equal(target.Id, moved.CustomerId);

@@ -3,12 +3,15 @@ namespace Barbershop.Application.Memberships.Admin;
 // Mode, Kind and Condition travel as strings ("Pool" | "PerService", "Service" | "Physical",
 // "EveryPurchase" | "FirstPurchaseOfPlan") so invalid values come back as field validation errors.
 
+// GeneralServiceName: the general service of the rate, to label it "Servicio general · Tarifa" (ADR-0016 T10).
+
 public sealed record MembershipPlanServiceView(
     Guid ServiceId,
     string ServiceName,
     int ServiceBasePrice,
     bool ServiceIsActive,
-    int? Quantity);
+    int? Quantity,
+    string? GeneralServiceName = null);
 
 public sealed record MembershipPlanGiftRuleView(
     Guid Id,
@@ -17,7 +20,8 @@ public sealed record MembershipPlanGiftRuleView(
     string? ServiceName,
     string? Description,
     int Quantity,
-    string Condition);
+    string Condition,
+    string? GeneralServiceName = null);
 
 public sealed record MembershipPlanView(
     Guid Id,
@@ -49,7 +53,8 @@ public sealed record MembershipPlanGiftRuleRequest(
     Guid? ServiceId,
     string? Description,
     int Quantity,
-    string Condition);
+    string Condition,
+    string? GeneralServiceName = null);
 
 /// <summary>
 /// <c>LoyaltyPoints</c> is optional: null keeps the current points (0 for a new plan). Sending it requires the

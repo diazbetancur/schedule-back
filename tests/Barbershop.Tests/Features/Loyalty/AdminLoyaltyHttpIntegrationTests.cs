@@ -13,6 +13,7 @@ using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
+using Barbershop.Domain.Services;
 
 namespace Barbershop.Tests.Features.Loyalty;
 
@@ -66,7 +67,7 @@ public sealed class AdminLoyaltyHttpIntegrationTests
     Assert.Equal(updated with { UpdatedAt = null }, reread with { UpdatedAt = null });
     Assert.Equal(updated.UpdatedAt!.Value, reread.UpdatedAt!.Value, TimeSpan.FromMilliseconds(1));
 
-    var changes = await context.Client.GetFromJsonAsync<List<LoyaltySettingsChangeView>>($"{SettingsUrl}/changes");
+    var changes = await context.Client.GetPageItemsAsync<LoyaltySettingsChangeView>($"{SettingsUrl}/changes");
     var change = Assert.Single(changes!);
     Assert.Equal((false, true, LoyaltySettings.DefaultPointsValidityDays, 180),
         (change.PreviousIsEnabled, change.NewIsEnabled, change.PreviousPointsValidityDays, change.NewPointsValidityDays));
@@ -104,7 +105,7 @@ public sealed class AdminLoyaltyHttpIntegrationTests
     }
 
     Assert.Equal(current, await context.Client.GetFromJsonAsync<LoyaltySettingsView>(SettingsUrl));
-    Assert.Empty((await context.Client.GetFromJsonAsync<List<LoyaltySettingsChangeView>>($"{SettingsUrl}/changes"))!);
+    Assert.Empty((await context.Client.GetPageItemsAsync<LoyaltySettingsChangeView>($"{SettingsUrl}/changes")));
   }
 
   [Fact]
@@ -146,7 +147,7 @@ public sealed class AdminLoyaltyHttpIntegrationTests
     Assert.Single(statuses, status => status == HttpStatusCode.OK);
     Assert.All(statuses.Where(status => status != HttpStatusCode.OK), status => Assert.Equal(HttpStatusCode.Conflict, status));
 
-    var changes = (await context.Client.GetFromJsonAsync<List<LoyaltySettingsChangeView>>($"{SettingsUrl}/changes"))!;
+    var changes = (await context.Client.GetPageItemsAsync<LoyaltySettingsChangeView>($"{SettingsUrl}/changes"));
     Assert.Equal(2, changes.Count);
     var final = (await context.Client.GetFromJsonAsync<LoyaltySettingsView>(SettingsUrl))!;
     Assert.Equal(changes[0].NewPointsValidityDays, final.PointsValidityDays);
@@ -214,10 +215,10 @@ public sealed class AdminLoyaltyHttpIntegrationTests
     AuthenticateAs(context.Client, admin.AccessToken);
 
     // A client that does not know about loyalty (the request without loyaltyPoints).
-    var legacy = await CreateServiceAsync(context.Client, new { name = "Barba", basePrice = 15000, businessPercentage = 30 });
+    var legacy = await CreateServiceAsync(context.Client, new { name = "Barba", basePrice = 15000, businessPercentage = 30, generalServiceId = ServiceCatalogDefaults.CorteGeneralServiceId });
     Assert.Equal(0, legacy.LoyaltyPoints);
 
-    var withPoints = await CreateServiceAsync(context.Client, new ServiceCreateRequest("Corte", 25000, 30, 10));
+    var withPoints = await CreateServiceAsync(context.Client, new ServiceCreateRequest("Corte", 25000, 30, 10, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
     Assert.Equal(10, withPoints.LoyaltyPoints);
 
     using (var keep = await context.Client.PutAsJsonAsync(
@@ -248,7 +249,7 @@ public sealed class AdminLoyaltyHttpIntegrationTests
       Assert.Equal(HttpStatusCode.BadRequest, fractional.StatusCode);
     }
 
-    var listed = await context.Client.GetFromJsonAsync<List<ServiceView>>("/api/v1/admin/services");
+    var listed = await context.Client.GetPageItemsAsync<ServiceView>("/api/v1/admin/services");
     Assert.Equal([("Barba", 0), ("Corte clásico", 0)], listed!.Select(service => (service.Name, service.LoyaltyPoints)));
 
     var audit = await ReadPointsChangesAsync(context);
@@ -264,7 +265,7 @@ public sealed class AdminLoyaltyHttpIntegrationTests
 
     var admin = await RegisterAdminAsync(context, "plan-points");
     AuthenticateAs(context.Client, admin.AccessToken);
-    var haircut = await CreateServiceAsync(context.Client, new ServiceCreateRequest("Corte", 25000, 30));
+    var haircut = await CreateServiceAsync(context.Client, new ServiceCreateRequest("Corte", 25000, 30, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
 
     var legacy = await CreatePlanAsync(context.Client, PlanRequest("Plata", haircut.Id, loyaltyPoints: null));
     Assert.Equal(0, legacy.LoyaltyPoints);
@@ -303,7 +304,7 @@ public sealed class AdminLoyaltyHttpIntegrationTests
 
     var admin = await RegisterAdminAsync(context, "points-revoked");
     AuthenticateAs(context.Client, admin.AccessToken);
-    var haircut = await CreateServiceAsync(context.Client, new ServiceCreateRequest("Corte", 25000, 30, 5));
+    var haircut = await CreateServiceAsync(context.Client, new ServiceCreateRequest("Corte", 25000, 30, 5, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
     var plan = await CreatePlanAsync(context.Client, PlanRequest("Oro", haircut.Id, 50));
 
     await RemovePermissionFromAdminRoleAsync(context, PermissionCodes.LoyaltySettingsManage);
@@ -316,7 +317,7 @@ public sealed class AdminLoyaltyHttpIntegrationTests
       Assert.Contains("puntos de fidelización", await service.Content.ReadAsStringAsync());
     }
 
-    using (var newService = await context.Client.PostAsJsonAsync("/api/v1/admin/services", new ServiceCreateRequest("Barba", 15000, 30, 0)))
+    using (var newService = await context.Client.PostAsJsonAsync("/api/v1/admin/services", new ServiceCreateRequest("Barba", 15000, 30, 0, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId)))
     {
       Assert.Equal(HttpStatusCode.Forbidden, newService.StatusCode);
     }
@@ -354,7 +355,7 @@ public sealed class AdminLoyaltyHttpIntegrationTests
     var customer = await RegisterAsync(context.Client, "Plain Customer", UniqueEmail("customer"));
     AuthenticateAs(context.Client, customer.AccessToken);
 
-    using var response = await context.Client.PostAsJsonAsync("/api/v1/admin/services", new ServiceCreateRequest("Corte", 25000, 30, 10));
+    using var response = await context.Client.PostAsJsonAsync("/api/v1/admin/services", new ServiceCreateRequest("Corte", 25000, 30, 10, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
     Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
   }
 

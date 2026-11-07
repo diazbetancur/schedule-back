@@ -41,7 +41,8 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
             .ToListAsync(cancellationToken);
 
         var services = await LoadServicesAsync(plans.SelectMany(ReferencedServiceIds), cancellationToken);
-        return plans.Select(plan => Map(plan, services)).ToArray();
+        var generalNames = await LoadGeneralServiceNamesAsync(services.Values, cancellationToken);
+        return plans.Select(plan => Map(plan, services, generalNames)).ToArray();
     }
 
     public async Task<MembershipPlanView> GetByIdAsync(Guid planId, CancellationToken cancellationToken = default)
@@ -465,7 +466,7 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
     private async Task<MembershipPlanView> MapAsync(MembershipPlan plan, CancellationToken cancellationToken)
     {
         var services = await LoadServicesAsync(ReferencedServiceIds(plan), cancellationToken);
-        return Map(plan, services);
+        return Map(plan, services, await LoadGeneralServiceNamesAsync(services.Values, cancellationToken));
     }
 
     /// <summary>Loads referenced services even if later deleted from the catalog, so their names still show.</summary>
@@ -482,11 +483,26 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
             .ToDictionaryAsync(service => service.Id, cancellationToken);
     }
 
+    /// <summary>Names of the general services of the rates, to label them "Servicio general · Tarifa" (ADR-0016 T10).</summary>
+    private async Task<Dictionary<Guid, string>> LoadGeneralServiceNamesAsync(IEnumerable<Service> rates, CancellationToken cancellationToken)
+    {
+        var ids = rates.Select(rate => rate.GeneralServiceId).Distinct().ToArray();
+        if (ids.Length == 0)
+        {
+            return [];
+        }
+
+        return await _dbContext.GeneralServices.AsNoTracking()
+            .Where(general => ids.Contains(general.Id))
+            .ToDictionaryAsync(general => general.Id, general => general.Name, cancellationToken);
+    }
+
     private static IEnumerable<Guid> ReferencedServiceIds(MembershipPlan plan)
         => plan.Services.Select(service => service.ServiceId)
             .Concat(plan.GiftRules.Where(rule => rule.ServiceId is not null).Select(rule => rule.ServiceId!.Value));
 
-    private static MembershipPlanView Map(MembershipPlan plan, IReadOnlyDictionary<Guid, Service> services)
+    private static MembershipPlanView Map(
+        MembershipPlan plan, IReadOnlyDictionary<Guid, Service> services, IReadOnlyDictionary<Guid, string> generalNames)
     {
         var includedServices = plan.Services
             .Select(included =>
@@ -497,7 +513,8 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
                     service?.Name ?? string.Empty,
                     service?.BasePrice ?? 0,
                     service is { IsActive: true, IsDeleted: false },
-                    included.Quantity);
+                    included.Quantity,
+                    service is not null ? generalNames.GetValueOrDefault(service.GeneralServiceId) : null);
             })
             .OrderBy(view => view.ServiceName, StringComparer.CurrentCultureIgnoreCase)
             .ToArray();
@@ -512,7 +529,10 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
                 rule.ServiceId is { } serviceId && services.TryGetValue(serviceId, out var giftService) ? giftService.Name : null,
                 rule.Description,
                 rule.Quantity,
-                rule.Condition.ToString()))
+                rule.Condition.ToString(),
+                rule.ServiceId is { } giftRateId && services.TryGetValue(giftRateId, out var giftRate)
+                    ? generalNames.GetValueOrDefault(giftRate.GeneralServiceId)
+                    : null))
             .ToArray();
 
         return new MembershipPlanView(

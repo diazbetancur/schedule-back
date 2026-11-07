@@ -1,3 +1,5 @@
+using Barbershop.Application.Common.Paging;
+
 namespace Barbershop.Application.Customers.Claims;
 
 /// <summary>The signed-in customer: their own profile and their own claims, nothing else.</summary>
@@ -16,7 +18,12 @@ public interface IOwnCustomerProfileService
 public interface IAdminCustomerClaimsService
 {
     /// <summary>Pending claims oldest first; decided ones newest first.</summary>
-    Task<IReadOnlyList<CustomerClaimView>> ListAsync(string? status, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Claims in one status (Pending by default), paginated. Pending is a queue: oldest first and never filtered by
+    /// date; decided ones newest first.
+    /// </summary>
+    Task<PagedResult<CustomerClaimView>> ListAsync(
+        string? status, PageQuery? query = null, CancellationToken cancellationToken = default);
 
     Task<CustomerClaimView> GetByIdAsync(Guid claimId, CancellationToken cancellationToken = default);
 

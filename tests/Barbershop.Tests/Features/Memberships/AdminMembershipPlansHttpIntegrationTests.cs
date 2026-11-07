@@ -11,6 +11,7 @@ using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
+using Barbershop.Domain.Services;
 
 namespace Barbershop.Tests.Features.Memberships;
 
@@ -282,7 +283,7 @@ public sealed class AdminMembershipPlansHttpIntegrationTests
 
   private static async Task<ServiceView> CreateServiceAsync(HttpClient client, string name, int price)
   {
-    using var response = await client.PostAsJsonAsync("/api/v1/admin/services", new ServiceCreateRequest(name, price, 30));
+    using var response = await client.PostAsJsonAsync("/api/v1/admin/services", new ServiceCreateRequest(name, price, 30, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
     Assert.Equal(HttpStatusCode.Created, response.StatusCode);
     return (await response.Content.ReadFromJsonAsync<ServiceView>())!;
   }

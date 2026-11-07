@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Customers.Admin;
 using Barbershop.Application.ServiceRecords;
 using Barbershop.Domain.ServiceRecords;
@@ -23,7 +24,7 @@ public static class AdminServiceRecordsEndpoints
 
         serviceRecords.MapGet(string.Empty, ListAsync)
             .WithName("GetAdminServiceRecords")
-            .Produces<IReadOnlyList<ServiceRecordView>>(StatusCodes.Status200OK)
+            .Produces<PagedResult<ServiceRecordView>>(StatusCodes.Status200OK)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
@@ -97,10 +98,9 @@ public static class AdminServiceRecordsEndpoints
         return api;
     }
 
-    private static Task<IReadOnlyList<ServiceRecordView>> ListAsync(
-        string? status, DateOnly? from, DateOnly? to, Guid? staffProfileId,
-        IAdminServiceRecordsService service, CancellationToken cancellationToken)
-        => service.ListAsync(status, from, to, staffProfileId, cancellationToken);
+    private static Task<PagedResult<ServiceRecordView>> ListAsync(
+        [AsParameters] ServiceRecordListQuery query, IAdminServiceRecordsService service, CancellationToken cancellationToken)
+        => service.ListAsync(query, cancellationToken);
 
     private static Task<ServiceRecordOptionsView> GetOptionsAsync(IAdminServiceRecordsService service, CancellationToken cancellationToken)
         => service.GetOptionsAsync(cancellationToken);

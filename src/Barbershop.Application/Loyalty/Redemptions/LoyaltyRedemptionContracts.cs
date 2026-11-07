@@ -1,3 +1,5 @@
+using Barbershop.Application.Common.Paging;
+
 namespace Barbershop.Application.Loyalty.Redemptions;
 
 // Kind travels as "Service" | "Other"; Status as "Requested" | "Approved" | "Delivered" | "Rejected" | "Cancelled" |
@@ -50,7 +52,8 @@ public sealed record LoyaltyRewardChangeView(
     bool? PreviousIsActive,
     bool NewIsActive);
 
-public sealed record LoyaltyRewardServiceOption(Guid Id, string Name, bool IsActive);
+/// <summary>A settlement rate a service reward can deliver, labelled "Servicio general · Tarifa" (ADR-0016 T10).</summary>
+public sealed record LoyaltyRewardServiceOption(Guid Id, string Name, bool IsActive, Guid GeneralServiceId, string GeneralServiceName);
 
 public interface IAdminLoyaltyRewardsService
 {
@@ -63,7 +66,9 @@ public interface IAdminLoyaltyRewardsService
     Task<LoyaltyRewardView> UpdateAsync(
         Guid currentUserId, Guid rewardId, LoyaltyRewardUpsertRequest request, CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<LoyaltyRewardChangeView>> GetChangesAsync(Guid rewardId, CancellationToken cancellationToken = default);
+    /// <summary>Change log of one reward, newest first, paginated.</summary>
+    Task<PagedResult<LoyaltyRewardChangeView>> GetChangesAsync(
+        Guid rewardId, PageQuery? query = null, CancellationToken cancellationToken = default);
 }
 
 // ── Redemptions ─────────────────────────────────────────────────────────────────────────────────
@@ -127,14 +132,17 @@ public sealed record LoyaltyCounterRedemptionRequest(Guid RewardId, bool InPerso
 
 public interface IAdminLoyaltyRedemptionsService
 {
-    /// <summary>Pending first (oldest first), then the rest (newest first).</summary>
-    Task<IReadOnlyList<LoyaltyRedemptionView>> ListAsync(string? status, Guid? customerId, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Paginated (ADR-0016 B7). Filtering by a pending status lists oldest first (a queue); any other view lists newest
+    /// first. Ties are broken by id.
+    /// </summary>
+    Task<PagedResult<LoyaltyRedemptionView>> ListAsync(LoyaltyRedemptionListQuery query, CancellationToken cancellationToken = default);
 
     /// <summary>Active rewards, for registering a redemption at the counter (no catalog permission needed).</summary>
     Task<IReadOnlyList<LoyaltyRewardView>> ListActiveRewardsAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>Approved redemptions waiting for delivery, oldest deadline first.</summary>
-    Task<IReadOnlyList<LoyaltyRedemptionView>> ListDeliveriesAsync(CancellationToken cancellationToken = default);
+    /// <summary>Approved redemptions waiting for delivery (a queue: no date filter), oldest deadline first, paginated.</summary>
+    Task<PagedResult<LoyaltyRedemptionView>> ListDeliveriesAsync(PageQuery? query = null, CancellationToken cancellationToken = default);
 
     Task<LoyaltyRedemptionView> GetAsync(Guid redemptionId, CancellationToken cancellationToken = default);
 
@@ -192,10 +200,26 @@ public interface IMyLoyaltyRedemptionsService
 {
     Task<MyLoyaltyCatalogView> GetCatalogAsync(Guid currentUserId, CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<MyLoyaltyRedemptionView>> ListMineAsync(Guid currentUserId, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Own redemptions, paginated: the pending ones (requested or approved) first, then the rest, newest request first.
+    /// </summary>
+    Task<PagedResult<MyLoyaltyRedemptionView>> ListMineAsync(
+        Guid currentUserId, PageQuery? query = null, CancellationToken cancellationToken = default);
 
     Task<MyLoyaltyRedemptionView> RequestAsync(Guid currentUserId, LoyaltyRedemptionRequest request, CancellationToken cancellationToken = default);
 
     Task<MyLoyaltyRedemptionView> CancelMineAsync(
         Guid currentUserId, Guid redemptionId, MyLoyaltyRedemptionCancelRequest request, CancellationToken cancellationToken = default);
 }
+
+/// <summary>
+/// Filters of <c>GET /admin/loyalty/redemptions</c> (ADR-0016 B7): <c>Status</c> name, <c>CustomerId</c> and an
+/// inclusive range of Bogotá dates of the request.
+/// </summary>
+public sealed record LoyaltyRedemptionListQuery(
+    string? Status = null,
+    Guid? CustomerId = null,
+    DateOnly? From = null,
+    DateOnly? To = null,
+    int? Page = null,
+    int? PageSize = null);

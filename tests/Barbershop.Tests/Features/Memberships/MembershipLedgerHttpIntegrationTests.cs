@@ -15,6 +15,7 @@ using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
+using Barbershop.Domain.Services;
 
 namespace Barbershop.Tests.Features.Memberships;
 
@@ -267,8 +268,8 @@ public sealed class MembershipLedgerHttpIntegrationTests
   {
     using var scope = factory.Services.CreateScope();
     var services = scope.ServiceProvider.GetRequiredService<IAdminServicesService>();
-    var haircut = await services.CreateAsync(new ServiceCreateRequest($"Corte {Guid.NewGuid():N}"[..20], 25000, 30));
-    var beard = await services.CreateAsync(new ServiceCreateRequest($"Barba {Guid.NewGuid():N}"[..20], 15000, 30));
+    var haircut = await services.CreateAsync(new ServiceCreateRequest($"Corte {Guid.NewGuid():N}"[..20], 25000, 30, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
+    var beard = await services.CreateAsync(new ServiceCreateRequest($"Barba {Guid.NewGuid():N}"[..20], 15000, 30, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
     var customer = await scope.ServiceProvider.GetRequiredService<IAdminCustomersService>()
         .CreateAsync(adminId, new CustomerCreateRequest("Carlos Pérez", "3001234567", $"{Guid.NewGuid():N}@example.com"));
     var plan = await scope.ServiceProvider.GetRequiredService<IAdminMembershipPlansService>().CreateAsync(new MembershipPlanUpsertRequest(

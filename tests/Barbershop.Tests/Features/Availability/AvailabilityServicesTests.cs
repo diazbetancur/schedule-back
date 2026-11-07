@@ -10,6 +10,7 @@ using Barbershop.Infrastructure.Identity;
 using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.Staff;
 using Microsoft.AspNetCore.Identity;
+using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
@@ -190,14 +191,14 @@ public sealed class AvailabilityServicesTests : IDisposable
                 Rule(DayOfWeek.Tuesday, 15, 0, 16, 0, false)
         ]);
 
-    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay);
+    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
 
+    // F1: a slot every 15 minutes from the start of the rule, as long as the 30-minute service fits.
     Assert.Equal(30, response.SlotDurationMinutes);
-    Assert.Collection(
-        response.Slots,
-        first => AssertSlot(first, nextDay, 9, 0, 9, 30),
-        second => AssertSlot(second, nextDay, 9, 30, 10, 0),
-        third => AssertSlot(third, nextDay, 10, 0, 10, 30));
+    Assert.Equal(15, response.SlotStepMinutes);
+    Assert.Equal(Corte, response.GeneralServiceId);
+    AssertStarts(response, nextDay, (9, 0), (9, 15), (9, 30), (9, 45), (10, 0));
+    Assert.All(response.Slots, slot => Assert.Equal(TimeSpan.FromMinutes(30), slot.EndAtUtc - slot.StartAtUtc));
   }
 
   [Fact]
@@ -214,12 +215,9 @@ public sealed class AvailabilityServicesTests : IDisposable
             ToUtc(nextDay, 10, 30),
             "Break"));
 
-    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay);
+    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
 
-    Assert.Collection(
-        response.Slots,
-        first => AssertSlot(first, nextDay, 9, 0, 9, 30),
-        second => AssertSlot(second, nextDay, 10, 30, 11, 0));
+    AssertStarts(response, nextDay, (9, 0), (10, 30));
   }
 
   [Fact]
@@ -233,12 +231,10 @@ public sealed class AvailabilityServicesTests : IDisposable
     await AddAppointmentAsync(staff.StaffProfileId, nextDay, 10, 0, 10, 30, AppointmentStatus.Confirmed);
     await AddAppointmentAsync(staff.StaffProfileId, nextDay, 10, 30, 11, 0, AppointmentStatus.Completed);
 
-    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay);
+    // Appointments from before services (no reserved duration) block their own EndsAt − StartsAt.
+    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
 
-    Assert.Collection(
-        response.Slots,
-        first => AssertSlot(first, nextDay, 9, 0, 9, 30),
-        second => AssertSlot(second, nextDay, 10, 30, 11, 0));
+    AssertStarts(response, nextDay, (9, 0), (10, 30));
   }
 
   [Fact]
@@ -248,13 +244,10 @@ public sealed class AvailabilityServicesTests : IDisposable
 
     await _staffAvailabilityService.ReplaceRulesAsync(staff.UserId, [Rule(DayOfWeek.Monday, 9, 0, 12, 0)]);
 
-    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, CurrentDate, CurrentDate);
+    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, CurrentDate, CurrentDate, Corte, null);
 
-    Assert.Collection(
-        response.Slots,
-        first => AssertSlot(first, CurrentDate, 10, 30, 11, 0),
-        second => AssertSlot(second, CurrentDate, 11, 0, 11, 30),
-        third => AssertSlot(third, CurrentDate, 11, 30, 12, 0));
+    // Now is 10:15 Bogotá: 10:15 itself is still offered, nothing before it.
+    AssertStarts(response, CurrentDate, (10, 15), (10, 30), (10, 45), (11, 0), (11, 15), (11, 30));
   }
 
   [Fact]
@@ -265,7 +258,7 @@ public sealed class AvailabilityServicesTests : IDisposable
 
     await _staffAvailabilityService.ReplaceRulesAsync(staff.UserId, [Rule(nextDay.DayOfWeek, 9, 0, 9, 30)]);
 
-    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay);
+    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
 
     // Bogota (UTC-5) 09:00 local must be stored as 14:00 UTC, not 09:00 UTC.
     var expectedStartUtc = new DateTime(nextDay.Year, nextDay.Month, nextDay.Day, 14, 0, 0, DateTimeKind.Utc);
@@ -282,7 +275,7 @@ public sealed class AvailabilityServicesTests : IDisposable
     var staff = await CreateStaffAsync("slot-range@example.com", "Slot Range", "Slot Range");
 
     var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
-        _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, CurrentDate, CurrentDate.AddDays(31)));
+        _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, CurrentDate, CurrentDate.AddDays(31), Corte, null));
 
     Assert.Contains("to", exception.Errors.Keys);
   }
@@ -312,21 +305,103 @@ public sealed class AvailabilityServicesTests : IDisposable
     Assert.Equal(ToUtc(nextDay, 9, 30), stored.EndsAt);
   }
 
+  [Fact]
+  public async Task GetSlotsAsync_UsesTheDurationOfEachService_InRulesThatAreNotMultiples()
+  {
+    var staff = await CreateStaffAsync("slot-durations@example.com", "Slot Durations", "Slot Durations");
+    var nextDay = CurrentDate.AddDays(1);
+    var color = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Color");
+    await ServiceOfferingTestData.OfferAsync(_dbContext, staff.StaffProfileId, color.Id, 45);
+
+    // 9:00-10:10 is not a multiple of 15 nor of 45; a 45-minute service ends at 10:00 at the latest.
+    await _staffAvailabilityService.ReplaceRulesAsync(staff.UserId, [Rule(DayOfWeek.Tuesday, 9, 0, 10, 10)]);
+
+    var colorSlots = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, color.Id, null);
+    Assert.Equal(45, colorSlots.SlotDurationMinutes);
+    AssertStarts(colorSlots, nextDay, (9, 0), (9, 15));
+
+    var corteSlots = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
+    AssertStarts(corteSlots, nextDay, (9, 0), (9, 15), (9, 30));
+
+    // A fixed duration (to reschedule an appointment that keeps its own) works the same way.
+    var fixedSlots = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, null, 70);
+    Assert.Equal(70, fixedSlots.SlotDurationMinutes);
+    AssertStarts(fixedSlots, nextDay, (9, 0));
+  }
+
+  [Fact]
+  public async Task GetSlotsAsync_NeverCrossesTheEndOfTheDay()
+  {
+    var staff = await CreateStaffAsync("slot-midnight@example.com", "Slot Midnight", "Slot Midnight");
+    var nextDay = CurrentDate.AddDays(1);
+    await _staffAvailabilityService.ReplaceRulesAsync(staff.UserId, [Rule(DayOfWeek.Tuesday, 23, 0, 23, 59)]);
+
+    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
+
+    // 23:30 + 30 minutes would end at midnight, outside the rule (and the day).
+    AssertStarts(response, nextDay, (23, 0), (23, 15));
+  }
+
+  [Fact]
+  public async Task GetSlotsAsync_RequiresAServiceTheProfessionalOffersOrADuration()
+  {
+    var staff = await CreateStaffAsync("slot-service@example.com", "Slot Service", "Slot Service");
+    var nextDay = CurrentDate.AddDays(1);
+    var notOffered = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Barba");
+    var inactiveOffer = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Cejas");
+    await ServiceOfferingTestData.OfferAsync(_dbContext, staff.StaffProfileId, inactiveOffer.Id, 15, isActive: false);
+
+    var none = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, null, null));
+    Assert.Contains("generalServiceId", none.Errors.Keys);
+
+    var both = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, 30));
+    Assert.Contains("durationMinutes", both.Errors.Keys);
+
+    var tooLong = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, null, 241));
+    Assert.Contains("durationMinutes", tooLong.Errors.Keys);
+
+    foreach (var serviceId in new[] { notOffered.Id, inactiveOffer.Id })
+    {
+      var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+          _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, serviceId, null));
+      Assert.Contains("generalServiceId", exception.Errors.Keys);
+    }
+
+    // An offering of a deactivated general service is not bookable.
+    var corte = await _dbContext.GeneralServices.SingleAsync(service => service.Id == Corte);
+    corte.Deactivate(CurrentUtc.UtcDateTime);
+    await _dbContext.SaveChangesAsync();
+    await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null));
+  }
+
+  private static void AssertStarts(PublicAvailabilitySlotsResponse response, DateOnly date, params (int Hour, int Minute)[] starts)
+      => Assert.Equal(starts.Select(start => ToUtc(date, start.Hour, start.Minute)), response.Slots.Select(slot => slot.StartAtUtc));
+
+  private static Guid Corte => ServiceOfferingTestData.Corte;
+
   private static AvailabilityRuleRequest Rule(DayOfWeek dayOfWeek, int startHour, int startMinute, int endHour, int endMinute, bool isActive = true)
       => new((int)dayOfWeek, new TimeOnly(startHour, startMinute), new TimeOnly(endHour, endMinute), isActive);
 
   private async Task<StaffManagementView> CreateStaffAsync(string email, string fullName, string displayName)
-      => await _adminStaffService.CreateAsync(new AdminStaffCreateRequest(
-          fullName,
-          email,
-          displayName,
-          "Secret123!",
-          "+5491100000000",
-          null,
-          null,
-          null,
-          null,
-          true));
+  {
+    var staff = await _adminStaffService.CreateAsync(new AdminStaffCreateRequest(
+        fullName,
+        email,
+        displayName,
+        "Secret123!",
+        "+5491100000000",
+        null,
+        null,
+        null,
+        null,
+        true));
+    await ServiceOfferingTestData.OfferCorteAsync(_dbContext, staff.StaffProfileId);
+    return staff;
+  }
 
   private async Task<Appointment> AddAppointmentAsync(
       Guid staffProfileId,
@@ -354,12 +429,6 @@ public sealed class AvailabilityServicesTests : IDisposable
     await _dbContext.SaveChangesAsync();
 
     return appointment;
-  }
-
-  private static void AssertSlot(PublicAvailabilitySlotResponse slot, DateOnly date, int startHour, int startMinute, int endHour, int endMinute)
-  {
-    Assert.Equal(ToUtc(date, startHour, startMinute), slot.StartAtUtc);
-    Assert.Equal(ToUtc(date, endHour, endMinute), slot.EndAtUtc);
   }
 
   private static DateOnly CurrentDate => DateOnly.FromDateTime(CurrentUtc.UtcDateTime);

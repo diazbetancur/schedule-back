@@ -1,4 +1,5 @@
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Loyalty.Redemptions;
 using Barbershop.Application.ServiceRecords;
 using Barbershop.Domain.Loyalty;
@@ -17,8 +18,6 @@ namespace Barbershop.Infrastructure.Loyalty;
 /// </summary>
 internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IAdminLoyaltyRedemptionsService, IMyLoyaltyRedemptionsService
 {
-    private const int MaxListed = 200;
-    private const int MaxChangesListed = 100;
 
     private const string StaleMessage = "La solicitud de canje cambió mientras la revisabas. Recarga e intenta de nuevo.";
     private const string RewardConflictMessage = "La recompensa fue modificada por otra persona. Recarga e intenta de nuevo.";
@@ -45,10 +44,12 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
     }
 
     public async Task<IReadOnlyList<LoyaltyRewardServiceOption>> GetServiceOptionsAsync(CancellationToken cancellationToken = default)
-        => await _dbContext.Services.AsNoTracking()
-            .Where(service => !service.IsDeleted)
-            .OrderBy(service => service.Name)
-            .Select(service => new LoyaltyRewardServiceOption(service.Id, service.Name, service.IsActive))
+        => await (
+                from service in _dbContext.Services.AsNoTracking()
+                join general in _dbContext.GeneralServices.AsNoTracking() on service.GeneralServiceId equals general.Id
+                where !service.IsDeleted
+                orderby general.Name, service.Name
+                select new LoyaltyRewardServiceOption(service.Id, service.Name, service.IsActive, general.Id, general.Name))
             .ToListAsync(cancellationToken);
 
     public async Task<LoyaltyRewardView> CreateAsync(Guid currentUserId, LoyaltyRewardUpsertRequest request, CancellationToken cancellationToken = default)
@@ -99,18 +100,24 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
         return (await MapRewardsAsync([reward], cancellationToken))[0];
     }
 
-    public async Task<IReadOnlyList<LoyaltyRewardChangeView>> GetChangesAsync(Guid rewardId, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<LoyaltyRewardChangeView>> GetChangesAsync(
+        Guid rewardId, PageQuery? query = null, CancellationToken cancellationToken = default)
     {
+        var page = (query ?? new PageQuery()).ToRequest();
         if (!await _dbContext.LoyaltyRewards.AnyAsync(reward => reward.Id == rewardId, cancellationToken))
         {
             throw new NotFoundException("La recompensa no existe.");
         }
 
-        var changes = await _dbContext.LoyaltyRewardChanges.AsNoTracking()
+        return await _dbContext.LoyaltyRewardChanges.AsNoTracking()
             .Where(change => change.RewardId == rewardId)
-            .OrderByDescending(change => change.ChangedAt).ThenByDescending(change => change.ChangeType)
-            .Take(MaxChangesListed)
-            .ToListAsync(cancellationToken);
+            .OrderByDescending(change => change.ChangedAt).ThenByDescending(change => change.ChangeType).ThenBy(change => change.Id)
+            .ToPagedResultAsync(page, MapRewardChangesAsync, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<LoyaltyRewardChangeView>> MapRewardChangesAsync(
+        IReadOnlyList<LoyaltyRewardChange> changes, CancellationToken cancellationToken)
+    {
         var users = await UserNamesAsync(_dbContext, changes.Select(change => change.ChangedByUserId), cancellationToken);
         var serviceIds = changes.SelectMany(change => new[] { change.PreviousServiceId, change.NewServiceId })
             .Where(id => id is not null).Select(id => id!.Value).Distinct().ToArray();
@@ -247,22 +254,26 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
                 .ToArray());
     }
 
-    public async Task<IReadOnlyList<MyLoyaltyRedemptionView>> ListMineAsync(Guid currentUserId, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<MyLoyaltyRedemptionView>> ListMineAsync(
+        Guid currentUserId, PageQuery? query = null, CancellationToken cancellationToken = default)
     {
+        var page = (query ?? new PageQuery()).ToRequest();
         if (await OwnProfileIdAsync(currentUserId, cancellationToken) is not { } customerId)
         {
-            return [];
+            return new PagedResult<MyLoyaltyRedemptionView>([], page.Page, page.PageSize, 0);
         }
 
-        // The live profile and every profile merged into it (their redemptions were final when merged).
+        // The live profile and every profile merged into it (their redemptions were final when merged). Pending ones
+        // (requested or approved) come first so none is pushed off the first page, then newest request first.
         var profileIds = await ProfileAndMergedSourcesAsync(customerId, cancellationToken);
-        var redemptions = await _dbContext.LoyaltyRedemptions.AsNoTracking()
-            .Where(redemption => profileIds.Contains(redemption.CustomerId))
-            .OrderByDescending(redemption => redemption.RequestedAt)
-            .Take(MaxListed)
-            .ToListAsync(cancellationToken);
         var today = Today();
-        return redemptions.Select(redemption => MapMine(redemption, today)).ToArray();
+        return await _dbContext.LoyaltyRedemptions.AsNoTracking()
+            .Where(redemption => profileIds.Contains(redemption.CustomerId))
+            .OrderBy(redemption =>
+                redemption.Status == LoyaltyRedemptionStatus.Requested || redemption.Status == LoyaltyRedemptionStatus.Approved ? 0 : 1)
+            .ThenByDescending(redemption => redemption.RequestedAt)
+            .ThenByDescending(redemption => redemption.Id)
+            .ToPagedResultAsync(page, redemption => MapMine(redemption, today), cancellationToken);
     }
 
     public async Task<MyLoyaltyRedemptionView> RequestAsync(
@@ -317,8 +328,10 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
 
     // ── Staff ──────────────────────────────────────────────────────────────────────────────────
 
-    public async Task<IReadOnlyList<LoyaltyRedemptionView>> ListAsync(string? status, Guid? customerId, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<LoyaltyRedemptionView>> ListAsync(LoyaltyRedemptionListQuery listQuery, CancellationToken cancellationToken = default)
     {
+        var page = PageRequest.Create(listQuery.Page, listQuery.PageSize);
+        var (status, customerId) = (listQuery.Status, listQuery.CustomerId);
         LoyaltyRedemptionStatus? parsed = null;
         if (!string.IsNullOrWhiteSpace(status))
         {
@@ -328,6 +341,12 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
                     ["status"] = ["Estado no válido: Requested, Approved, Delivered, Rejected, Cancelled o Expired."]
                 });
         }
+
+        // Requested and approved are work queues: no default date, so an old pending redemption is never hidden. Any
+        // other view is history: the last 30 days by default and at most 30 days per query.
+        var range = parsed is { } queue && LoyaltyRedemption.IsPendingStatus(queue)
+            ? HistoryRange.ResolveOptional(listQuery.From, listQuery.To)
+            : HistoryRange.Resolve(listQuery.From, listQuery.To, Today());
 
         var query = _dbContext.LoyaltyRedemptions.AsNoTracking();
         if (parsed is { } wanted)
@@ -340,10 +359,24 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
             query = query.Where(redemption => redemption.CustomerId == customer);
         }
 
-        var redemptions = parsed is { } pending && LoyaltyRedemption.IsPendingStatus(pending)
-            ? await query.OrderBy(redemption => redemption.RequestedAt).Take(MaxListed).ToListAsync(cancellationToken)
-            : await query.OrderByDescending(redemption => redemption.RequestedAt).Take(MaxListed).ToListAsync(cancellationToken);
-        return await MapAsync(_dbContext, redemptions, Today(), cancellationToken);
+        if (range?.From is { } from)
+        {
+            var startUtc = PagingExtensions.StartOfBogotaDayUtc(from);
+            query = query.Where(redemption => redemption.RequestedAt >= startUtc);
+        }
+
+        if (range?.To is { } to)
+        {
+            var endUtc = PagingExtensions.EndOfBogotaDayUtc(to);
+            query = query.Where(redemption => redemption.RequestedAt < endUtc);
+        }
+
+        var ordered = parsed is { } pending && LoyaltyRedemption.IsPendingStatus(pending)
+            ? query.OrderBy(redemption => redemption.RequestedAt).ThenBy(redemption => redemption.Id)
+            : query.OrderByDescending(redemption => redemption.RequestedAt).ThenByDescending(redemption => redemption.Id);
+        var today = Today();
+        return await ordered.ToPagedResultAsync(
+            page, (redemptions, ct) => MapAsync(_dbContext, redemptions, today, ct), cancellationToken);
     }
 
     public async Task<IReadOnlyList<LoyaltyRewardView>> ListActiveRewardsAsync(CancellationToken cancellationToken = default)
@@ -355,14 +388,15 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
         return await MapRewardsAsync(rewards, cancellationToken);
     }
 
-    public async Task<IReadOnlyList<LoyaltyRedemptionView>> ListDeliveriesAsync(CancellationToken cancellationToken = default)
+    public async Task<PagedResult<LoyaltyRedemptionView>> ListDeliveriesAsync(
+        PageQuery? query = null, CancellationToken cancellationToken = default)
     {
-        var redemptions = await _dbContext.LoyaltyRedemptions.AsNoTracking()
+        var page = (query ?? new PageQuery()).ToRequest();
+        var today = Today();
+        return await _dbContext.LoyaltyRedemptions.AsNoTracking()
             .Where(redemption => redemption.Status == LoyaltyRedemptionStatus.Approved)
-            .OrderBy(redemption => redemption.DeliverBy).ThenBy(redemption => redemption.RequestedAt)
-            .Take(MaxListed)
-            .ToListAsync(cancellationToken);
-        return await MapAsync(_dbContext, redemptions, Today(), cancellationToken);
+            .OrderBy(redemption => redemption.DeliverBy).ThenBy(redemption => redemption.RequestedAt).ThenBy(redemption => redemption.Id)
+            .ToPagedResultAsync(page, (redemptions, ct) => MapAsync(_dbContext, redemptions, today, ct), cancellationToken);
     }
 
     public async Task<LoyaltyRedemptionView> GetAsync(Guid redemptionId, CancellationToken cancellationToken = default)

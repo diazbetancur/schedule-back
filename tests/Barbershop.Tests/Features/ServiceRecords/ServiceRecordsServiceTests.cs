@@ -43,6 +43,9 @@ public sealed class ServiceRecordsServiceTests : IDisposable
   private readonly Service _haircut;
   private readonly Service _beard;
 
+  // ADR-0016 B4: the professional registers general services; the rates are chosen when confirming.
+  private readonly GeneralService _beardGeneral;
+
   public ServiceRecordsServiceTests()
   {
     var options = new DbContextOptionsBuilder<AppDbContext>()
@@ -64,9 +67,11 @@ public sealed class ServiceRecordsServiceTests : IDisposable
     _barberUser = new User("Alex Barbero", "alex@example.com", "hash", DateTime.UtcNow);
     var otherBarberUser = new User("Beto Barbero", "beto@example.com", "hash", DateTime.UtcNow);
     _customerUser = new User("Carla Cliente", "carla@example.com", "hash", DateTime.UtcNow);
+    _beardGeneral = new GeneralService(ServiceCatalogDefaults.BarberiaCategoryId, "Barba", null, 1, DateTime.UtcNow);
+    _dbContext.GeneralServices.Add(_beardGeneral);
     _haircut = new Service("Corte", 25000, DateTime.UtcNow, 30);
     _haircut.SetLoyaltyPoints(10, DateTime.UtcNow);
-    _beard = new Service("Barba", 15000, DateTime.UtcNow, 40);
+    _beard = new Service("Barba", 15000, DateTime.UtcNow, 40, _beardGeneral.Id);
     _barber = new StaffProfile(_barberUser.Id, "Alex", 30, DateTime.UtcNow);
     _otherBarber = new StaffProfile(otherBarberUser.Id, "Beto", 30, DateTime.UtcNow);
     _dbContext.Users.AddRange(_admin, _barberUser, otherBarberUser, _customerUser);
@@ -173,12 +178,17 @@ public sealed class ServiceRecordsServiceTests : IDisposable
     Assert.Contains("performedOn", noDate.Errors.Keys);
 
     var repeated = await Assert.ThrowsAsync<ValidationProblemException>(() => RegisterAsync(serviceIds: [_haircut.Id, _haircut.Id]));
-    Assert.Contains("serviceIds", repeated.Errors.Keys);
+    Assert.Contains("generalServiceIds", repeated.Errors.Keys);
 
-    _beard.Deactivate(DateTime.UtcNow);
+    // A rate is not a general service: the professional registers what they did, not how it is settled.
+    var rate = await Assert.ThrowsAsync<ValidationProblemException>(() => _service.RegisterAsync(
+        _barberUser.Id, new ServiceRecordRegisterRequest(null, _today, null, [_haircut.Id], null, Guid.NewGuid())));
+    Assert.Contains("generalServiceIds[0]", rate.Errors.Keys);
+
+    _beardGeneral.Deactivate(DateTime.UtcNow);
     await _dbContext.SaveChangesAsync();
     var inactive = await Assert.ThrowsAsync<ValidationProblemException>(() => RegisterAsync(serviceIds: [_beard.Id]));
-    Assert.Contains("serviceIds[0]", inactive.Errors.Keys);
+    Assert.Contains("generalServiceIds[0]", inactive.Errors.Keys);
 
     // Without a professional profile nobody can register, whatever their permissions.
     await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
@@ -239,13 +249,113 @@ public sealed class ServiceRecordsServiceTests : IDisposable
         customerId: customer.Id, performedOn: _today.AddDays(-1)));
 
     // Registered values stay as the professional entered them.
-    Assert.Equal((_haircut.Id, _barber.Id, _today, (Guid?)null), (approved.ServiceId, approved.StaffProfileId, approved.PerformedOn, approved.CustomerId));
+    Assert.Equal((ServiceCatalogDefaults.CorteGeneralServiceId, "Corte", (Guid?)null, _barber.Id, _today, (Guid?)null),
+        (approved.GeneralServiceId!.Value, approved.ServiceName, approved.ServiceId, approved.StaffProfileId, approved.PerformedOn, approved.CustomerId));
     Assert.Equal("Nombre escrito", approved.CustomerName);
     var approval = approved.Approval!;
     Assert.Equal((_beard.Id, "Barba", _otherBarber.Id, "Beto", customer.Id, _today.AddDays(-1)),
         (approval.ServiceId, approval.ServiceName, approval.StaffProfileId, approval.StaffName!, approval.CustomerId!.Value, approval.PerformedOn));
+    Assert.Equal((_beardGeneral.Id, "Barba"), (approval.GeneralServiceId!.Value, approval.GeneralServiceName));
+    Assert.Equal(_beardGeneral.Id, (await _dbContext.ServiceRecords.SingleAsync(item => item.Id == record.Id)).ApprovedGeneralServiceId);
     var income = Assert.Single(await _dbContext.IncomeEntries.ToListAsync());
     Assert.Equal((_beard.Id, _otherBarber.Id, 40), (income.ServiceId!.Value, income.StaffProfileId!.Value, income.BusinessPercentageSnapshot));
+  }
+
+  [Fact]
+  public async Task Approve_WithARateOfAnotherGeneralService_IsAConflict_AndNothingIsCreated()
+  {
+    var record = (await RegisterAsync(serviceIds: [_haircut.Id])).Single();
+
+    // The registered general service (Corte) is kept when none is sent; Barba's rate does not belong to it.
+    await Assert.ThrowsAsync<ConflictException>(() => _service.ApproveAsync(_admin.Id, record.Id,
+        Approve(record, "Paid", chargedAmount: 15000, serviceId: _beard.Id) with { GeneralServiceId = null }));
+    await Assert.ThrowsAsync<ConflictException>(() => _service.ApproveAsync(_admin.Id, record.Id,
+        Approve(record, "Paid", chargedAmount: 15000, serviceId: _beard.Id) with { GeneralServiceId = ServiceCatalogDefaults.CorteGeneralServiceId }));
+    var unknown = await Assert.ThrowsAsync<ValidationProblemException>(() => _service.ApproveAsync(_admin.Id, record.Id,
+        Approve(record, "Paid", chargedAmount: 15000) with { GeneralServiceId = Guid.NewGuid() }));
+    Assert.Contains("generalServiceId", unknown.Errors.Keys);
+
+    Assert.Empty(await _dbContext.IncomeEntries.ToListAsync());
+    Assert.Equal(ServiceRecordStatus.Pending, (await _dbContext.ServiceRecords.AsNoTracking().SingleAsync(item => item.Id == record.Id)).Status);
+
+    // The registered general service, kept implicitly, accepts its own rate.
+    var approved = await _service.ApproveAsync(_admin.Id, record.Id,
+        Approve(record, "Paid", chargedAmount: 25000) with { GeneralServiceId = null });
+    Assert.Equal(ServiceCatalogDefaults.CorteGeneralServiceId, approved.Approval!.GeneralServiceId);
+  }
+
+  [Fact]
+  public async Task APendingRecordFromBeforeGeneralServices_TakesTheGeneralServiceOfItsRate()
+  {
+    // Registered with a rate, as every record before ADR-0016 B4.
+    var legacy = new ServiceRecord(Guid.NewGuid(), 0, null, _barber.Id, _beard.Id, _beard.Name, _today, null, null, null, _barberUser.Id, DateTime.UtcNow);
+    _dbContext.ServiceRecords.Add(legacy);
+    await _dbContext.SaveChangesAsync();
+
+    var view = await _service.GetByIdAsync(legacy.Id);
+    Assert.Equal((_beard.Id, _beardGeneral.Id, "Barba"), (view.ServiceId!.Value, view.GeneralServiceId!.Value, view.GeneralServiceName));
+
+    await Assert.ThrowsAsync<ConflictException>(() => _service.ApproveAsync(_admin.Id, legacy.Id,
+        Approve(view, "Paid", chargedAmount: 25000, serviceId: _haircut.Id) with { GeneralServiceId = null }));
+
+    var approved = await _service.ApproveAsync(_admin.Id, legacy.Id, Approve(view, "Courtesy") with { GeneralServiceId = null });
+    Assert.Equal((_beard.Id, _beardGeneral.Id), (approved.Approval!.ServiceId, approved.Approval.GeneralServiceId!.Value));
+  }
+
+  [Fact]
+  public async Task Options_LabelEachRateWithItsGeneralService_AndListTheGeneralServices()
+  {
+    var options = await _service.GetOptionsAsync();
+
+    Assert.Contains(options.Services, rate => rate.Id == _beard.Id && rate.GeneralServiceId == _beardGeneral.Id && rate.GeneralServiceName == "Barba");
+    Assert.Contains(options.Services, rate => rate.Id == _haircut.Id && rate.GeneralServiceName == "Corte");
+    Assert.Contains(options.GeneralServices, general => general.Id == _beardGeneral.Id && general.CategoryName == "Barbería");
+
+    var catalog = await _service.GetCatalogAsync();
+    Assert.Equal(
+        [ServiceCatalogDefaults.CorteGeneralServiceId, _beardGeneral.Id],
+        catalog.Select(item => item.Id));
+  }
+
+  [Fact]
+  public async Task PlansAndRewardOptions_LabelEachRateWithItsGeneralService()
+  {
+    var plan = await _plans.CreateAsync(new MembershipPlanUpsertRequest(
+        "Oro", null, 250000, "Pool", 10, 90, Terms, null, [new(_haircut.Id, null), new(_beard.Id, null)], []));
+    Assert.Equal(
+        [("Barba", "Barba"), ("Corte", "Corte")],
+        plan.Services.OrderBy(service => service.ServiceName).Select(service => (service.ServiceName, service.GeneralServiceName!)));
+
+    var rewardOptions = await new Barbershop.Infrastructure.Loyalty.LoyaltyRedemptionService(_dbContext, TimeProvider.System).GetServiceOptionsAsync();
+    Assert.Contains(rewardOptions, option => option.Id == _beard.Id && option.GeneralServiceId == _beardGeneral.Id && option.GeneralServiceName == "Barba");
+    Assert.Contains(rewardOptions, option => option.Id == _haircut.Id && option.GeneralServiceName == "Corte");
+  }
+
+  [Fact]
+  public async Task AppointmentOptions_PrefillTheBookedService_AndListWhatIsAlreadyRegistered()
+  {
+    var startsAt = DateTime.UtcNow.AddHours(-3);
+    var booked = Appointment.ForService(
+        _barber.Id, "Cliente", startsAt, new AppointmentServiceReservation(_beardGeneral.Id, "Barba", 20),
+        AppointmentStatus.Confirmed, AppointmentSource.Manual, DateTime.UtcNow);
+    var legacy = await CreateAppointmentAsync(_barber, AppointmentStatus.Confirmed);
+    _dbContext.Appointments.Add(booked);
+    // An older record of the legacy appointment registered a rate: it counts as its general service.
+    _dbContext.ServiceRecords.Add(new ServiceRecord(
+        Guid.NewGuid(), 0, legacy.Id, _barber.Id, _haircut.Id, _haircut.Name, _today, null, null, null, _barberUser.Id, DateTime.UtcNow));
+    await _dbContext.SaveChangesAsync();
+
+    var options = await _service.GetAppointmentsAsync(_barberUser.Id);
+
+    var bookedOption = Assert.Single(options, option => option.Id == booked.Id);
+    Assert.Equal((_beardGeneral.Id, "Barba"), (bookedOption.GeneralServiceId!.Value, bookedOption.GeneralServiceName));
+    var legacyOption = Assert.Single(options, option => option.Id == legacy.Id);
+    Assert.Null(legacyOption.GeneralServiceId);
+    Assert.Equal([ServiceCatalogDefaults.CorteGeneralServiceId], legacyOption.RegisteredGeneralServiceIds);
+
+    // Registering Corte again on it is a conflict, as with any other duplicate.
+    await Assert.ThrowsAsync<ConflictException>(() =>
+        RegisterAsync(appointmentId: legacy.Id, performedOn: null, serviceIds: [_haircut.Id]));
   }
 
   [Fact]
@@ -255,7 +365,7 @@ public sealed class ServiceRecordsServiceTests : IDisposable
     var approved = await _service.ApproveAsync(_admin.Id, record.Id, Approve(record, "Paid", chargedAmount: 25000));
     var incomeId = approved.Approval!.IncomeEntryId!.Value;
 
-    var listed = Assert.Single(await _income.GetAsync(_today, null));
+    var listed = Assert.Single((await _income.GetAsync(new IncomeListQuery(_today, _today))).Items);
     Assert.Equal(record.Id, listed.ServiceRecordId);
     await Assert.ThrowsAsync<ConflictException>(() => _income.UpdateAsync(
         incomeId, new IncomeEntryUpdateRequest(_haircut.Id, _barber.Id, 1, false, _today)));
@@ -489,10 +599,49 @@ public sealed class ServiceRecordsServiceTests : IDisposable
     var second = (await RegisterAsync(serviceIds: [_beard.Id])).Single();
     await _service.RejectAsync(_admin.Id, second.Id, new ServiceRecordRejectRequest(second.Version, "No aplica"));
 
-    Assert.Equal([first.Id], (await _service.ListAsync(null, null, null, null)).Select(record => record.Id));
-    Assert.Equal([second.Id], (await _service.ListAsync("Rejected", null, null, null)).Select(record => record.Id));
-    Assert.Empty(await _service.ListAsync("Approved", null, null, null));
-    await Assert.ThrowsAsync<ValidationProblemException>(() => _service.ListAsync("Whatever", null, null, null));
+    Assert.Equal([first.Id], (await _service.ListAsync(new ServiceRecordListQuery())).Items.Select(record => record.Id));
+    Assert.Equal([second.Id], (await _service.ListAsync(new ServiceRecordListQuery("Rejected"))).Items.Select(record => record.Id));
+    Assert.Empty((await _service.ListAsync(new ServiceRecordListQuery("Approved"))).Items);
+    await Assert.ThrowsAsync<ValidationProblemException>(() => _service.ListAsync(new ServiceRecordListQuery("Whatever")));
+  }
+
+  [Fact]
+  public async Task Inbox_IsPaginatedWithoutRepeats_AndFiltersByGeneralServiceStaffAndDate()
+  {
+    // One registration of two services (same registration instant, told apart by position), then three more.
+    var batch = await RegisterAsync(serviceIds: [_haircut.Id, _beard.Id]);
+    foreach (var rate in new[] { _haircut.Id, _beard.Id, _haircut.Id })
+    {
+      await RegisterAsync(serviceIds: [rate]);
+    }
+
+    var older = (await RegisterAsync(performedOn: _today.AddDays(-3), serviceIds: [_beard.Id])).Single();
+
+    var seen = new List<Guid>();
+    for (var page = 1; page <= 3; page++)
+    {
+      var result = await _service.ListAsync(new ServiceRecordListQuery(Page: page, PageSize: 2));
+      Assert.Equal(6, result.TotalCount);
+      seen.AddRange(result.Items.Select(record => record.Id));
+    }
+
+    Assert.Equal(6, seen.Distinct().Count());
+    Assert.Equal(batch.Select(record => record.Id), seen.Take(2));
+
+    var beard = await _service.ListAsync(new ServiceRecordListQuery(GeneralServiceId: _beardGeneral.Id));
+    Assert.Equal(3, beard.TotalCount);
+    Assert.All(beard.Items, record => Assert.Equal(_beardGeneral.Id, record.GeneralServiceId));
+    Assert.Equal(older.Id, Assert.Single((await _service.ListAsync(new ServiceRecordListQuery(To: _today.AddDays(-1)))).Items).Id);
+    Assert.Equal(5, (await _service.ListAsync(new ServiceRecordListQuery(From: _today, StaffProfileId: older.StaffProfileId))).TotalCount);
+    Assert.Equal(0, (await _service.ListAsync(new ServiceRecordListQuery(StaffProfileId: Guid.NewGuid()))).TotalCount);
+
+    // Once approved with another general service, the approved one is what counts.
+    var corrected = await _service.ApproveAsync(_admin.Id, older.Id, Approve(older, "Courtesy", serviceId: _haircut.Id));
+    Assert.Equal(ServiceCatalogDefaults.CorteGeneralServiceId, corrected.Approval!.GeneralServiceId);
+    Assert.Equal(older.Id, Assert.Single((await _service.ListAsync(
+        new ServiceRecordListQuery("Approved", GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId))).Items).Id);
+    Assert.Empty((await _service.ListAsync(new ServiceRecordListQuery("Approved", GeneralServiceId: _beardGeneral.Id))).Items);
+    await Assert.ThrowsAsync<ValidationProblemException>(() => _service.ListAsync(new ServiceRecordListQuery(PageSize: 0)));
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────────────────────
@@ -507,9 +656,16 @@ public sealed class ServiceRecordsServiceTests : IDisposable
           appointmentId,
           performedOn == default && appointmentId is null ? _today : performedOn,
           customerName,
-          serviceIds ?? [_haircut.Id],
+          (serviceIds ?? [_haircut.Id]).Select(GeneralOf).ToArray(),
           null,
           key ?? Guid.NewGuid()));
+
+  /// <summary>The tests name rates for readability; registration takes the general service of each one.</summary>
+  private Guid GeneralOf(Guid rateId) => _dbContext.Services.AsNoTracking().Single(rate => rate.Id == rateId).GeneralServiceId;
+
+  /// <summary>The rate a test confirms by default: the one of the registered general service (Corte or Barba).</summary>
+  private Guid DefaultRateOf(ServiceRecordView record)
+      => record.GeneralServiceId == _beardGeneral.Id ? _beard.Id : _haircut.Id;
 
   private ServiceRecordApproveRequest Approve(
       ServiceRecordView record,
@@ -521,8 +677,9 @@ public sealed class ServiceRecordsServiceTests : IDisposable
       DateOnly? performedOn = null,
       Guid? membershipId = null,
       bool accrues = false)
-      => new(record.Version, operationType, serviceId ?? record.ServiceId, staffId ?? record.StaffProfileId, customerId,
-          performedOn ?? record.PerformedOn, chargedAmount, membershipId, accrues, null);
+      => new(record.Version, operationType, serviceId ?? DefaultRateOf(record), staffId ?? record.StaffProfileId, customerId,
+          performedOn ?? record.PerformedOn, chargedAmount, membershipId, accrues, null,
+          GeneralServiceId: GeneralOf(serviceId ?? DefaultRateOf(record)));
 
   private async Task<Appointment> CreateAppointmentAsync(StaffProfile staff, AppointmentStatus status, User? customerUser = null)
   {

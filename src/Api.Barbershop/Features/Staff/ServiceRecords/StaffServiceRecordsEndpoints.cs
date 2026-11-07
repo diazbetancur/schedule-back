@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
 using Barbershop.Application.ServiceRecords;
+using Barbershop.Application.Common.Paging;
 
 namespace Api.Barbershop.Features.Staff.ServiceRecords;
 
@@ -37,7 +38,7 @@ public static class StaffServiceRecordsEndpoints
 
         serviceRecords.MapGet(string.Empty, GetMineAsync)
             .WithName("GetStaffServiceRecords")
-            .Produces<IReadOnlyList<ServiceRecordView>>(StatusCodes.Status200OK)
+            .Produces<PagedResult<ServiceRecordView>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
@@ -66,9 +67,9 @@ public static class StaffServiceRecordsEndpoints
         ClaimsPrincipal user, IStaffServiceRecordsService service, CancellationToken cancellationToken)
         => service.GetAppointmentsAsync(user.GetRequiredUserId(), cancellationToken);
 
-    private static Task<IReadOnlyList<ServiceRecordView>> GetMineAsync(
-        ClaimsPrincipal user, IStaffServiceRecordsService service, CancellationToken cancellationToken)
-        => service.GetMineAsync(user.GetRequiredUserId(), cancellationToken);
+    private static Task<PagedResult<ServiceRecordView>> GetMineAsync(
+        ClaimsPrincipal user, [AsParameters] PageQuery query, IStaffServiceRecordsService service, CancellationToken cancellationToken)
+        => service.GetMineAsync(user.GetRequiredUserId(), query, cancellationToken);
 
     // 200 rather than 201: a retried registration returns the records already stored.
     private static Task<IReadOnlyList<ServiceRecordView>> RegisterAsync(

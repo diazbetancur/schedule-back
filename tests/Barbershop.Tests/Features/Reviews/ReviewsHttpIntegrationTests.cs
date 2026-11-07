@@ -10,6 +10,7 @@ using Barbershop.Application.Staff;
 using Barbershop.Application.Staff.Admin;
 using Barbershop.Domain.Appointments;
 using Barbershop.Domain.Common;
+using Barbershop.Infrastructure.Persistence;
 using Barbershop.Tests.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
@@ -519,10 +520,11 @@ public sealed class ReviewsHttpIntegrationTests
     return await WithScopeAsync(factory, async serviceProvider =>
     {
       var appointmentService = serviceProvider.GetRequiredService<ICustomerAppointmentsService>();
+      await ServiceOfferingTestData.EnsureCorteOfferedAsync(serviceProvider.GetRequiredService<AppDbContext>(), staffProfileId);
 
       return await appointmentService.CreateAsync(
               customerUserId,
-              new CustomerAppointmentCreateRequest(staffProfileId, startsAtUtc, Notes: null));
+              new CustomerAppointmentCreateRequest(staffProfileId, ServiceOfferingTestData.Corte, startsAtUtc, Notes: null));
     });
   }
 

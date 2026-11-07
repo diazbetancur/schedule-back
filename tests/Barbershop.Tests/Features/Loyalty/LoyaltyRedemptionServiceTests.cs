@@ -76,6 +76,50 @@ public sealed class LoyaltyRedemptionServiceTests : IDisposable
 
   public void Dispose() => _dbContext.Dispose();
 
+  // ── Admin list (ADR-0016 B7) ─────────────────────────────────────────────────────────────────
+
+  [Fact]
+  public async Task TheAdminList_IsPaginated_AndFiltersByStatusCustomerAndRequestDate()
+  {
+    var customerId = await CreateLinkedCustomerAsync();
+    await SeedLotAsync(customerId, 500);
+    var reward = await CreateRewardAsync("Gorra", "Other", null, cost: 10);
+    var ids = new List<Guid>();
+    for (var index = 0; index < 5; index++)
+    {
+      ids.Add((await RequestAsync(reward.Id)).Id);
+      _clock.Advance(TimeSpan.FromDays(1));
+    }
+
+    var rejected = await _redemptions.RejectAsync(_admin.Id, ids[0], new LoyaltyRedemptionReasonRequest((await _redemptions.GetAsync(ids[0])).Version, "Sin existencias"));
+    Assert.Equal("Rejected", rejected.Status);
+    var firstDay = Today.AddDays(-5);
+
+    // Every request, newest first, two per page without repeating any.
+    var pages = new List<Guid>();
+    for (var page = 1; page <= 3; page++)
+    {
+      var result = await _redemptions.ListAsync(new LoyaltyRedemptionListQuery(PageSize: 2, Page: page));
+      Assert.Equal(5, result.TotalCount);
+      pages.AddRange(result.Items.Select(item => item.Id));
+    }
+
+    Assert.Equal(Enumerable.Reverse(ids), pages);
+
+    // A pending status reads oldest first (a queue).
+    var pending = await _redemptions.ListAsync(new LoyaltyRedemptionListQuery(Status: "Requested"));
+    Assert.Equal(ids.Skip(1), pending.Items.Select(item => item.Id));
+    Assert.Equal(ids[0], Assert.Single((await _redemptions.ListAsync(new LoyaltyRedemptionListQuery(Status: "rejected"))).Items).Id);
+    Assert.Equal(0, (await _redemptions.ListAsync(new LoyaltyRedemptionListQuery(CustomerId: Guid.NewGuid()))).TotalCount);
+    Assert.Equal(5, (await _redemptions.ListAsync(new LoyaltyRedemptionListQuery(CustomerId: customerId))).TotalCount);
+
+    // Inclusive range of Bogotá request dates.
+    var middle = await _redemptions.ListAsync(new LoyaltyRedemptionListQuery(From: firstDay.AddDays(1), To: firstDay.AddDays(2)));
+    Assert.Equal([ids[2], ids[1]], middle.Items.Select(item => item.Id));
+    await Assert.ThrowsAsync<ValidationProblemException>(() => _redemptions.ListAsync(new LoyaltyRedemptionListQuery(PageSize: 101)));
+    await Assert.ThrowsAsync<ValidationProblemException>(() => _redemptions.ListAsync(new LoyaltyRedemptionListQuery(From: firstDay, To: firstDay.AddDays(-1))));
+  }
+
   // ── Reservation, delivery and release ──────────────────────────────────────────────────────
 
   [Fact]
@@ -288,7 +332,7 @@ public sealed class LoyaltyRedemptionServiceTests : IDisposable
     Assert.Equal(("Corte gratis", "Service", _haircut.Id, "Corte", 40), (stored.RewardName, stored.RewardKind, stored.ServiceId!.Value, stored.ServiceName, stored.PointsCost));
     Assert.Equal(("Barba gratis", 60, false), (edited.Name, edited.PointsCost, edited.IsActive));
     await Assert.ThrowsAsync<ConflictException>(() => RequestAsync(reward.Id));
-    var changes = await _redemptions.GetChangesAsync(reward.Id);
+    var changes = (await _redemptions.GetChangesAsync(reward.Id)).Items;
     Assert.Equal(["Updated", "Created"], changes.Select(change => change.ChangeType));
     Assert.Equal((40, 60, "Corte", "Barba"), (changes[0].PreviousPointsCost!.Value, changes[0].NewPointsCost, changes[0].PreviousServiceName, changes[0].NewServiceName));
     // A stale version (xmin) is refused: covered on PostgreSQL in LoyaltyRedemptionPostgresTests.
@@ -347,7 +391,7 @@ public sealed class LoyaltyRedemptionServiceTests : IDisposable
     // The job closes both and releases their points, once.
     Assert.Equal(2, await _redemptions.ExpireDueRedemptionsAsync(CancellationToken.None));
     Assert.Equal(0, await _redemptions.ExpireDueRedemptionsAsync(CancellationToken.None));
-    Assert.All(await _redemptions.ListAsync(null, customerId), redemption => Assert.Equal("Expired", redemption.Status));
+    Assert.All((await _redemptions.ListAsync(new LoyaltyRedemptionListQuery(CustomerId: customerId))).Items, redemption => Assert.Equal("Expired", redemption.Status));
     var wallet = await _wallet.GetWalletAsync(customerId);
     Assert.Equal((100, 0), (wallet.AvailablePoints, wallet.ReservedPoints));
     await AssertReconciledAsync();
@@ -401,8 +445,8 @@ public sealed class LoyaltyRedemptionServiceTests : IDisposable
     await _dbContext.SaveChangesAsync();
     await Assert.ThrowsAsync<NotFoundException>(() =>
         _redemptions.CancelMineAsync(stranger.Id, requested.Id, new MyLoyaltyRedemptionCancelRequest(null)));
-    Assert.Empty(await _redemptions.ListMineAsync(stranger.Id));
-    Assert.Single(await _redemptions.ListMineAsync(_customerUser.Id));
+    Assert.Empty((await _redemptions.ListMineAsync(stranger.Id)).Items);
+    Assert.Single((await _redemptions.ListMineAsync(_customerUser.Id)).Items);
   }
 
   [Fact]

@@ -61,12 +61,12 @@ public sealed class CustomerClaimsHttpIntegrationTests
       Assert.DoesNotContain(historicalId.ToString(), body, StringComparison.OrdinalIgnoreCase);
     }
 
-    Assert.Empty((await context.Client.GetFromJsonAsync<List<MyMembershipSummaryView>>("/api/v1/customer/memberships"))!);
+    Assert.Empty((await context.Client.GetPageItemsAsync<MyMembershipSummaryView>("/api/v1/customer/memberships"))!);
     Assert.Equal(HttpStatusCode.Forbidden, await StatusAsync(context.Client, HttpMethod.Get, AdminUrl));
     Assert.Equal(HttpStatusCode.Forbidden, await StatusAsync(context.Client, HttpMethod.Get, "/api/v1/admin/customers?q=Carla"));
 
     AuthenticateAs(context.Client, admin.AccessToken);
-    var claim = Assert.Single((await context.Client.GetFromJsonAsync<List<CustomerClaimView>>(AdminUrl))!);
+    var claim = Assert.Single((await context.Client.GetPageItemsAsync<CustomerClaimView>(AdminUrl)));
     var candidates = (await context.Client.GetFromJsonAsync<List<CustomerClaimCandidate>>($"{AdminUrl}/{claim.Id}/candidates"))!;
     Assert.Contains(candidates, candidate => candidate.CustomerId == historicalId && candidate.MatchedOn.Contains("phone"));
 
@@ -85,7 +85,7 @@ public sealed class CustomerClaimsHttpIntegrationTests
     AuthenticateAs(context.Client, customer.AccessToken);
     var after = (await context.Client.GetFromJsonAsync<OwnCustomerStatusView>(OwnUrl))!;
     Assert.Equal(historicalId, after.Profile!.Id);
-    var mine = (await context.Client.GetFromJsonAsync<List<MyMembershipSummaryView>>("/api/v1/customer/memberships"))!;
+    var mine = (await context.Client.GetPageItemsAsync<MyMembershipSummaryView>("/api/v1/customer/memberships"))!;
     Assert.Equal([membershipId], mine.Select(item => item.Id));
   }
 
@@ -110,7 +110,7 @@ public sealed class CustomerClaimsHttpIntegrationTests
     }
 
     AuthenticateAs(context.Client, admin.AccessToken);
-    var claims = (await context.Client.GetFromJsonAsync<List<CustomerClaimView>>(AdminUrl))!;
+    var claims = (await context.Client.GetPageItemsAsync<CustomerClaimView>(AdminUrl));
     Assert.Equal(2, claims.Count);
     var statuses = await Task.WhenAll(claims.Select(async claim =>
     {
@@ -158,7 +158,7 @@ public sealed class CustomerClaimsHttpIntegrationTests
     Assert.All(submissions.Where(status => status != HttpStatusCode.OK), status => Assert.Equal(HttpStatusCode.Conflict, status));
 
     AuthenticateAs(context.Client, approver.AccessToken);
-    var claim = Assert.Single((await context.Client.GetFromJsonAsync<List<CustomerClaimView>>(AdminUrl))!);
+    var claim = Assert.Single((await context.Client.GetPageItemsAsync<CustomerClaimView>(AdminUrl)));
 
     using (var scope = context.Factory.Services.CreateScope())
     {

@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Loyalty.Redemptions;
 
 namespace Api.Barbershop.Features.Admin.LoyaltyRedemptions;
@@ -48,7 +49,7 @@ public static class AdminLoyaltyRedemptionsEndpoints
 
         rewards.MapGet("/{rewardId:guid}/changes", GetRewardChangesAsync)
             .WithName("GetAdminLoyaltyRewardChanges")
-            .Produces<IReadOnlyList<LoyaltyRewardChangeView>>(StatusCodes.Status200OK)
+            .Produces<PagedResult<LoyaltyRewardChangeView>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
@@ -58,7 +59,7 @@ public static class AdminLoyaltyRedemptionsEndpoints
         redemptions.MapGet(string.Empty, ListRedemptionsAsync)
             .RequireAuthorization(PermissionPolicyNames.LoyaltyRedemptionsApprove)
             .WithName("GetAdminLoyaltyRedemptions")
-            .Produces<IReadOnlyList<LoyaltyRedemptionView>>(StatusCodes.Status200OK)
+            .Produces<PagedResult<LoyaltyRedemptionView>>(StatusCodes.Status200OK)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
@@ -73,7 +74,7 @@ public static class AdminLoyaltyRedemptionsEndpoints
         redemptions.MapGet("/deliveries", ListDeliveriesAsync)
             .RequireAuthorization(PermissionPolicyNames.LoyaltyRedemptionsDeliver)
             .WithName("GetAdminLoyaltyRedemptionDeliveries")
-            .Produces<IReadOnlyList<LoyaltyRedemptionView>>(StatusCodes.Status200OK)
+            .Produces<PagedResult<LoyaltyRedemptionView>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
@@ -125,21 +126,21 @@ public static class AdminLoyaltyRedemptionsEndpoints
         CancellationToken cancellationToken)
         => service.UpdateAsync(user.GetRequiredUserId(), rewardId, request, cancellationToken);
 
-    private static Task<IReadOnlyList<LoyaltyRewardChangeView>> GetRewardChangesAsync(
-        Guid rewardId, IAdminLoyaltyRewardsService service, CancellationToken cancellationToken)
-        => service.GetChangesAsync(rewardId, cancellationToken);
+    private static Task<PagedResult<LoyaltyRewardChangeView>> GetRewardChangesAsync(
+        Guid rewardId, [AsParameters] PageQuery query, IAdminLoyaltyRewardsService service, CancellationToken cancellationToken)
+        => service.GetChangesAsync(rewardId, query, cancellationToken);
 
-    private static Task<IReadOnlyList<LoyaltyRedemptionView>> ListRedemptionsAsync(
-        string? status, Guid? customerId, IAdminLoyaltyRedemptionsService service, CancellationToken cancellationToken)
-        => service.ListAsync(status, customerId, cancellationToken);
+    private static Task<PagedResult<LoyaltyRedemptionView>> ListRedemptionsAsync(
+        [AsParameters] LoyaltyRedemptionListQuery query, IAdminLoyaltyRedemptionsService service, CancellationToken cancellationToken)
+        => service.ListAsync(query, cancellationToken);
 
     private static Task<IReadOnlyList<LoyaltyRewardView>> ListActiveRewardsAsync(
         IAdminLoyaltyRedemptionsService service, CancellationToken cancellationToken)
         => service.ListActiveRewardsAsync(cancellationToken);
 
-    private static Task<IReadOnlyList<LoyaltyRedemptionView>> ListDeliveriesAsync(
-        IAdminLoyaltyRedemptionsService service, CancellationToken cancellationToken)
-        => service.ListDeliveriesAsync(cancellationToken);
+    private static Task<PagedResult<LoyaltyRedemptionView>> ListDeliveriesAsync(
+        [AsParameters] PageQuery query, IAdminLoyaltyRedemptionsService service, CancellationToken cancellationToken)
+        => service.ListDeliveriesAsync(query, cancellationToken);
 
     private static Task<LoyaltyRedemptionView> ApproveAsync(
         Guid redemptionId, LoyaltyRedemptionDecisionRequest request, ClaimsPrincipal user, IAdminLoyaltyRedemptionsService service,

@@ -1,3 +1,5 @@
+using Barbershop.Application.Common.Paging;
+
 namespace Barbershop.Application.ServiceRecords;
 
 /// <summary>A professional registering the services they performed.</summary>
@@ -9,7 +11,12 @@ public interface IStaffServiceRecordsService
 
     Task<IReadOnlyList<ServiceRecordAppointmentOption>> GetAppointmentsAsync(Guid currentUserId, CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<ServiceRecordView>> GetMineAsync(Guid currentUserId, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// The professional's own records, paginated: pending ones first (oldest registration first, so none is hidden
+    /// however old it is), then the reviewed ones, newest first.
+    /// </summary>
+    Task<PagedResult<ServiceRecordView>> GetMineAsync(
+        Guid currentUserId, PageQuery? query = null, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<ServiceRecordView>> RegisterAsync(
         Guid currentUserId, ServiceRecordRegisterRequest request, CancellationToken cancellationToken = default);
@@ -18,9 +25,11 @@ public interface IStaffServiceRecordsService
 /// <summary>Administrative review of registered services: confirmation (with income or consumption) or rejection.</summary>
 public interface IAdminServiceRecordsService
 {
-    /// <summary>Pending records oldest first; reviewed ones (approved or rejected) newest first.</summary>
-    Task<IReadOnlyList<ServiceRecordView>> ListAsync(
-        string? status, DateOnly? from, DateOnly? to, Guid? staffProfileId, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Paginated (ADR-0016 B7). Pending records oldest first (a review queue); reviewed ones (approved or rejected)
+    /// newest first. Ties are broken by registration position and id.
+    /// </summary>
+    Task<PagedResult<ServiceRecordView>> ListAsync(ServiceRecordListQuery query, CancellationToken cancellationToken = default);
 
     Task<ServiceRecordView> GetByIdAsync(Guid serviceRecordId, CancellationToken cancellationToken = default);
 

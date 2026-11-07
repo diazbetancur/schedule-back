@@ -1,4 +1,5 @@
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Finance.Admin;
 using Barbershop.Domain.Finance;
 using Barbershop.Domain.Services;
@@ -21,23 +22,44 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         _timeProvider = timeProvider;
     }
 
-    public async Task<IReadOnlyList<IncomeEntryView>> GetAsync(DateOnly? date, Guid? staffProfileId, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Paginated income history (ADR-0016 B7). The range follows <see cref="HistoryRange"/>: the last 30 days by default
+    /// and at most 30 days per query, any period. <c>TotalAmount</c> covers every matching entry, not just the page.
+    /// Newest first: date, then registration time, then id (a total order).
+    /// </summary>
+    public async Task<IncomeEntriesPage> GetAsync(IncomeListQuery query, CancellationToken cancellationToken = default)
     {
-        var targetDate = date ?? Today();
+        var page = PageRequest.Create(query.Page, query.PageSize);
+        var kind = ParseKind(query.Kind);
+        var (from, to) = HistoryRange.Resolve(query.From, query.To, Today());
 
-        var query = _dbContext.IncomeEntries
-            .Where(entry => !entry.IsDeleted && entry.OccurredOn == targetDate);
+        var entries = _dbContext.IncomeEntries.AsNoTracking()
+            .Where(entry => !entry.IsDeleted && entry.OccurredOn >= from && entry.OccurredOn <= to);
 
-        if (staffProfileId is { } staffId)
+        if (query.StaffProfileId is { } staffId)
         {
-            query = query.Where(entry => entry.StaffProfileId == staffId);
+            entries = entries.Where(entry => entry.StaffProfileId == staffId);
         }
 
-        var entries = await query
-            .OrderBy(entry => entry.CreatedAt)
-            .ToListAsync(cancellationToken);
+        if (kind is { } wantedKind)
+        {
+            entries = entries.Where(entry => entry.Kind == wantedKind);
+        }
 
-        return await MapManyAsync(entries, cancellationToken);
+        if (query.GeneralServiceId is { } generalServiceId)
+        {
+            entries = entries.Where(entry => _dbContext.Services
+                .Any(service => service.Id == entry.ServiceId && service.GeneralServiceId == generalServiceId));
+        }
+
+        var totalAmount = await entries.SumAsync(entry => (int?)entry.Amount, cancellationToken) ?? 0;
+        var result = await entries
+            .OrderByDescending(entry => entry.OccurredOn)
+            .ThenByDescending(entry => entry.CreatedAt)
+            .ThenByDescending(entry => entry.Id)
+            .ToPagedResultAsync(page, (rows, ct) => MapManyAsync(rows.ToArray(), ct), cancellationToken);
+
+        return new IncomeEntriesPage(result.Items, result.Page, result.PageSize, result.TotalCount, from, to, totalAmount);
     }
 
     public async Task<IncomeEntryView> CreateAsync(Guid currentUserId, IncomeEntryCreateRequest request, CancellationToken cancellationToken = default)

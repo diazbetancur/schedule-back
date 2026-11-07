@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Customers.Claims;
+using Barbershop.Application.Common.Paging;
 
 namespace Api.Barbershop.Features.Admin.CustomerClaims;
 
@@ -19,7 +20,7 @@ public static class AdminCustomerClaimsEndpoints
 
         claims.MapGet(string.Empty, ListAsync)
             .WithName("GetAdminCustomerClaims")
-            .Produces<IReadOnlyList<CustomerClaimView>>(StatusCodes.Status200OK)
+            .Produces<PagedResult<CustomerClaimView>>(StatusCodes.Status200OK)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
@@ -59,9 +60,9 @@ public static class AdminCustomerClaimsEndpoints
         return api;
     }
 
-    private static Task<IReadOnlyList<CustomerClaimView>> ListAsync(
-        string? status, IAdminCustomerClaimsService service, CancellationToken cancellationToken)
-        => service.ListAsync(status, cancellationToken);
+    private static Task<PagedResult<CustomerClaimView>> ListAsync(
+        string? status, int? page, int? pageSize, IAdminCustomerClaimsService service, CancellationToken cancellationToken)
+        => service.ListAsync(status, new PageQuery(page, pageSize), cancellationToken);
 
     private static Task<CustomerClaimView> GetByIdAsync(
         Guid claimId, IAdminCustomerClaimsService service, CancellationToken cancellationToken)

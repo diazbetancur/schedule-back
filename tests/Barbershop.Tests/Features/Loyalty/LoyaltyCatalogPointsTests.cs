@@ -9,6 +9,7 @@ using Barbershop.Infrastructure.Memberships;
 using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 
 namespace Barbershop.Tests.Features.Loyalty;
 
@@ -27,9 +28,11 @@ public sealed class LoyaltyCatalogPointsTests : IDisposable
   {
     var options = new DbContextOptionsBuilder<AppDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+        .ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning))
         .Options;
 
     _dbContext = new AppDbContext(options);
+    _dbContext.Database.EnsureCreated(); // seeds the default category and general service (ADR-0016 D4)
     var currentUser = new FixedCurrentUserAccessor(_adminId);
     _services = new ServiceManagementService(_dbContext, TimeProvider.System, currentUser);
     _plans = new MembershipPlanManagementService(_dbContext, TimeProvider.System, currentUser);
@@ -44,7 +47,7 @@ public sealed class LoyaltyCatalogPointsTests : IDisposable
   [Fact]
   public async Task Service_WithoutPoints_DefaultsToZero_AndWritesNoAudit()
   {
-    var created = await _services.CreateAsync(new ServiceCreateRequest("Barba", 15000, 30));
+    var created = await _services.CreateAsync(new ServiceCreateRequest("Barba", 15000, 30, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
 
     Assert.Equal(0, created.LoyaltyPoints);
     Assert.Equal(0, (await _services.GetByIdAsync(_haircut.Id)).LoyaltyPoints);
@@ -54,7 +57,7 @@ public sealed class LoyaltyCatalogPointsTests : IDisposable
   [Fact]
   public async Task Service_CreatedWithPoints_StoresThem_AndAuditsTheChangeFromZero()
   {
-    var created = await _services.CreateAsync(new ServiceCreateRequest("Barba", 15000, 30, 12));
+    var created = await _services.CreateAsync(new ServiceCreateRequest("Barba", 15000, 30, 12, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
 
     Assert.Equal(12, created.LoyaltyPoints);
     var change = Assert.Single(await _dbContext.LoyaltyPointsChanges.ToListAsync());
@@ -96,7 +99,7 @@ public sealed class LoyaltyCatalogPointsTests : IDisposable
   public async Task Service_RejectsPointsOutsideTheRange(int points)
   {
     var onCreate = await Assert.ThrowsAsync<ValidationProblemException>(() =>
-        _services.CreateAsync(new ServiceCreateRequest("Barba", 15000, 30, points)));
+        _services.CreateAsync(new ServiceCreateRequest("Barba", 15000, 30, points, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId)));
     var onUpdate = await Assert.ThrowsAsync<ValidationProblemException>(() =>
         _services.UpdateAsync(_haircut.Id, new ServiceUpdateRequest("Corte", 25000, 30, points)));
 

@@ -126,8 +126,8 @@ public sealed class IncomeManagementServiceTests : IDisposable
 
     await _service.SoftDeleteAsync(created.Id);
 
-    var list = await _service.GetAsync(Today, null);
-    Assert.DoesNotContain(list, e => e.Id == created.Id);
+    var list = await _service.GetAsync(new IncomeListQuery(Today, Today));
+    Assert.DoesNotContain(list.Items, e => e.Id == created.Id);
   }
 
   [Fact]
@@ -141,10 +141,10 @@ public sealed class IncomeManagementServiceTests : IDisposable
     await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, bianca.Id, 20000, false, Today));
     await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, alex.Id, 20000, false, Today.AddDays(-1)));
 
-    var todayAll = await _service.GetAsync(Today, null);
-    Assert.Equal(2, todayAll.Count);
+    var todayAll = await _service.GetAsync(new IncomeListQuery(Today, Today));
+    Assert.Equal(2, todayAll.TotalCount);
 
-    var todayAlex = await _service.GetAsync(Today, alex.Id);
+    var todayAlex = (await _service.GetAsync(new IncomeListQuery(Today, Today, alex.Id))).Items;
     Assert.Single(todayAlex);
     Assert.All(todayAlex, e => Assert.Equal(alex.Id, e.StaffProfileId));
   }

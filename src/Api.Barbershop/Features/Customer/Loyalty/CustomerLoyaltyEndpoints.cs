@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Loyalty.Redemptions;
 using Barbershop.Application.Loyalty.Wallet;
 
@@ -21,6 +22,13 @@ public static class CustomerLoyaltyEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
+        loyalty.MapGet("/movements", GetMyMovementsAsync)
+            .WithName("GetMyLoyaltyMovements")
+            .Produces<PagedResult<MyLoyaltyMovementView>>(StatusCodes.Status200OK)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
+
         // Rewards and own redemptions (ADR-0015): only the live profile linked to the caller, never another one.
         loyalty.MapGet("/rewards", GetCatalogAsync)
             .WithName("GetMyLoyaltyRewards")
@@ -30,7 +38,7 @@ public static class CustomerLoyaltyEndpoints
 
         loyalty.MapGet("/redemptions", ListRedemptionsAsync)
             .WithName("GetMyLoyaltyRedemptions")
-            .Produces<IReadOnlyList<MyLoyaltyRedemptionView>>(StatusCodes.Status200OK)
+            .Produces<PagedResult<MyLoyaltyRedemptionView>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
@@ -55,13 +63,17 @@ public static class CustomerLoyaltyEndpoints
         return api;
     }
 
+    private static Task<PagedResult<MyLoyaltyMovementView>> GetMyMovementsAsync(
+        ClaimsPrincipal user, [AsParameters] LoyaltyMovementListQuery query, IMyLoyaltyService service, CancellationToken cancellationToken)
+        => service.GetMyMovementsAsync(user.GetRequiredUserId(), query, cancellationToken);
+
     private static Task<MyLoyaltyCatalogView> GetCatalogAsync(
         ClaimsPrincipal user, IMyLoyaltyRedemptionsService service, CancellationToken cancellationToken)
         => service.GetCatalogAsync(user.GetRequiredUserId(), cancellationToken);
 
-    private static Task<IReadOnlyList<MyLoyaltyRedemptionView>> ListRedemptionsAsync(
-        ClaimsPrincipal user, IMyLoyaltyRedemptionsService service, CancellationToken cancellationToken)
-        => service.ListMineAsync(user.GetRequiredUserId(), cancellationToken);
+    private static Task<PagedResult<MyLoyaltyRedemptionView>> ListRedemptionsAsync(
+        ClaimsPrincipal user, [AsParameters] PageQuery query, IMyLoyaltyRedemptionsService service, CancellationToken cancellationToken)
+        => service.ListMineAsync(user.GetRequiredUserId(), query, cancellationToken);
 
     private static Task<MyLoyaltyRedemptionView> RequestAsync(
         LoyaltyRedemptionRequest request, ClaimsPrincipal user, IMyLoyaltyRedemptionsService service, CancellationToken cancellationToken)

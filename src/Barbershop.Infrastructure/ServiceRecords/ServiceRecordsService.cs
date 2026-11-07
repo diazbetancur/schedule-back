@@ -1,4 +1,5 @@
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Memberships.Admin;
 using Barbershop.Application.ServiceRecords;
 using Barbershop.Domain.Appointments;
@@ -24,8 +25,6 @@ namespace Barbershop.Infrastructure.ServiceRecords;
 /// </summary>
 internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdminServiceRecordsService
 {
-    private const int MaxListed = 200;
-    private const int MaxOwnListed = 100;
     private const int MaxCustomerOptions = 20;
 
     /// <summary>How far back the professional's own appointments are offered for registration.</summary>
@@ -51,13 +50,20 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
 
     // ── Professional ────────────────────────────────────────────────────────────────────────────
 
+    /// <summary>The active general services (ADR-0016 F4): the professional registers what they did, not a rate.</summary>
     public async Task<IReadOnlyList<ServiceRecordCatalogItem>> GetCatalogAsync(CancellationToken cancellationToken = default)
     {
-        return await _dbContext.Services.AsNoTracking()
-            .Where(service => service.IsActive && !service.IsDeleted)
-            .OrderBy(service => service.Name)
-            .Select(service => new ServiceRecordCatalogItem(service.Id, service.Name))
+        var services = await (
+                from service in _dbContext.GeneralServices.AsNoTracking()
+                join category in _dbContext.ServiceCategories.AsNoTracking() on service.CategoryId equals category.Id
+                where service.IsActive && !service.IsDeleted && category.IsActive && !category.IsDeleted
+                select new { service.Id, service.Name, service.SortOrder, CategoryId = category.Id, CategoryName = category.Name, CategorySortOrder = category.SortOrder })
             .ToListAsync(cancellationToken);
+        return services
+            .OrderBy(service => service.CategorySortOrder).ThenBy(service => service.CategoryName)
+            .ThenBy(service => service.SortOrder).ThenBy(service => service.Name)
+            .Select(service => new ServiceRecordCatalogItem(service.Id, service.Name, service.CategoryId, service.CategoryName))
+            .ToArray();
     }
 
     public async Task<ServiceRecordEligibilityView> GetEligibilityAsync(Guid currentUserId, CancellationToken cancellationToken = default)
@@ -87,9 +93,9 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             .ToListAsync(cancellationToken);
 
         var ids = appointments.Select(appointment => (Guid?)appointment.Id).ToArray();
-        var registered = await _dbContext.ServiceRecords.AsNoTracking()
-            .Where(record => ids.Contains(record.AppointmentId) && record.Status != ServiceRecordStatus.Rejected)
-            .Select(record => new { AppointmentId = record.AppointmentId!.Value, record.ServiceId })
+        var registered = await RegisteredGeneralServicesQuery()
+            .Where(item => ids.Contains(item.AppointmentId) && item.Status != ServiceRecordStatus.Rejected)
+            .Select(item => new { AppointmentId = item.AppointmentId!.Value, item.GeneralServiceId })
             .ToListAsync(cancellationToken);
 
         return appointments
@@ -98,20 +104,27 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                 appointment.StartsAt,
                 appointment.CustomerName,
                 appointment.Status.ToString(),
-                registered.Where(item => item.AppointmentId == appointment.Id).Select(item => item.ServiceId).Distinct().ToArray()))
+                registered.Where(item => item.AppointmentId == appointment.Id && item.GeneralServiceId != null)
+                    .Select(item => item.GeneralServiceId!.Value).Distinct().ToArray(),
+                appointment.GeneralServiceId,
+                appointment.GeneralServiceNameSnapshot))
             .ToArray();
     }
 
-    public async Task<IReadOnlyList<ServiceRecordView>> GetMineAsync(Guid currentUserId, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<ServiceRecordView>> GetMineAsync(
+        Guid currentUserId, PageQuery? query = null, CancellationToken cancellationToken = default)
     {
+        var page = (query ?? new PageQuery()).ToRequest();
         var staff = await LoadOwnStaffProfileAsync(currentUserId, cancellationToken);
-        var records = await _dbContext.ServiceRecords.AsNoTracking()
+        // Pending first (oldest first, like the review queue), then the reviewed ones newest first; a total order.
+        return await _dbContext.ServiceRecords.AsNoTracking()
             .Where(record => record.StaffProfileId == staff.Id)
-            .OrderByDescending(record => record.RegisteredAt)
+            .OrderBy(record => record.Status == ServiceRecordStatus.Pending ? 0 : 1)
+            .ThenBy(record => record.Status == ServiceRecordStatus.Pending ? record.RegisteredAt : DateTime.MinValue)
+            .ThenByDescending(record => record.RegisteredAt)
             .ThenBy(record => record.Position)
-            .Take(MaxOwnListed)
-            .ToListAsync(cancellationToken);
-        return await MapAsync(records, cancellationToken);
+            .ThenBy(record => record.Id)
+            .ToPagedResultAsync(page, MapAsync, cancellationToken);
     }
 
     public async Task<IReadOnlyList<ServiceRecordView>> RegisterAsync(
@@ -126,7 +139,7 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             return await ReplayRegistrationAsync(previous, currentUserId, request, cancellationToken);
         }
 
-        var serviceIds = request.ServiceIds!;
+        var serviceIds = request.GeneralServiceIds!;
         try
         {
             await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
@@ -142,7 +155,7 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             }
 
             var (performedOn, customerId, customerName) = await ResolveContextAsync(request, appointment, cancellationToken);
-            var services = await _dbContext.Services.AsNoTracking()
+            var services = await _dbContext.GeneralServices.AsNoTracking()
                 .Where(service => serviceIds.Contains(service.Id) && service.IsActive && !service.IsDeleted)
                 .ToDictionaryAsync(service => service.Id, cancellationToken);
 
@@ -151,7 +164,7 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             {
                 if (!services.ContainsKey(serviceIds[index]))
                 {
-                    errors[$"serviceIds[{index}]"] = ["El servicio no existe en el catálogo o está inactivo."];
+                    errors[$"generalServiceIds[{index}]"] = ["El servicio no existe en el catálogo o está inactivo."];
                 }
             }
 
@@ -162,11 +175,13 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
 
             if (appointment is not null)
             {
-                var alreadyRegistered = await _dbContext.ServiceRecords.AsNoTracking()
-                    .Where(record => record.AppointmentId == appointment.Id
-                        && record.Status != ServiceRecordStatus.Rejected
-                        && serviceIds.Contains(record.ServiceId))
-                    .Select(record => record.ServiceNameSnapshot)
+                // Older records of the appointment registered a rate: their general service is the rate's.
+                var nullableIds = serviceIds.Select(id => (Guid?)id).ToArray();
+                var alreadyRegistered = await RegisteredGeneralServicesQuery()
+                    .Where(item => item.AppointmentId == appointment.Id
+                        && item.Status != ServiceRecordStatus.Rejected
+                        && nullableIds.Contains(item.GeneralServiceId))
+                    .Select(item => item.ServiceNameSnapshot)
                     .FirstOrDefaultAsync(cancellationToken);
                 if (alreadyRegistered is not null)
                 {
@@ -177,8 +192,8 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
             var records = serviceIds
                 .Select((serviceId, position) => new ServiceRecord(
-                    request.IdempotencyKey, position, appointment?.Id, staff.Id, serviceId, services[serviceId].Name,
-                    performedOn, customerId, customerName, request.Notes?.Trim(), currentUserId, utcNow))
+                    request.IdempotencyKey, position, appointment?.Id, staff.Id, null, services[serviceId].Name,
+                    performedOn, customerId, customerName, request.Notes?.Trim(), currentUserId, utcNow, serviceId))
                 .ToList();
             _dbContext.ServiceRecords.AddRange(records);
             await _dbContext.SaveChangesAsync(cancellationToken);
@@ -272,7 +287,8 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
         IReadOnlyList<ServiceRecord> stored, Guid currentUserId, ServiceRecordRegisterRequest request, CancellationToken cancellationToken)
     {
         var sameRequest = stored.All(record => record.RegisteredByUserId == currentUserId && record.AppointmentId == request.AppointmentId)
-            && stored.OrderBy(record => record.Position).Select(record => record.ServiceId).SequenceEqual(request.ServiceIds!);
+            && stored.OrderBy(record => record.Position).Select(record => record.GeneralServiceId).SequenceEqual(
+                request.GeneralServiceIds!.Select(id => (Guid?)id));
         if (!sameRequest)
         {
             throw new ConflictException("Este registro ya se guardó con otros datos. Recarga la página para registrar uno nuevo.");
@@ -298,19 +314,19 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
     private static void ValidateRegisterShape(ServiceRecordRegisterRequest request)
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-        var serviceIds = request.ServiceIds ?? [];
+        var serviceIds = request.GeneralServiceIds ?? [];
 
         if (serviceIds.Count == 0)
         {
-            errors["serviceIds"] = ["Elige al menos un servicio."];
+            errors["generalServiceIds"] = ["Elige al menos un servicio."];
         }
         else if (serviceIds.Count > ServiceRecord.MaxServicesPerRegistration)
         {
-            errors["serviceIds"] = [$"Registra como máximo {ServiceRecord.MaxServicesPerRegistration} servicios a la vez."];
+            errors["generalServiceIds"] = [$"Registra como máximo {ServiceRecord.MaxServicesPerRegistration} servicios a la vez."];
         }
         else if (serviceIds.Distinct().Count() != serviceIds.Count || serviceIds.Contains(Guid.Empty))
         {
-            errors["serviceIds"] = ["No repitas un servicio en el mismo registro."];
+            errors["generalServiceIds"] = ["No repitas un servicio en el mismo registro."];
         }
 
         if (request.CustomerName is { } name && !string.IsNullOrWhiteSpace(name) && name.Trim().Length is < 2 or > 120)
@@ -336,14 +352,22 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
 
     // ── Administrator ───────────────────────────────────────────────────────────────────────────
 
-    public async Task<IReadOnlyList<ServiceRecordView>> ListAsync(
-        string? status, DateOnly? from, DateOnly? to, Guid? staffProfileId, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<ServiceRecordView>> ListAsync(ServiceRecordListQuery listQuery, CancellationToken cancellationToken = default)
     {
+        var page = PageRequest.Create(listQuery.Page, listQuery.PageSize);
+        var (status, staffProfileId) = (listQuery.Status, listQuery.StaffProfileId);
         var statusFilter = status is null ? ServiceRecordStatus.Pending : ParseName<ServiceRecordStatus>(status)
             ?? throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
                 ["status"] = ["El estado debe ser Pending, Approved o Rejected."]
             });
+
+        // Pending is the review queue: no default date, so an old pending record is never hidden. Approved and
+        // rejected are history: the last 30 days by default and at most 30 days per query.
+        var range = statusFilter == ServiceRecordStatus.Pending
+            ? HistoryRange.ResolveOptional(listQuery.From, listQuery.To)
+            : HistoryRange.Resolve(listQuery.From, listQuery.To, Today());
+        var (from, to) = (range?.From, range?.To);
 
         var query = _dbContext.ServiceRecords.AsNoTracking().Where(record => record.Status == statusFilter);
         if (from is { } fromDate)
@@ -361,11 +385,16 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             query = query.Where(record => (record.ApprovedStaffProfileId ?? record.StaffProfileId) == staffId);
         }
 
-        query = statusFilter == ServiceRecordStatus.Pending
-            ? query.OrderBy(record => record.RegisteredAt).ThenBy(record => record.Position)
-            : query.OrderByDescending(record => record.ApprovedAt ?? record.RejectedAt).ThenBy(record => record.Position);
+        if (listQuery.GeneralServiceId is { } generalServiceId)
+        {
+            query = query.Where(record => (record.ApprovedGeneralServiceId ?? record.GeneralServiceId) == generalServiceId);
+        }
 
-        return await MapAsync(await query.Take(MaxListed).ToListAsync(cancellationToken), cancellationToken);
+        query = statusFilter == ServiceRecordStatus.Pending
+            ? query.OrderBy(record => record.RegisteredAt).ThenBy(record => record.Position).ThenBy(record => record.Id)
+            : query.OrderByDescending(record => record.ApprovedAt ?? record.RejectedAt).ThenBy(record => record.Position).ThenBy(record => record.Id);
+
+        return await query.ToPagedResultAsync(page, MapAsync, cancellationToken);
     }
 
     public async Task<ServiceRecordView> GetByIdAsync(Guid serviceRecordId, CancellationToken cancellationToken = default)
@@ -378,16 +407,27 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
 
     public async Task<ServiceRecordOptionsView> GetOptionsAsync(CancellationToken cancellationToken = default)
     {
-        var services = await _dbContext.Services.AsNoTracking()
-            .Where(service => !service.IsDeleted)
-            .OrderBy(service => service.Name)
-            .Select(service => new ServiceRecordServiceOption(service.Id, service.Name, service.BasePrice, service.LoyaltyPoints, service.IsActive))
+        // Rates labelled "Servicio general · Tarifa"; the review picks the general service first, then one of its rates.
+        var services = await (
+                from rate in _dbContext.Services.AsNoTracking()
+                join general in _dbContext.GeneralServices.AsNoTracking() on rate.GeneralServiceId equals general.Id
+                where !rate.IsDeleted
+                orderby general.Name, rate.Name
+                select new ServiceRecordServiceOption(
+                    rate.Id, rate.Name, rate.BasePrice, rate.LoyaltyPoints, rate.IsActive, general.Id, general.Name))
+            .ToListAsync(cancellationToken);
+        var generalServices = await (
+                from general in _dbContext.GeneralServices.AsNoTracking()
+                join category in _dbContext.ServiceCategories.AsNoTracking() on general.CategoryId equals category.Id
+                where !general.IsDeleted
+                orderby category.SortOrder, category.Name, general.SortOrder, general.Name
+                select new ServiceRecordGeneralServiceOption(general.Id, general.Name, category.Name, general.IsActive))
             .ToListAsync(cancellationToken);
         var staff = await _dbContext.StaffProfiles.AsNoTracking()
             .OrderBy(profile => profile.DisplayName)
             .Select(profile => new ServiceRecordStaffOption(profile.Id, profile.DisplayName, profile.IsActive))
             .ToListAsync(cancellationToken);
-        return new ServiceRecordOptionsView(services, staff, await IsLoyaltyEnabledAsync(cancellationToken));
+        return new ServiceRecordOptionsView(services, staff, await IsLoyaltyEnabledAsync(cancellationToken), generalServices);
     }
 
     public async Task<ServiceRecordRelatedView> GetRelatedAsync(Guid serviceRecordId, CancellationToken cancellationToken = default)
@@ -397,15 +437,20 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             ?? throw new NotFoundException("El servicio realizado no existe.");
 
         var staffId = record.ApprovedStaffProfileId ?? record.StaffProfileId;
-        var serviceId = record.ApprovedServiceId ?? record.ServiceId;
         var date = record.ApprovedPerformedOn ?? record.PerformedOn;
         var customerId = record.ApprovedCustomerId ?? record.CustomerId;
+
+        // The same service: the rate confirmed or registered (older records) or, for a pending record that only names a
+        // general service, any rate of that general service (ADR-0016 B4).
+        var rateIds = await RelatedRateIdsAsync(record, cancellationToken);
+        var nullableRateIds = rateIds.Select(id => (Guid?)id).ToArray();
+        var pendingGeneralServiceId = record.ApprovedServiceId is null && record.ServiceId is null ? record.GeneralServiceId : null;
 
         // Service income registered by hand (not by any record) for the same professional, service and day.
         var manualIncomes = await _dbContext.IncomeEntries.AsNoTracking()
             .Where(entry => !entry.IsDeleted
                 && entry.Kind == IncomeKind.Service
-                && entry.ServiceId == serviceId
+                && nullableRateIds.Contains(entry.ServiceId)
                 && entry.StaffProfileId == staffId
                 && entry.OccurredOn == date
                 && !_dbContext.ServiceRecords.Any(other => other.IncomeEntryId == entry.Id))
@@ -417,7 +462,8 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             .Where(other => other.Id != record.Id
                 && other.Status != ServiceRecordStatus.Rejected
                 && (other.ApprovedStaffProfileId ?? other.StaffProfileId) == staffId
-                && (other.ApprovedServiceId ?? other.ServiceId) == serviceId
+                && (nullableRateIds.Contains(other.ApprovedServiceId ?? other.ServiceId)
+                    || (pendingGeneralServiceId != null && (other.ApprovedGeneralServiceId ?? other.GeneralServiceId) == pendingGeneralServiceId))
                 && (other.ApprovedPerformedOn ?? other.PerformedOn) == date)
             .OrderBy(other => other.RegisteredAt)
             .Select(other => new ServiceRecordRelatedRecord(
@@ -434,7 +480,7 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                 .ToListAsync(cancellationToken)
             : [];
         var consumptions = await _dbContext.MembershipConsumptions.AsNoTracking()
-            .Where(consumption => consumption.ServiceId == serviceId
+            .Where(consumption => rateIds.Contains(consumption.ServiceId)
                 && consumption.ServiceDate == date
                 && (consumption.StaffProfileId == staffId || customerMembershipIds.Contains(consumption.CustomerMembershipId))
                 && !_dbContext.MembershipConsumptionReversals.Any(reversal => reversal.MembershipConsumptionId == consumption.Id)
@@ -622,6 +668,23 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             errors["serviceId"] = ["El servicio no existe en el catálogo."];
         }
 
+        // ADR-0016 D12/F4: the confirmed general service (sent, or else the registered one; for an older record, the
+        // general service of its registered rate). The rate chosen must be one of its rates.
+        var generalServiceId = request.GeneralServiceId ?? record.GeneralServiceId;
+        if (generalServiceId is null && record.ServiceId is { } registeredRateId)
+        {
+            generalServiceId = await _dbContext.Services.AsNoTracking()
+                .Where(rate => rate.Id == registeredRateId)
+                .Select(rate => (Guid?)rate.GeneralServiceId)
+                .SingleOrDefaultAsync(cancellationToken);
+        }
+
+        if (request.GeneralServiceId is { } requestedGeneral
+            && !await _dbContext.GeneralServices.AnyAsync(general => general.Id == requestedGeneral && !general.IsDeleted, cancellationToken))
+        {
+            errors["generalServiceId"] = ["El servicio general no existe o fue eliminado."];
+        }
+
         if (!await _dbContext.StaffProfiles.AnyAsync(staff => staff.Id == request.StaffProfileId, cancellationToken))
         {
             errors["staffProfileId"] = ["El profesional no existe."];
@@ -682,6 +745,12 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
         if (errors.Count > 0)
         {
             throw new ValidationProblemException(errors);
+        }
+
+        if (service!.GeneralServiceId != generalServiceId)
+        {
+            throw new ConflictException(
+                "La tarifa elegida no pertenece al servicio general confirmado. Elige una tarifa de ese servicio general.");
         }
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
@@ -750,7 +819,8 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             isReward ? request.LoyaltyRedemptionId : null,
             // Snapshots of the confirmed service right now, as a paid service's income would take them (R14).
             isReward ? service.BasePrice : null,
-            isReward ? service.BusinessPercentage : null);
+            isReward ? service.BusinessPercentage : null,
+            service.GeneralServiceId);
     }
 
     private static ServiceRecordOperationType ValidateApproveShape(ServiceRecordApproveRequest request)
@@ -765,7 +835,12 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
 
         if (request.ServiceId == Guid.Empty)
         {
-            errors["serviceId"] = ["Elige el servicio realizado."];
+            errors["serviceId"] = ["Elige la tarifa con la que se liquida el servicio."];
+        }
+
+        if (request.GeneralServiceId == Guid.Empty)
+        {
+            errors["generalServiceId"] = ["Elige el servicio general realizado."];
         }
 
         if (request.StaffProfileId == Guid.Empty)
@@ -859,6 +934,7 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
     private static bool SameApproval(ServiceRecord record, ServiceRecordOperationType operationType, ServiceRecordApproveRequest request)
         => record.OperationType == operationType
             && record.ApprovedServiceId == request.ServiceId
+            && (request.GeneralServiceId is null || record.ApprovedGeneralServiceId == request.GeneralServiceId)
             && record.ApprovedStaffProfileId == request.StaffProfileId
             && record.ApprovedCustomerId == request.CustomerId
             && record.ApprovedPerformedOn == request.PerformedOn
@@ -866,6 +942,48 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             && record.CustomerMembershipId == request.CustomerMembershipId
             && record.LoyaltyRedemptionId == request.LoyaltyRedemptionId
             && record.AccruesLoyaltyPoints == request.AccruesLoyaltyPoints;
+
+    /// <summary>
+    /// Each record with the general service it names: its own, or for an older record the general service its
+    /// registered rate belongs to now.
+    /// </summary>
+    private IQueryable<RegisteredGeneralService> RegisteredGeneralServicesQuery()
+        => from record in _dbContext.ServiceRecords.AsNoTracking()
+           join rate in _dbContext.Services.AsNoTracking() on record.ServiceId equals (Guid?)rate.Id into rates
+           from rate in rates.DefaultIfEmpty()
+           select new RegisteredGeneralService
+           {
+               RecordId = record.Id,
+               AppointmentId = record.AppointmentId,
+               Status = record.Status,
+               GeneralServiceId = record.GeneralServiceId ?? (rate == null ? null : (Guid?)rate.GeneralServiceId),
+               ServiceNameSnapshot = record.ServiceNameSnapshot,
+           };
+
+    /// <summary>Member-initialized (not positional) so EF can keep filtering after the projection.</summary>
+    private sealed class RegisteredGeneralService
+    {
+        public Guid RecordId { get; init; }
+        public Guid? AppointmentId { get; init; }
+        public ServiceRecordStatus Status { get; init; }
+        public Guid? GeneralServiceId { get; init; }
+        public string ServiceNameSnapshot { get; init; } = string.Empty;
+    }
+
+    private async Task<Guid[]> RelatedRateIdsAsync(ServiceRecord record, CancellationToken cancellationToken)
+    {
+        if ((record.ApprovedServiceId ?? record.ServiceId) is { } rateId)
+        {
+            return [rateId];
+        }
+
+        return record.GeneralServiceId is { } generalServiceId
+            ? (await _dbContext.Services.AsNoTracking()
+                .Where(rate => rate.GeneralServiceId == generalServiceId)
+                .Select(rate => rate.Id)
+                .ToListAsync(cancellationToken)).ToArray()
+            : [];
+    }
 
     private async Task<ServiceRecord> LoadLockedAsync(Guid serviceRecordId, CancellationToken cancellationToken)
     {
@@ -962,6 +1080,26 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                 .ToListAsync(cancellationToken))
             .ToHashSet();
 
+        // General services named by the records: registered, confirmed, or (older records) the one of the registered rate.
+        var registeredRateIds = records.Where(record => record.GeneralServiceId is null && record.ServiceId is not null)
+            .Select(record => record.ServiceId!.Value).Distinct().ToArray();
+        var rateGeneralServices = registeredRateIds.Length == 0
+            ? new Dictionary<Guid, Guid>()
+            : await _dbContext.Services.AsNoTracking()
+                .Where(rate => registeredRateIds.Contains(rate.Id))
+                .ToDictionaryAsync(rate => rate.Id, rate => rate.GeneralServiceId, cancellationToken);
+        Guid? RegisteredGeneralServiceOf(ServiceRecord record)
+            => record.GeneralServiceId
+               ?? (record.ServiceId is { } rateId && rateGeneralServices.TryGetValue(rateId, out var general) ? general : null);
+        var generalServiceIds = records.Select(RegisteredGeneralServiceOf)
+            .Concat(records.Select(record => record.ApprovedGeneralServiceId))
+            .Where(id => id is not null).Select(id => id!.Value).Distinct().ToArray();
+        var generalServiceNames = generalServiceIds.Length == 0
+            ? new Dictionary<Guid, string>()
+            : await _dbContext.GeneralServices.AsNoTracking()
+                .Where(general => generalServiceIds.Contains(general.Id))
+                .ToDictionaryAsync(general => general.Id, general => general.Name, cancellationToken);
+
         var redemptionIds = records.Where(record => record.LoyaltyRedemptionId is not null).Select(record => record.LoyaltyRedemptionId!.Value).ToArray();
         var rewardNames = redemptionIds.Length == 0
             ? new Dictionary<Guid, string>()
@@ -1004,8 +1142,12 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                     record.LoyaltyRedemptionId is { } redemptionId ? rewardNames.GetValueOrDefault(redemptionId) : null,
                     record.RewardBasePriceSnapshot,
                     record.RewardBusinessPercentageSnapshot,
-                    record.RewardProfessionalCommission);
+                    record.RewardProfessionalCommission,
+                    record.ApprovedGeneralServiceId,
+                    record.ApprovedGeneralServiceId is { } approvedGeneral ? generalServiceNames.GetValueOrDefault(approvedGeneral) : null);
             }
+
+            var registeredGeneral = RegisteredGeneralServiceOf(record);
 
             return new ServiceRecordView(
                 record.Id,
@@ -1031,7 +1173,9 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                 suggestion?.FullName,
                 record.Status == ServiceRecordStatus.Approved && record.AccruesLoyaltyPoints
                     ? creditedIds.Contains(record.Id) ? "Credited" : "PredatesWallet"
-                    : null);
+                    : null,
+                registeredGeneral,
+                registeredGeneral is { } general ? generalServiceNames.GetValueOrDefault(general) : null);
         }).ToArray();
     }
 }

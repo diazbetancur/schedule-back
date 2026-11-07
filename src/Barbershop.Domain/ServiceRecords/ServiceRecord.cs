@@ -26,18 +26,25 @@ public sealed class ServiceRecord
       int position,
       Guid? appointmentId,
       Guid staffProfileId,
-      Guid serviceId,
+      Guid? serviceId,
       string serviceNameSnapshot,
       DateOnly performedOn,
       Guid? customerId,
       string? customerNameSnapshot,
       string? notes,
       Guid registeredByUserId,
-      DateTime registeredAt)
+      DateTime registeredAt,
+      Guid? generalServiceId = null)
   {
     if (registrationKey == Guid.Empty)
     {
       throw new ArgumentException("A service record needs a registration key.", nameof(registrationKey));
+    }
+
+    // New registrations name a general service (ADR-0016 F4); records from before named a rate. One is required.
+    if (serviceId is null && generalServiceId is null)
+    {
+      throw new ArgumentException("A service record needs the general service performed.", nameof(generalServiceId));
     }
 
     RegistrationKey = registrationKey;
@@ -45,6 +52,7 @@ public sealed class ServiceRecord
     AppointmentId = appointmentId;
     StaffProfileId = staffProfileId;
     ServiceId = serviceId;
+    GeneralServiceId = generalServiceId;
     ServiceNameSnapshot = DomainValidation.Required(serviceNameSnapshot, nameof(serviceNameSnapshot), 120, 1);
     PerformedOn = performedOn;
     CustomerId = customerId;
@@ -67,7 +75,14 @@ public sealed class ServiceRecord
 
   // As registered by the professional; never changed afterwards.
   public Guid StaffProfileId { get; private set; }
-  public Guid ServiceId { get; private set; }
+
+  /// <summary>The rate registered; only records from before general services have it (ADR-0016 B4).</summary>
+  public Guid? ServiceId { get; private set; }
+
+  /// <summary>The general service registered (ADR-0016 F4); null on records from before, which named a rate.</summary>
+  public Guid? GeneralServiceId { get; private set; }
+
+  /// <summary>Name registered: the general service's for new records, the rate's for older ones.</summary>
   public string ServiceNameSnapshot { get; private set; } = string.Empty;
   public DateOnly PerformedOn { get; private set; }
   public Guid? CustomerId { get; private set; }
@@ -84,6 +99,12 @@ public sealed class ServiceRecord
   // Confirmed by the administrator.
   public ServiceRecordOperationType? OperationType { get; private set; }
   public Guid? ApprovedServiceId { get; private set; }
+
+  /// <summary>
+  /// The general service confirmed; the confirmed rate belongs to it (ADR-0016 D12). Null on records confirmed before
+  /// general services existed.
+  /// </summary>
+  public Guid? ApprovedGeneralServiceId { get; private set; }
   public string? ApprovedServiceNameSnapshot { get; private set; }
   public Guid? ApprovedStaffProfileId { get; private set; }
   public Guid? ApprovedCustomerId { get; private set; }
@@ -134,6 +155,7 @@ public sealed class ServiceRecord
 
     OperationType = approval.OperationType;
     ApprovedServiceId = approval.ServiceId;
+    ApprovedGeneralServiceId = approval.GeneralServiceId;
     ApprovedServiceNameSnapshot = DomainValidation.Required(approval.ServiceNameSnapshot, nameof(approval.ServiceNameSnapshot), 120, 1);
     ApprovedStaffProfileId = approval.StaffProfileId;
     ApprovedCustomerId = approval.CustomerId;
@@ -194,7 +216,8 @@ public sealed record ServiceRecordApproval(
     string? ReviewNotes,
     Guid? LoyaltyRedemptionId = null,
     int? RewardBasePriceSnapshot = null,
-    int? RewardBusinessPercentageSnapshot = null)
+    int? RewardBusinessPercentageSnapshot = null,
+    Guid? GeneralServiceId = null)
 {
   internal void EnsureConsistent()
   {

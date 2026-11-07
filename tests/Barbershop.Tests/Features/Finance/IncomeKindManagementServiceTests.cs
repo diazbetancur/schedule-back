@@ -172,12 +172,12 @@ public sealed class IncomeKindManagementServiceTests : IDisposable
     await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, alex.Id, 20000, false, Today));
     await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(null, null, 250000, false, Today, "MembershipSale"));
 
-    var all = await _service.GetAsync(Today, null);
-    Assert.Equal(2, all.Count);
-    Assert.Contains(all, entry => entry.Kind == "MembershipSale" && entry.StaffDisplayName is null);
+    var all = await _service.GetAsync(new IncomeListQuery(Today, Today));
+    Assert.Equal(2, all.TotalCount);
+    Assert.Contains(all.Items, entry => entry.Kind == "MembershipSale" && entry.StaffDisplayName is null);
 
-    var alexOnly = await _service.GetAsync(Today, alex.Id);
-    Assert.Equal("Service", Assert.Single(alexOnly).Kind);
+    var alexOnly = await _service.GetAsync(new IncomeListQuery(Today, Today, alex.Id));
+    Assert.Equal("Service", Assert.Single(alexOnly.Items).Kind);
   }
 
   private async Task<Service> AddServiceAsync(string name, int basePrice, int businessPercentage = 0)

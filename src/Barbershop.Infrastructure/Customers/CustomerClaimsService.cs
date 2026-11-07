@@ -1,4 +1,5 @@
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Customers.Admin;
 using Barbershop.Application.Customers.Claims;
 using Barbershop.Application.ServiceRecords;
@@ -18,7 +19,6 @@ namespace Barbershop.Infrastructure.Customers;
 /// </summary>
 internal sealed class CustomerClaimsService : IOwnCustomerProfileService, IAdminCustomerClaimsService
 {
-    private const int MaxListed = 200;
     private const int MaxCandidates = 20;
     private const int MinPhoneDigits = 7;
 
@@ -172,14 +172,16 @@ internal sealed class CustomerClaimsService : IOwnCustomerProfileService, IAdmin
 
     // ── Administrator ──────────────────────────────────────────────────────────────────────────
 
-    public async Task<IReadOnlyList<CustomerClaimView>> ListAsync(string? status, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<CustomerClaimView>> ListAsync(
+        string? status, PageQuery? pageQuery = null, CancellationToken cancellationToken = default)
     {
+        var page = (pageQuery ?? new PageQuery()).ToRequest();
         var statusFilter = status is null ? CustomerClaimStatus.Pending : ParseStatus(status);
         var query = _dbContext.CustomerClaims.AsNoTracking().Where(claim => claim.Status == statusFilter);
         query = statusFilter == CustomerClaimStatus.Pending
-            ? query.OrderBy(claim => claim.SubmittedAt)
-            : query.OrderByDescending(claim => claim.DecidedAt);
-        return await MapAsync(await query.Take(MaxListed).ToListAsync(cancellationToken), cancellationToken);
+            ? query.OrderBy(claim => claim.SubmittedAt).ThenBy(claim => claim.Id)
+            : query.OrderByDescending(claim => claim.DecidedAt).ThenByDescending(claim => claim.Id);
+        return await query.ToPagedResultAsync(page, MapAsync, cancellationToken);
     }
 
     public async Task<CustomerClaimView> GetByIdAsync(Guid claimId, CancellationToken cancellationToken = default)

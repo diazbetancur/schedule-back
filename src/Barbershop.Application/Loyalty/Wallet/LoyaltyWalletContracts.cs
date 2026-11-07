@@ -1,3 +1,5 @@
+using Barbershop.Application.Common.Paging;
+
 namespace Barbershop.Application.Loyalty.Wallet;
 
 /// <summary>
@@ -101,11 +103,35 @@ public sealed record MergeLoyaltyPreview(
 public interface IMyLoyaltyService
 {
     Task<MyLoyaltyView> GetMineAsync(Guid currentUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>The customer's own movements, paginated and newest first; an empty page when there is no linked profile.</summary>
+    Task<PagedResult<MyLoyaltyMovementView>> GetMyMovementsAsync(
+        Guid currentUserId, LoyaltyMovementListQuery query, CancellationToken cancellationToken = default);
 }
 
 public interface IAdminCustomerLoyaltyService
 {
     Task<LoyaltyWalletView> GetWalletAsync(Guid customerId, CancellationToken cancellationToken = default);
 
+    /// <summary>Every movement of one profile, paginated and newest first (ADR-0016 B7).</summary>
+    Task<PagedResult<LoyaltyMovementView>> GetMovementsAsync(
+        Guid customerId, LoyaltyMovementListQuery query, CancellationToken cancellationToken = default);
+
     Task<LoyaltyWalletView> AdjustAsync(Guid currentUserId, Guid customerId, LoyaltyAdjustmentRequest request, CancellationToken cancellationToken = default);
+}
+
+/// <summary>
+/// Filters of the paginated movement lists (ADR-0016 B7): <c>From</c>/<c>To</c> are inclusive Bogotá dates of the
+/// movement and <c>Type</c> is a movement type name (Accrual, AdjustmentCredit, Expiration...). Newest first.
+/// The wallet views still embed <c>Movements</c>, but only as a preview of the latest
+/// <see cref="LoyaltyMovementListQuery.RecentPreviewSize"/>; the full history is the paginated list.
+/// </summary>
+public sealed record LoyaltyMovementListQuery(
+    DateOnly? From = null,
+    DateOnly? To = null,
+    string? Type = null,
+    int? Page = null,
+    int? PageSize = null)
+{
+    public const int RecentPreviewSize = 10;
 }

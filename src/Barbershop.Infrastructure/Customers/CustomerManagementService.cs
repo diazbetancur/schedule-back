@@ -1,9 +1,11 @@
 using System.Net.Mail;
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Customers.Admin;
 using Barbershop.Domain.Customers;
 using Barbershop.Domain.Memberships;
 using Barbershop.Domain.Users;
+using Barbershop.Infrastructure.Loyalty;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -12,7 +14,6 @@ namespace Barbershop.Infrastructure.Customers;
 
 internal sealed class CustomerManagementService : IAdminCustomersService
 {
-    private const int SearchLimit = 200;
     private const int CandidateLimit = 20;
     private const int MinPhoneDigits = 7;
     private const int PhoneKeyLength = 10;
@@ -21,18 +22,26 @@ internal sealed class CustomerManagementService : IAdminCustomersService
 
     private const string ConcurrencyConflictMessage = "El cliente fue modificado por otra operación. Recarga e intenta de nuevo.";
     private const string AccountAlreadyLinkedMessage = "Esta cuenta ya está vinculada a otro cliente.";
+    private const string AccountHasPendingClaimMessage =
+        "La cuenta tiene una solicitud de vinculación pendiente. Resuélvela en la bandeja de reclamaciones.";
+    internal const string OwnProfilePendingClaimMessage =
+        "Tienes una solicitud para vincular tu perfil histórico pendiente; espera su respuesta.";
 
     private readonly AppDbContext _dbContext;
     private readonly TimeProvider _timeProvider;
+    private readonly LoyaltyWalletService _wallet;
 
     public CustomerManagementService(AppDbContext dbContext, TimeProvider timeProvider)
     {
         _dbContext = dbContext;
         _timeProvider = timeProvider;
+        _wallet = new LoyaltyWalletService(dbContext, timeProvider);
     }
 
-    public async Task<IReadOnlyList<CustomerListItem>> SearchAsync(string? query, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<CustomerListItem>> SearchAsync(
+        string? query, int? page = null, int? pageSize = null, CancellationToken cancellationToken = default)
     {
+        var pageRequest = PageRequest.Create(page, pageSize);
         var customers = _dbContext.Customers.Where(customer => customer.MergedIntoCustomerId == null);
 
         var term = query?.Trim();
@@ -46,13 +55,18 @@ internal sealed class CustomerManagementService : IAdminCustomersService
                 || (digits.Length >= 3 && customer.NormalizedPhone.Contains(digits)));
         }
 
-        var results = await customers
+        return await customers
+            .AsNoTracking()
             .OrderBy(customer => customer.FullName)
-            .Take(SearchLimit)
-            .ToListAsync(cancellationToken);
-
-        var users = await LoadUsersAsync(results.SelectMany(LinkUserIds), cancellationToken);
-        return results.Select(customer => MapListItem(customer, users)).ToArray();
+            .ThenBy(customer => customer.Id)
+            .ToPagedResultAsync(
+                pageRequest,
+                async (results, ct) =>
+                {
+                    var users = await LoadUsersAsync(results.SelectMany(LinkUserIds), ct);
+                    return (IReadOnlyList<CustomerListItem>)results.Select(customer => MapListItem(customer, users)).ToArray();
+                },
+                cancellationToken);
     }
 
     public async Task<CustomerDetailView> GetByIdAsync(Guid customerId, CancellationToken cancellationToken = default)
@@ -213,46 +227,155 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         CancellationToken cancellationToken = default)
     {
         EnsureIdentityVerified(request.IdentityVerified);
-        var user = await LoadLinkableUserAsync(request.UserId, cancellationToken);
+        var customer = await InAccountTransactionAsync(async () =>
+        {
+            var user = await LoadLinkableUserAsync(request.UserId, cancellationToken);
 
-        // Name and email come from the account as they are today; the phone can be typed when the account has none.
-        var phone = string.IsNullOrWhiteSpace(request.Phone) ? user.PhoneNumber : request.Phone;
-        ValidateDetails(user.FullName, phone, user.Email);
+            // Name and email come from the account as they are today; the phone can be typed when the account has none.
+            var phone = string.IsNullOrWhiteSpace(request.Phone) ? user.PhoneNumber : request.Phone;
+            ValidateDetails(user.FullName, phone, user.Email);
 
-        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var customer = new CustomerProfile(user.FullName, phone!, user.Email, currentUserId, utcNow);
-        customer.LinkAccount(user.Id, currentUserId, utcNow);
+            var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+            var created = new CustomerProfile(user.FullName, phone!, user.Email, currentUserId, utcNow);
+            created.LinkAccount(user.Id, currentUserId, utcNow);
 
-        _dbContext.Customers.Add(customer);
-        _dbContext.CustomerEvents.Add(new CustomerEvent(customer.Id, CustomerEventType.Created, currentUserId, utcNow));
-        _dbContext.CustomerEvents.Add(new CustomerEvent(customer.Id, CustomerEventType.AccountLinked, currentUserId, utcNow, userId: user.Id));
+            _dbContext.Customers.Add(created);
+            _dbContext.CustomerEvents.Add(new CustomerEvent(created.Id, CustomerEventType.Created, currentUserId, utcNow));
+            _dbContext.CustomerEvents.Add(new CustomerEvent(created.Id, CustomerEventType.AccountLinked, currentUserId, utcNow, userId: user.Id));
 
-        // A single SaveChanges is one database transaction: the profile never exists without its link.
-        await SaveChangesAsync(cancellationToken);
+            // The profile never exists without its link.
+            await SaveChangesAsync(cancellationToken);
+            return created;
+        }, cancellationToken);
 
         return await MapDetailAsync(customer, cancellationToken);
     }
 
-    public async Task<CustomerDetailView> LinkAccountAsync(
+    /// <summary>
+    /// "I am a new customer": a profile linked to the caller's own account, created by the caller. Same validations and
+    /// account rules as <see cref="CreateFromAccountAsync"/>, but the identity is the signed-in account itself, so no
+    /// in-person check is needed. Returns the existing profile when the account already has one (retries, double
+    /// clicks), and refuses while the account has a pending claim. Runs under the account lock, so a concurrent claim
+    /// or link of the same account is decided before or after it, never in between.
+    /// </summary>
+    internal async Task<CustomerProfile> CreateOwnLinkedAsync(
+        Guid userId, string fullName, string phone, string email, CancellationToken cancellationToken)
+    {
+        if (await FindLiveLinkedAsync(userId, cancellationToken) is { } existing)
+        {
+            return existing;
+        }
+
+        ValidateDetails(fullName, phone, email);
+        try
+        {
+            return await InAccountTransactionAsync(async () =>
+            {
+                await LockAccountAsync(userId, cancellationToken);
+                if (await FindLiveLinkedAsync(userId, cancellationToken) is { } concurrent)
+                {
+                    // A concurrent retry linked a profile while this one waited for the lock: return it.
+                    return concurrent;
+                }
+
+                // A pending claim means "I already have a profile": creating another one would make a duplicate.
+                if (await HasPendingClaimAsync(userId, null, cancellationToken))
+                {
+                    throw new ConflictException(OwnProfilePendingClaimMessage);
+                }
+
+                var user = await LoadLinkableUserAsync(userId, cancellationToken);
+                var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+                var customer = new CustomerProfile(fullName, phone, email, user.Id, utcNow);
+                customer.LinkAccount(user.Id, user.Id, utcNow);
+                _dbContext.Customers.Add(customer);
+                _dbContext.CustomerEvents.Add(new CustomerEvent(customer.Id, CustomerEventType.Created, user.Id, utcNow));
+                _dbContext.CustomerEvents.Add(new CustomerEvent(customer.Id, CustomerEventType.AccountLinked, user.Id, utcNow, userId: user.Id));
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                return customer;
+            }, cancellationToken);
+        }
+        catch (DbUpdateException exception) when (exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            // A path that does not take the account lock (a merge moving the account) linked it first: return that one.
+            _dbContext.ChangeTracker.Clear();
+            return await FindLiveLinkedAsync(userId, cancellationToken) ?? throw new ConflictException(AccountAlreadyLinkedMessage);
+        }
+    }
+
+    /// <summary>
+    /// The per-account lock (the account's row, FOR UPDATE) taken by everything that gives an account a live profile
+    /// or a pending claim: own profile, claim submission, admin create/link and claim approval. Held until the
+    /// surrounding transaction ends; a no-op outside PostgreSQL.
+    /// </summary>
+    internal async Task LockAccountAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        if (_dbContext.Database.IsNpgsql())
+        {
+            await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT 1 FROM public.users WHERE \"Id\" = {userId} FOR UPDATE", cancellationToken);
+        }
+    }
+
+    internal Task<bool> HasPendingClaimAsync(Guid userId, Guid? exceptClaimId, CancellationToken cancellationToken)
+        => _dbContext.CustomerClaims.AnyAsync(
+            claim => claim.UserId == userId && claim.Status == CustomerClaimStatus.Pending && claim.Id != exceptClaimId,
+            cancellationToken);
+
+    /// <summary>Runs <paramref name="work"/> in a transaction, or in the caller's when one is already open.</summary>
+    private async Task<T> InAccountTransactionAsync<T>(Func<Task<T>> work, CancellationToken cancellationToken)
+    {
+        if (_dbContext.Database.CurrentTransaction is not null)
+        {
+            return await work();
+        }
+
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var result = await work();
+        await transaction.CommitAsync(cancellationToken);
+        return result;
+    }
+
+    internal Task<CustomerProfile?> FindLiveLinkedAsync(Guid userId, CancellationToken cancellationToken)
+        => _dbContext.Customers.AsNoTracking()
+            .SingleOrDefaultAsync(customer => customer.UserId == userId && customer.MergedIntoCustomerId == null, cancellationToken);
+
+    public Task<CustomerDetailView> LinkAccountAsync(
         Guid currentUserId,
         Guid customerId,
         CustomerLinkAccountRequest request,
         CancellationToken cancellationToken = default)
+        => LinkAccountAsync(currentUserId, customerId, request, approvingClaimId: null, cancellationToken);
+
+    /// <summary>
+    /// Links the account; <paramref name="approvingClaimId"/> is the pending claim being approved, the only one the
+    /// account may have while it is linked.
+    /// </summary>
+    internal async Task<CustomerDetailView> LinkAccountAsync(
+        Guid currentUserId,
+        Guid customerId,
+        CustomerLinkAccountRequest request,
+        Guid? approvingClaimId,
+        CancellationToken cancellationToken)
     {
         EnsureIdentityVerified(request.IdentityVerified);
 
-        var customer = await LoadLiveAsync(customerId, cancellationToken);
-        if (customer.UserId is not null)
+        var customer = await InAccountTransactionAsync(async () =>
         {
-            throw new ConflictException("El cliente ya tiene una cuenta vinculada. Desvincúlala antes de vincular otra.");
-        }
+            var linked = await LoadLiveAsync(customerId, cancellationToken);
+            if (linked.UserId is not null)
+            {
+                throw new ConflictException("El cliente ya tiene una cuenta vinculada. Desvincúlala antes de vincular otra.");
+            }
 
-        var user = await LoadLinkableUserAsync(request.UserId, cancellationToken);
+            var user = await LoadLinkableUserAsync(request.UserId, cancellationToken, approvingClaimId);
 
-        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        customer.LinkAccount(user.Id, currentUserId, utcNow);
-        _dbContext.CustomerEvents.Add(new CustomerEvent(customer.Id, CustomerEventType.AccountLinked, currentUserId, utcNow, userId: user.Id));
-        await SaveChangesAsync(cancellationToken);
+            var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+            linked.LinkAccount(user.Id, currentUserId, utcNow);
+            _dbContext.CustomerEvents.Add(new CustomerEvent(linked.Id, CustomerEventType.AccountLinked, currentUserId, utcNow, userId: user.Id));
+            await SaveChangesAsync(cancellationToken);
+            return linked;
+        }, cancellationToken);
 
         return await MapDetailAsync(customer, cancellationToken);
     }
@@ -303,6 +426,27 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         CustomerMergeRequest request,
         CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(request.PreviewToken))
+        {
+            throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["previewToken"] = ["Revisa la vista previa de la fusión antes de confirmarla."]
+            });
+        }
+
+        // Lock order: customer profiles (ascending id) → the source's memberships, as linking and annulling do. The
+        // preview is rebuilt under those locks: if anything it showed changed, the merge is refused (ADR-0013 D7).
+        // Two saves inside one transaction: the source must leave the "live linked profiles" unique
+        // index before the target takes over its account, and PostgreSQL checks that index per statement.
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await _wallet.LockCustomersAsync([targetCustomerId, request.SourceCustomerId], cancellationToken);
+        if (_dbContext.Database.IsNpgsql())
+        {
+            await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT 1 FROM public.customer_memberships WHERE \"CustomerId\" = {request.SourceCustomerId} ORDER BY \"Id\" FOR UPDATE",
+                cancellationToken);
+        }
+
         var target = await LoadAsync(targetCustomerId, cancellationToken);
         var source = await LoadAsync(request.SourceCustomerId, cancellationToken);
 
@@ -312,11 +456,13 @@ internal sealed class CustomerManagementService : IAdminCustomersService
             throw new ConflictException(preview.BlockingReasons[0]);
         }
 
-        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        if (!string.Equals(preview.PreviewToken, request.PreviewToken, StringComparison.Ordinal))
+        {
+            throw new ConflictException(
+                "Los clientes cambiaron desde la vista previa (puntos, deuda, lotes, membresías o cuentas). Genera una vista previa nueva antes de fusionar.");
+        }
 
-        // Two saves inside one transaction: the source must leave the "live linked profiles" unique
-        // index before the target takes over its account, and PostgreSQL checks that index per statement.
-        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
 
         Guid? transferredUserId = source.UserId is not null && target.UserId is null
             ? source.UnlinkAccount(utcNow)
@@ -349,6 +495,9 @@ internal sealed class CustomerManagementService : IAdminCustomersService
 
         _dbContext.CustomerEvents.Add(new CustomerEvent(
             target.Id, CustomerEventType.MergedFrom, currentUserId, utcNow, userId: transferredUserId, relatedCustomerId: source.Id));
+
+        // Usable points and outstanding debt follow too, with new movements; expired points stay behind.
+        await _wallet.TransferForMergeInCurrentTransactionAsync(source.Id, target.Id, currentUserId, utcNow, cancellationToken);
         await SaveChangesAsync(cancellationToken);
 
         await transaction.CommitAsync(cancellationToken);
@@ -391,10 +540,10 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         {
             warnings.Add("Se conservan el nombre, teléfono y correo del cliente destino. El cliente origen quedará marcado como fusionado y no se elimina.");
 
-            var sourceMemberships = await _dbContext.CustomerMemberships.CountAsync(membership => membership.CustomerId == source.Id, cancellationToken);
-            if (sourceMemberships > 0)
+            var sourceMembershipCount = await _dbContext.CustomerMemberships.CountAsync(membership => membership.CustomerId == source.Id, cancellationToken);
+            if (sourceMembershipCount > 0)
             {
-                warnings.Add($"{sourceMemberships} membresía(s) del cliente origen pasarán al cliente destino, con sus saldos, obsequios e historial.");
+                warnings.Add($"{sourceMembershipCount} membresía(s) del cliente origen pasarán al cliente destino, con sus saldos, obsequios e historial.");
             }
 
             // Both profiles may already have received a first-purchase gift for the same plan; both are kept.
@@ -416,13 +565,49 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         var users = await LoadUsersAsync(LinkUserIds(target).Concat(LinkUserIds(source)), cancellationToken);
         var sourceItem = MapListItem(source, users);
 
+        // Points (ADR-0013 D7). A pending redemption (requested or approved) in either profile blocks the merge (D5).
+        var (loyalty, walletFingerprint) = await _wallet.BuildMergePreviewAsync(source.Id, target.Id, cancellationToken);
+        var (sourcePending, targetPending, redemptionsFingerprint) = await new LoyaltyRedemptionService(_dbContext, _timeProvider)
+            .PendingForMergeAsync(source.Id, target.Id, cancellationToken);
+        if (sourcePending > 0)
+        {
+            blockingReasons.Add(
+                $"El cliente origen tiene {sourcePending} canje(s) de puntos pendiente(s) de aprobación o de entrega. Resuélvelos antes de fusionar.");
+        }
+
+        if (targetPending > 0)
+        {
+            blockingReasons.Add(
+                $"El cliente destino tiene {targetPending} canje(s) de puntos pendiente(s) de aprobación o de entrega. Resuélvelos antes de fusionar.");
+        }
+        if (loyalty.SourceExpiredPointsNotMoved > 0)
+        {
+            warnings.Add($"{loyalty.SourceExpiredPointsNotMoved} punto(s) vencido(s) del cliente origen no se traspasan.");
+        }
+
+        // Everything the admin saw: both profiles (versions, links, merge state), the source's memberships and points.
+        var sourceMemberships = await _dbContext.CustomerMemberships.AsNoTracking()
+            .Where(membership => membership.CustomerId == source.Id)
+            .OrderBy(membership => membership.Id)
+            .Select(membership => membership.Id)
+            .ToListAsync(cancellationToken);
+        var fingerprint = string.Join(
+            '|',
+            $"T{target.Id}:{target.Version}:{target.UserId}:{target.MergedIntoCustomerId}",
+            $"S{source.Id}:{source.Version}:{source.UserId}:{source.MergedIntoCustomerId}",
+            $"M{string.Join(',', sourceMemberships)}",
+            walletFingerprint,
+            redemptionsFingerprint);
+
         return new CustomerMergePreview(
             MapListItem(target, users),
             sourceItem,
             blockingReasons.Count == 0,
             blockingReasons,
             warnings,
-            transfersAccount ? sourceItem.LinkedAccount : null);
+            transfersAccount ? sourceItem.LinkedAccount : null,
+            loyalty,
+            LoyaltyWalletService.HashToken(fingerprint));
     }
 
     private static void EnsureIdentityVerified(bool identityVerified)
@@ -436,9 +621,14 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         }
     }
 
-    /// <summary>An account can back a profile only if it is active, has the Customer role and no live profile uses it.</summary>
-    private async Task<User> LoadLinkableUserAsync(Guid userId, CancellationToken cancellationToken)
+    /// <summary>
+    /// An account can back a profile only if it is active, has the Customer role, no live profile uses it and no
+    /// claim of it waits for review (other than the one being approved). Takes the account lock first, so the answer
+    /// holds until the caller's transaction ends.
+    /// </summary>
+    private async Task<User> LoadLinkableUserAsync(Guid userId, CancellationToken cancellationToken, Guid? approvingClaimId = null)
     {
+        await LockAccountAsync(userId, cancellationToken);
         var user = await _dbContext.Users
             .Include(candidate => candidate.UserRoles)
             .ThenInclude(assignment => assignment.Role)
@@ -464,6 +654,11 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         if (alreadyLinked)
         {
             throw new ConflictException(AccountAlreadyLinkedMessage);
+        }
+
+        if (await HasPendingClaimAsync(user.Id, approvingClaimId, cancellationToken))
+        {
+            throw new ConflictException(AccountHasPendingClaimMessage);
         }
 
         return user;
@@ -617,7 +812,8 @@ internal sealed class CustomerManagementService : IAdminCustomersService
         return matches;
     }
 
-    private static void ValidateDetails(string? fullName, string? phone, string? email)
+    /// <summary>Same contact rules everywhere a profile's data is entered (also claims).</summary>
+    internal static void ValidateDetails(string? fullName, string? phone, string? email)
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 

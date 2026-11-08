@@ -1,7 +1,10 @@
+using Barbershop.Application.Auth;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Memberships.Admin;
+using Barbershop.Domain.Loyalty;
 using Barbershop.Domain.Memberships;
 using Barbershop.Domain.Services;
+using Barbershop.Infrastructure.Loyalty;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -18,11 +21,13 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
 
     private readonly AppDbContext _dbContext;
     private readonly TimeProvider _timeProvider;
+    private readonly ICurrentUserAccessor _currentUser;
 
-    public MembershipPlanManagementService(AppDbContext dbContext, TimeProvider timeProvider)
+    public MembershipPlanManagementService(AppDbContext dbContext, TimeProvider timeProvider, ICurrentUserAccessor currentUser)
     {
         _dbContext = dbContext;
         _timeProvider = timeProvider;
+        _currentUser = currentUser;
     }
 
     public async Task<IReadOnlyList<MembershipPlanView>> GetAllAsync(CancellationToken cancellationToken = default)
@@ -36,7 +41,8 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
             .ToListAsync(cancellationToken);
 
         var services = await LoadServicesAsync(plans.SelectMany(ReferencedServiceIds), cancellationToken);
-        return plans.Select(plan => Map(plan, services)).ToArray();
+        var generalNames = await LoadGeneralServiceNamesAsync(services.Values, cancellationToken);
+        return plans.Select(plan => Map(plan, services, generalNames)).ToArray();
     }
 
     public async Task<MembershipPlanView> GetByIdAsync(Guid planId, CancellationToken cancellationToken = default)
@@ -54,6 +60,7 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
         var plan = new MembershipPlan(
             request.Name, request.Description, request.Price, valid.Mode, valid.PoolQuantity,
             request.DefaultDurationDays, request.Terms, request.SpecificConditions, utcNow);
+        ApplyLoyaltyPoints(plan, request.LoyaltyPoints, utcNow);
 
         foreach (var service in valid.Services)
         {
@@ -83,6 +90,7 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
             request.Name, request.Description, request.Price, valid.Mode, valid.PoolQuantity,
             request.DefaultDurationDays, request.Terms, request.SpecificConditions, utcNow);
 
+        ApplyLoyaltyPoints(plan, request.LoyaltyPoints, utcNow);
         SyncServices(plan, valid.Services);
         SyncGiftRules(plan, valid.GiftRules, utcNow);
 
@@ -113,6 +121,19 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
         var plan = await LoadAsync(planId, cancellationToken);
         plan.MarkDeleted(_timeProvider.GetUtcNow().UtcDateTime);
         await SaveChangesAsync(cancellationToken);
+    }
+
+    private void ApplyLoyaltyPoints(MembershipPlan plan, int? requestedPoints, DateTime utcNow)
+    {
+        var change = LoyaltyCatalogPoints.Change(
+            LoyaltyPointsTarget.MembershipPlan, plan.Id, plan.LoyaltyPoints, requestedPoints, _currentUser, utcNow);
+        if (change is null)
+        {
+            return;
+        }
+
+        plan.SetLoyaltyPoints(change.NewPoints, utcNow);
+        _dbContext.LoyaltyPointsChanges.Add(change);
     }
 
     /// <summary>Keeps rows for services that stay (updating their quantity), drops removed ones and adds new ones.</summary>
@@ -204,6 +225,8 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
         {
             errors["specificConditions"] = ["Las condiciones particulares deben tener 2000 caracteres o menos."];
         }
+
+        LoyaltyCatalogPoints.Validate(request.LoyaltyPoints, errors);
 
         var mode = ParseName<MembershipPlanMode>(request.Mode);
         if (mode is null)
@@ -443,7 +466,7 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
     private async Task<MembershipPlanView> MapAsync(MembershipPlan plan, CancellationToken cancellationToken)
     {
         var services = await LoadServicesAsync(ReferencedServiceIds(plan), cancellationToken);
-        return Map(plan, services);
+        return Map(plan, services, await LoadGeneralServiceNamesAsync(services.Values, cancellationToken));
     }
 
     /// <summary>Loads referenced services even if later deleted from the catalog, so their names still show.</summary>
@@ -460,11 +483,26 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
             .ToDictionaryAsync(service => service.Id, cancellationToken);
     }
 
+    /// <summary>Names of the general services of the rates, to label them "Servicio general · Tarifa" (ADR-0016 T10).</summary>
+    private async Task<Dictionary<Guid, string>> LoadGeneralServiceNamesAsync(IEnumerable<Service> rates, CancellationToken cancellationToken)
+    {
+        var ids = rates.Select(rate => rate.GeneralServiceId).Distinct().ToArray();
+        if (ids.Length == 0)
+        {
+            return [];
+        }
+
+        return await _dbContext.GeneralServices.AsNoTracking()
+            .Where(general => ids.Contains(general.Id))
+            .ToDictionaryAsync(general => general.Id, general => general.Name, cancellationToken);
+    }
+
     private static IEnumerable<Guid> ReferencedServiceIds(MembershipPlan plan)
         => plan.Services.Select(service => service.ServiceId)
             .Concat(plan.GiftRules.Where(rule => rule.ServiceId is not null).Select(rule => rule.ServiceId!.Value));
 
-    private static MembershipPlanView Map(MembershipPlan plan, IReadOnlyDictionary<Guid, Service> services)
+    private static MembershipPlanView Map(
+        MembershipPlan plan, IReadOnlyDictionary<Guid, Service> services, IReadOnlyDictionary<Guid, string> generalNames)
     {
         var includedServices = plan.Services
             .Select(included =>
@@ -475,7 +513,8 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
                     service?.Name ?? string.Empty,
                     service?.BasePrice ?? 0,
                     service is { IsActive: true, IsDeleted: false },
-                    included.Quantity);
+                    included.Quantity,
+                    service is not null ? generalNames.GetValueOrDefault(service.GeneralServiceId) : null);
             })
             .OrderBy(view => view.ServiceName, StringComparer.CurrentCultureIgnoreCase)
             .ToArray();
@@ -490,7 +529,10 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
                 rule.ServiceId is { } serviceId && services.TryGetValue(serviceId, out var giftService) ? giftService.Name : null,
                 rule.Description,
                 rule.Quantity,
-                rule.Condition.ToString()))
+                rule.Condition.ToString(),
+                rule.ServiceId is { } giftRateId && services.TryGetValue(giftRateId, out var giftRate)
+                    ? generalNames.GetValueOrDefault(giftRate.GeneralServiceId)
+                    : null))
             .ToArray();
 
         return new MembershipPlanView(
@@ -507,7 +549,8 @@ internal sealed class MembershipPlanManagementService : IAdminMembershipPlansSer
             includedServices,
             giftRules,
             plan.CreatedAt,
-            plan.UpdatedAt);
+            plan.UpdatedAt,
+            plan.LoyaltyPoints);
     }
 
     private sealed record ValidService(Guid ServiceId, int? Quantity);

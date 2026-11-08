@@ -1,6 +1,8 @@
 using System.Security.Claims;
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
+using Barbershop.Application.Common.Paging;
+using Barbershop.Application.Memberships.Admin;
 using Barbershop.Application.Memberships.Portal;
 
 namespace Api.Barbershop.Features.Customer.Memberships;
@@ -16,7 +18,8 @@ public static class CustomerMembershipsEndpoints
 
     memberships.MapGet(string.Empty, GetMineAsync)
         .WithName("GetCustomerMemberships")
-        .Produces<IReadOnlyList<MyMembershipSummaryView>>(StatusCodes.Status200OK)
+        .Produces<PagedResult<MyMembershipSummaryView>>(StatusCodes.Status200OK)
+        .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
         .ProducesProblem(StatusCodes.Status401Unauthorized)
         .ProducesProblem(StatusCodes.Status403Forbidden);
 
@@ -30,9 +33,9 @@ public static class CustomerMembershipsEndpoints
     return api;
   }
 
-  private static Task<IReadOnlyList<MyMembershipSummaryView>> GetMineAsync(
-      ClaimsPrincipal user, IMyMembershipsService service, CancellationToken cancellationToken)
-      => service.GetMineAsync(user.GetRequiredUserId(), cancellationToken);
+  private static Task<PagedResult<MyMembershipSummaryView>> GetMineAsync(
+      ClaimsPrincipal user, [AsParameters] MembershipListQuery query, IMyMembershipsService service, CancellationToken cancellationToken)
+      => service.GetMineAsync(user.GetRequiredUserId(), query, cancellationToken);
 
   private static Task<MyMembershipView> GetMineByIdAsync(
       Guid membershipId, ClaimsPrincipal user, IMyMembershipsService service, CancellationToken cancellationToken)

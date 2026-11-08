@@ -1,6 +1,7 @@
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Appointments;
 using Barbershop.Application.Auth;
+using Barbershop.Application.Common.Paging;
 using System.Security.Claims;
 
 namespace Api.Barbershop.Features.Customer.Appointments;
@@ -15,7 +16,8 @@ public static class CustomerAppointmentsEndpoints
 
     appointments.MapGet(string.Empty, GetHistoryAsync)
         .WithName("GetCustomerAppointments")
-        .Produces<IReadOnlyList<AppointmentView>>(StatusCodes.Status200OK)
+        .Produces<PagedResult<AppointmentView>>(StatusCodes.Status200OK)
+        .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
         .ProducesProblem(StatusCodes.Status401Unauthorized)
         .ProducesProblem(StatusCodes.Status403Forbidden)
         .ProducesProblem(StatusCodes.Status404NotFound);
@@ -49,11 +51,12 @@ public static class CustomerAppointmentsEndpoints
     return api;
   }
 
-  private static Task<IReadOnlyList<AppointmentView>> GetHistoryAsync(
+  private static Task<PagedResult<AppointmentView>> GetHistoryAsync(
       ClaimsPrincipal user,
+      [AsParameters] CustomerAppointmentListQuery query,
       ICustomerAppointmentsService service,
       CancellationToken cancellationToken)
-      => service.GetHistoryAsync(user.GetRequiredUserId(), cancellationToken);
+      => service.GetHistoryAsync(user.GetRequiredUserId(), query, cancellationToken);
 
   private static async Task<IResult> CreateAsync(
       ClaimsPrincipal user,

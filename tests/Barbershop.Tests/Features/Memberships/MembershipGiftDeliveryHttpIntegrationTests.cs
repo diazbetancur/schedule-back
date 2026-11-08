@@ -14,6 +14,7 @@ using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
+using Barbershop.Domain.Services;
 
 namespace Barbershop.Tests.Features.Memberships;
 
@@ -221,7 +222,7 @@ public sealed class MembershipGiftDeliveryHttpIntegrationTests
   {
     using var scope = factory.Services.CreateScope();
     var haircut = await scope.ServiceProvider.GetRequiredService<IAdminServicesService>()
-        .CreateAsync(new ServiceCreateRequest($"Corte {Guid.NewGuid():N}"[..20], 25000, 30));
+        .CreateAsync(new ServiceCreateRequest($"Corte {Guid.NewGuid():N}"[..20], 25000, 30, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
     var customer = await scope.ServiceProvider.GetRequiredService<IAdminCustomersService>()
         .CreateAsync(adminId, new CustomerCreateRequest("Carlos Pérez", "3001234567", $"{Guid.NewGuid():N}@example.com"));
     var plan = await scope.ServiceProvider.GetRequiredService<IAdminMembershipPlansService>().CreateAsync(new MembershipPlanUpsertRequest(

@@ -39,6 +39,7 @@ public sealed class CustomerMembership
     SoldOn = soldOn;
     StartsOn = startsOn;
     EndsOn = endsOn;
+    LoyaltyPointsSnapshot = plan.LoyaltyPoints;
     Status = MembershipStatus.PendingActivation;
     CreatedByUserId = createdByUserId;
     CreatedAt = DomainValidation.EnsureUtc(createdAt, nameof(createdAt));
@@ -74,6 +75,17 @@ public sealed class CustomerMembership
 
   /// <summary>Optional link to the membership-sale income that paid for it; one income may cover several memberships.</summary>
   public Guid? IncomeEntryId { get; private set; }
+
+  /// <summary>
+  /// The plan's loyalty points copied at sale time. Null only for memberships sold before the wallet existed: they
+  /// never earn points, which is different from a newer membership whose plan had 0 points.
+  /// </summary>
+  public int? LoyaltyPointsSnapshot { get; private set; }
+
+  /// <summary>Taken once, at the first income link, and never changed: unlinking and linking again cannot alter it.</summary>
+  public MembershipLoyaltyDecision? LoyaltyDecision { get; private set; }
+
+  public DateTime? LoyaltyDecidedAt { get; private set; }
 
   public Guid CreatedByUserId { get; private set; }
   public DateTime CreatedAt { get; private set; }
@@ -139,6 +151,40 @@ public sealed class CustomerMembership
     CustomerId = customerId;
     UpdatedAt = DomainValidation.EnsureUtc(updatedAt, nameof(updatedAt));
   }
+
+  /// <summary>
+  /// The first income link decides whether the membership earns its points, and the decision is kept. Returns null
+  /// when it was already decided (a later link), so no second accrual is ever possible.
+  /// </summary>
+  public MembershipLoyaltyDecision? DecideLoyaltyAccrual(bool programEnabled, DateTime decidedAt)
+  {
+    if (LoyaltyDecision is not null)
+    {
+      return null;
+    }
+
+    LoyaltyDecision = Status == MembershipStatus.Annulled ? MembershipLoyaltyDecision.NotAccruedAnnulled
+        : LoyaltyPointsSnapshot is null ? MembershipLoyaltyDecision.NotAccruedPredatesWallet
+        : LoyaltyPointsSnapshot == 0 ? MembershipLoyaltyDecision.NotAccruedNoPoints
+        : !programEnabled ? MembershipLoyaltyDecision.NotAccruedProgramDisabled
+        : MembershipLoyaltyDecision.Accrued;
+    LoyaltyDecidedAt = DomainValidation.EnsureUtc(decidedAt, nameof(decidedAt));
+    UpdatedAt = LoyaltyDecidedAt;
+    return LoyaltyDecision;
+  }
+}
+
+/// <summary>What the first income link decided about the membership's loyalty points.</summary>
+public enum MembershipLoyaltyDecision
+{
+  Accrued = 1,
+  NotAccruedProgramDisabled = 2,
+  NotAccruedNoPoints = 3,
+
+  /// <summary>Sold before the wallet existed (no snapshot): never earns points, no retroactive accrual.</summary>
+  NotAccruedPredatesWallet = 4,
+
+  NotAccruedAnnulled = 5
 }
 
 public enum MembershipStatus

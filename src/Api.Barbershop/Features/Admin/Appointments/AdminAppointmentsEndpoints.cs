@@ -1,5 +1,6 @@
 using Barbershop.Application.Appointments;
 using Barbershop.Application.Auth;
+using Barbershop.Application.Common.Paging;
 
 namespace Api.Barbershop.Features.Admin.Appointments;
 
@@ -13,7 +14,15 @@ public static class AdminAppointmentsEndpoints
 
     appointments.MapGet(string.Empty, GetAsync)
         .WithName("GetAdminAppointments")
-        .Produces<IReadOnlyList<AppointmentView>>(StatusCodes.Status200OK)
+        .Produces<PagedResult<AppointmentView>>(StatusCodes.Status200OK)
+        .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden)
+        .ProducesProblem(StatusCodes.Status404NotFound);
+
+    appointments.MapGet("/service-options", GetServiceOptionsAsync)
+        .WithName("GetAdminAppointmentServiceOptions")
+        .Produces<IReadOnlyList<AppointmentServiceOption>>(StatusCodes.Status200OK)
         .ProducesProblem(StatusCodes.Status401Unauthorized)
         .ProducesProblem(StatusCodes.Status403Forbidden)
         .ProducesProblem(StatusCodes.Status404NotFound);
@@ -47,11 +56,17 @@ public static class AdminAppointmentsEndpoints
     return api;
   }
 
-  private static Task<IReadOnlyList<AppointmentView>> GetAsync(
-      Guid? staffProfileId,
+  private static Task<PagedResult<AppointmentView>> GetAsync(
+      [AsParameters] AdminAppointmentListQuery query,
       IAdminAppointmentsService service,
       CancellationToken cancellationToken)
-      => service.GetAsync(staffProfileId, cancellationToken);
+      => service.GetAsync(query, cancellationToken);
+
+  private static Task<IReadOnlyList<AppointmentServiceOption>> GetServiceOptionsAsync(
+      Guid staffProfileId,
+      IAdminAppointmentsService service,
+      CancellationToken cancellationToken)
+      => service.GetServiceOptionsAsync(staffProfileId, cancellationToken);
 
   private static async Task<IResult> CreateAsync(
       AdminManualAppointmentCreateRequest request,

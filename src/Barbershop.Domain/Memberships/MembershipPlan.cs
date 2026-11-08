@@ -1,4 +1,5 @@
 using Barbershop.Domain.Common;
+using Barbershop.Domain.Loyalty;
 
 namespace Barbershop.Domain.Memberships;
 
@@ -44,6 +45,13 @@ public sealed class MembershipPlan
   public int DefaultDurationDays { get; private set; }
   public string Terms { get; private set; } = string.Empty;
   public string? SpecificConditions { get; private set; }
+
+  /// <summary>
+  /// Fixed loyalty points buying this membership type will grant; 0 means it grants none. Consuming the
+  /// membership never grants points. Changing it never alters accruals already made.
+  /// </summary>
+  public int LoyaltyPoints { get; private set; }
+
   public bool IsActive { get; private set; }
   public bool IsDeleted { get; private set; }
   public DateTime CreatedAt { get; private set; }
@@ -67,6 +75,12 @@ public sealed class MembershipPlan
       DateTime updatedAt)
   {
     SetDetails(name, description, price, mode, poolQuantity, defaultDurationDays, terms, specificConditions);
+    UpdatedAt = DomainValidation.EnsureUtc(updatedAt, nameof(updatedAt));
+  }
+
+  public void SetLoyaltyPoints(int loyaltyPoints, DateTime updatedAt)
+  {
+    LoyaltyPoints = LoyaltySettings.EnsurePoints(loyaltyPoints, nameof(loyaltyPoints));
     UpdatedAt = DomainValidation.EnsureUtc(updatedAt, nameof(updatedAt));
   }
 

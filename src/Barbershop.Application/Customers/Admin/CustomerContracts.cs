@@ -71,7 +71,11 @@ public sealed record CustomerLinkAccountRequest(Guid UserId, bool IdentityVerifi
 
 public sealed record CustomerUnlinkAccountRequest(string Reason);
 
-public sealed record CustomerMergeRequest(Guid SourceCustomerId);
+/// <summary>
+/// <c>PreviewToken</c> comes from the preview the admin confirmed. The merge recomputes it inside its transaction,
+/// under lock: if balances, debts, lots, links or versions changed since, it is refused and a new preview is needed.
+/// </summary>
+public sealed record CustomerMergeRequest(Guid SourceCustomerId, string? PreviewToken = null);
 
 public sealed record CustomerMergePreview(
     CustomerListItem Target,
@@ -79,4 +83,6 @@ public sealed record CustomerMergePreview(
     bool CanMerge,
     IReadOnlyList<string> BlockingReasons,
     IReadOnlyList<string> Warnings,
-    CustomerLinkedAccountView? AccountToTransfer);
+    CustomerLinkedAccountView? AccountToTransfer,
+    Barbershop.Application.Loyalty.Wallet.MergeLoyaltyPreview? Loyalty = null,
+    string PreviewToken = "");

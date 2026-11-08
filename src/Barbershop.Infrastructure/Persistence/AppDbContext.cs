@@ -2,9 +2,12 @@ using Barbershop.Domain.Appointments;
 using Barbershop.Domain.Customers;
 using Barbershop.Domain.Finance;
 using Barbershop.Domain.Landing;
+using Barbershop.Domain.Loyalty;
 using Barbershop.Domain.Media;
 using Barbershop.Domain.Memberships;
+using Barbershop.Domain.Products;
 using Barbershop.Domain.Scheduling;
+using Barbershop.Domain.ServiceRecords;
 using Barbershop.Domain.Services;
 using Barbershop.Domain.Staff;
 using Barbershop.Domain.Users;
@@ -26,9 +29,14 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<NotificationDelivery> NotificationDeliveries => Set<NotificationDelivery>();
     public DbSet<StaffProfile> StaffProfiles => Set<StaffProfile>();
     public DbSet<StaffService> StaffServices => Set<StaffService>();
+    public DbSet<StaffServiceOffering> StaffServiceOfferings => Set<StaffServiceOffering>();
     public DbSet<StaffAvailabilityRule> StaffAvailabilityRules => Set<StaffAvailabilityRule>();
     public DbSet<StaffUnavailablePeriod> StaffUnavailablePeriods => Set<StaffUnavailablePeriod>();
     public DbSet<Service> Services => Set<Service>();
+    public DbSet<ServiceCategory> ServiceCategories => Set<ServiceCategory>();
+    public DbSet<GeneralService> GeneralServices => Set<GeneralService>();
+    public DbSet<ProductCategory> ProductCategories => Set<ProductCategory>();
+    public DbSet<Product> Products => Set<Product>();
     public DbSet<IncomeEntry> IncomeEntries => Set<IncomeEntry>();
     public DbSet<FixedExpense> FixedExpenses => Set<FixedExpense>();
     public DbSet<ExpenseEntry> ExpenseEntries => Set<ExpenseEntry>();
@@ -43,6 +51,7 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<TickerItem> TickerItems => Set<TickerItem>();
     public DbSet<CustomerProfile> Customers => Set<CustomerProfile>();
     public DbSet<CustomerEvent> CustomerEvents => Set<CustomerEvent>();
+    public DbSet<CustomerClaim> CustomerClaims => Set<CustomerClaim>();
     public DbSet<MembershipPlan> MembershipPlans => Set<MembershipPlan>();
     public DbSet<MembershipPlanIncludedService> MembershipPlanServices => Set<MembershipPlanIncludedService>();
     public DbSet<MembershipPlanGiftRule> MembershipPlanGiftRules => Set<MembershipPlanGiftRule>();
@@ -56,6 +65,18 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<MembershipConsumptionReversal> MembershipConsumptionReversals => Set<MembershipConsumptionReversal>();
     public DbSet<MembershipGiftDelivery> MembershipGiftDeliveries => Set<MembershipGiftDelivery>();
     public DbSet<MembershipGiftDeliveryReversal> MembershipGiftDeliveryReversals => Set<MembershipGiftDeliveryReversal>();
+    public DbSet<LoyaltySettings> LoyaltySettings => Set<LoyaltySettings>();
+    public DbSet<LoyaltySettingsChange> LoyaltySettingsChanges => Set<LoyaltySettingsChange>();
+    public DbSet<LoyaltyPointsChange> LoyaltyPointsChanges => Set<LoyaltyPointsChange>();
+    public DbSet<LoyaltyLot> LoyaltyLots => Set<LoyaltyLot>();
+    public DbSet<LoyaltyDebt> LoyaltyDebts => Set<LoyaltyDebt>();
+    public DbSet<LoyaltyAdjustment> LoyaltyAdjustments => Set<LoyaltyAdjustment>();
+    public DbSet<LoyaltyMovement> LoyaltyMovements => Set<LoyaltyMovement>();
+    public DbSet<LoyaltyReward> LoyaltyRewards => Set<LoyaltyReward>();
+    public DbSet<LoyaltyRewardChange> LoyaltyRewardChanges => Set<LoyaltyRewardChange>();
+    public DbSet<LoyaltyRedemption> LoyaltyRedemptions => Set<LoyaltyRedemption>();
+    public DbSet<LoyaltyRedemptionAllocation> LoyaltyRedemptionAllocations => Set<LoyaltyRedemptionAllocation>();
+    public DbSet<ServiceRecord> ServiceRecords => Set<ServiceRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

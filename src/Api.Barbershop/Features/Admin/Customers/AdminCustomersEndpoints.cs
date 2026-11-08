@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Customers.Admin;
 
 namespace Api.Barbershop.Features.Admin.Customers;
@@ -15,7 +16,8 @@ public static class AdminCustomersEndpoints
 
         adminCustomers.MapGet(string.Empty, SearchAsync)
             .WithName("GetAdminCustomers")
-            .Produces<IReadOnlyList<CustomerListItem>>(StatusCodes.Status200OK)
+            .Produces<PagedResult<CustomerListItem>>(StatusCodes.Status200OK)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
@@ -99,9 +101,9 @@ public static class AdminCustomersEndpoints
         return api;
     }
 
-    private static Task<IReadOnlyList<CustomerListItem>> SearchAsync(
-        string? q, IAdminCustomersService service, CancellationToken cancellationToken)
-        => service.SearchAsync(q, cancellationToken);
+    private static Task<PagedResult<CustomerListItem>> SearchAsync(
+        string? q, int? page, int? pageSize, IAdminCustomersService service, CancellationToken cancellationToken)
+        => service.SearchAsync(q, page, pageSize, cancellationToken);
 
     private static Task<IReadOnlyList<CustomerDuplicateCandidate>> FindDuplicatesAsync(
         string? email,

@@ -65,9 +65,15 @@ public sealed class IncomeEntry
   public DateTime? UpdatedAt { get; private set; }
 
   /// <summary>Truncated business share; the remainder always goes to <see cref="ProfessionalAmount"/> so the two sum to <see cref="Amount"/> exactly.</summary>
-  public int BusinessAmount => (int)((long)Amount * BusinessPercentageSnapshot / 100);
+  public int BusinessAmount => BusinessShare(Amount, BusinessPercentageSnapshot);
 
   public int ProfessionalAmount => Amount - BusinessAmount;
+
+  /// <summary>
+  /// The split rule of every service amount: the business share is truncated and the professional gets the rest.
+  /// Also used for the commission the business covers on a loyalty reward (ADR-0015 R14).
+  /// </summary>
+  public static int BusinessShare(int amount, int businessPercentage) => (int)((long)amount * businessPercentage / 100);
 
   public static IncomeEntry CreateMembershipSale(int amount, DateOnly occurredOn, Guid createdByUserId, DateTime createdAt)
   {

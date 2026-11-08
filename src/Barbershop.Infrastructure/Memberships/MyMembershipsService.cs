@@ -1,4 +1,5 @@
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Memberships.Admin;
 using Barbershop.Application.Memberships.Portal;
 using Barbershop.Infrastructure.Persistence;
@@ -24,17 +25,22 @@ internal sealed class MyMembershipsService : IMyMembershipsService
         _memberships = memberships;
     }
 
-    public async Task<IReadOnlyList<MyMembershipSummaryView>> GetMineAsync(Guid userId, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<MyMembershipSummaryView>> GetMineAsync(
+        Guid userId, MembershipListQuery query, CancellationToken cancellationToken = default)
     {
+        var page = PageRequest.Create(query.Page, query.PageSize);
+        // Filters are validated even when there is nothing to list, so the answer never depends on the account.
+        _ = ListFilters.ParseOption(query.Status, "status", MembershipDisplayStatuses.All);
+        _ = HistoryRange.ResolveOptional(query.SoldFrom, query.SoldTo, "soldFrom", "soldTo");
         var customerId = await FindLinkedCustomerIdAsync(userId, cancellationToken);
         if (customerId is null)
         {
-            return [];
+            return new PagedResult<MyMembershipSummaryView>([], page.Page, page.PageSize, 0);
         }
 
-        var summaries = await _memberships.GetCustomerMembershipsAsync(customerId.Value, cancellationToken);
-        var result = new List<MyMembershipSummaryView>(summaries.Count);
-        foreach (var summary in summaries)
+        var summaries = await _memberships.GetCustomerMembershipsAsync(customerId.Value, query, cancellationToken);
+        var result = new List<MyMembershipSummaryView>(summaries.Items.Count);
+        foreach (var summary in summaries.Items)
         {
             var detail = await _memberships.GetByIdAsync(summary.Id, cancellationToken);
             int Sum(string origin, Func<MembershipAllowanceView, int> pick)
@@ -53,7 +59,7 @@ internal sealed class MyMembershipsService : IMyMembershipsService
                 detail.Gifts.Count(gift => gift.Status == "PendingDelivery")));
         }
 
-        return result;
+        return new PagedResult<MyMembershipSummaryView>(result, summaries.Page, summaries.PageSize, summaries.TotalCount);
     }
 
     public async Task<MyMembershipView> GetMineByIdAsync(Guid userId, Guid membershipId, CancellationToken cancellationToken = default)

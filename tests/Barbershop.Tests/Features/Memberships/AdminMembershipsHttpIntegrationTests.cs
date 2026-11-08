@@ -16,6 +16,7 @@ using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
+using Barbershop.Domain.Services;
 
 namespace Barbershop.Tests.Features.Memberships;
 
@@ -58,7 +59,7 @@ public sealed class AdminMembershipsHttpIntegrationTests
     Assert.Equal(Today.AddDays(89), membership.EndsOn);
     Assert.Equal("PendingDelivery", Assert.Single(membership.Gifts).Status);
 
-    var list = await context.Client.GetFromJsonAsync<List<CustomerMembershipSummaryView>>($"/api/v1/admin/customers/{customerId}/memberships");
+    var list = await context.Client.GetPageItemsAsync<CustomerMembershipSummaryView>($"/api/v1/admin/customers/{customerId}/memberships");
     Assert.Equal(membership.Id, Assert.Single(list!).Id);
 
     using var activated = await context.Client.PostAsJsonAsync(
@@ -420,7 +421,7 @@ public sealed class AdminMembershipsHttpIntegrationTests
   {
     using var scope = factory.Services.CreateScope();
     var services = scope.ServiceProvider.GetRequiredService<IAdminServicesService>();
-    var haircut = await services.CreateAsync(new ServiceCreateRequest($"Corte {Guid.NewGuid():N}"[..20], 25000, 30));
+    var haircut = await services.CreateAsync(new ServiceCreateRequest($"Corte {Guid.NewGuid():N}"[..20], 25000, 30, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
     var customers = scope.ServiceProvider.GetRequiredService<IAdminCustomersService>();
     var customer = await customers.CreateAsync(adminId, new CustomerCreateRequest("Carlos Pérez", "3001234567", $"{Guid.NewGuid():N}@example.com"));
     var plans = scope.ServiceProvider.GetRequiredService<IAdminMembershipPlansService>();

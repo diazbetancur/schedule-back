@@ -1,8 +1,13 @@
+using Barbershop.Application.Common.Paging;
+
 namespace Barbershop.Application.Appointments;
 
 public interface IStaffAppointmentsService
 {
-  Task<IReadOnlyList<AppointmentView>> GetForCurrentStaffAsync(Guid currentUserId, CancellationToken cancellationToken = default);
+  Task<PagedResult<AppointmentView>> GetForCurrentStaffAsync(Guid currentUserId, StaffAppointmentListQuery query, CancellationToken cancellationToken = default);
+
+  /// <summary>The services the current professional can be booked for right now (their active offerings).</summary>
+  Task<IReadOnlyList<AppointmentServiceOption>> GetServiceOptionsForCurrentStaffAsync(Guid currentUserId, CancellationToken cancellationToken = default);
 
   Task<AppointmentView> CreateForCurrentStaffAsync(Guid currentUserId, StaffManualAppointmentCreateRequest request, CancellationToken cancellationToken = default);
 

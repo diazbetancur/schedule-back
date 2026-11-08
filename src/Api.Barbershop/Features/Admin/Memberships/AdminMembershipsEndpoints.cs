@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Memberships.Admin;
 
 namespace Api.Barbershop.Features.Admin.Memberships;
@@ -15,7 +16,8 @@ public static class AdminMembershipsEndpoints
 
         customerMemberships.MapGet(string.Empty, GetCustomerMembershipsAsync)
             .WithName("GetAdminCustomerMemberships")
-            .Produces<IReadOnlyList<CustomerMembershipSummaryView>>(StatusCodes.Status200OK)
+            .Produces<PagedResult<CustomerMembershipSummaryView>>(StatusCodes.Status200OK)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
@@ -64,7 +66,10 @@ public static class AdminMembershipsEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
+        // The first link is the payment evidence that credits the membership's points (ADR-0014), so it also needs
+        // the critical memberships.payments.confirm permission, checked against the database. Unlinking is unchanged.
         memberships.MapPut("/{membershipId:guid}/income-link", LinkIncomeAsync)
+            .RequireAuthorization(PermissionPolicyNames.MembershipPaymentsConfirm)
             .WithName("LinkAdminMembershipIncome")
             .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -121,9 +126,9 @@ public static class AdminMembershipsEndpoints
         return api;
     }
 
-    private static Task<IReadOnlyList<CustomerMembershipSummaryView>> GetCustomerMembershipsAsync(
-        Guid customerId, IAdminMembershipsService service, CancellationToken cancellationToken)
-        => service.GetCustomerMembershipsAsync(customerId, cancellationToken);
+    private static Task<PagedResult<CustomerMembershipSummaryView>> GetCustomerMembershipsAsync(
+        Guid customerId, [AsParameters] MembershipListQuery query, IAdminMembershipsService service, CancellationToken cancellationToken)
+        => service.GetCustomerMembershipsAsync(customerId, query, cancellationToken);
 
     private static async Task<IResult> SellAsync(
         Guid customerId, MembershipSaleRequest request, ClaimsPrincipal user, IAdminMembershipsService service, CancellationToken cancellationToken)

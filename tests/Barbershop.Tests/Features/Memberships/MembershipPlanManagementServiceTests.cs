@@ -1,6 +1,7 @@
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Memberships.Admin;
 using Barbershop.Domain.Services;
+using Barbershop.Infrastructure.Identity;
 using Barbershop.Infrastructure.Memberships;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -24,7 +25,7 @@ public sealed class MembershipPlanManagementServiceTests : IDisposable
         .Options;
 
     _dbContext = new AppDbContext(options);
-    _service = new MembershipPlanManagementService(_dbContext, TimeProvider.System);
+    _service = new MembershipPlanManagementService(_dbContext, TimeProvider.System, new NullCurrentUserAccessor());
 
     _haircut = new Service("Corte", 25000, DateTime.UtcNow, 30);
     _beard = new Service("Barba", 15000, DateTime.UtcNow, 30);

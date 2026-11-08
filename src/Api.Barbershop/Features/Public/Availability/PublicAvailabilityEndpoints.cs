@@ -22,7 +22,9 @@ public static class PublicAvailabilityEndpoints
       Guid staffProfileId,
       DateOnly from,
       DateOnly to,
+      Guid? generalServiceId,
+      int? durationMinutes,
       IPublicAvailabilityService service,
       CancellationToken cancellationToken)
-      => service.GetSlotsAsync(staffProfileId, from, to, cancellationToken);
+      => service.GetSlotsAsync(staffProfileId, from, to, generalServiceId, durationMinutes, cancellationToken);
 }

@@ -190,7 +190,21 @@ public sealed record CustomerMembershipDetailView(
     IReadOnlyList<MembershipEventView> Events,
     IReadOnlyList<MembershipConsumptionView> Consumptions,
     IReadOnlyList<MembershipGiftDeliveryView> GiftDeliveries,
-    DateTime CreatedAt);
+    DateTime CreatedAt,
+    MembershipLoyaltyView? Loyalty = null);
+
+/// <summary>
+/// Loyalty side of a membership. <c>PointsSnapshot</c> is null for memberships sold before the wallet existed
+/// (<c>PredatesWallet</c>), unlike a newer one whose plan had 0 points. <c>Decision</c> is taken once, at the first
+/// income link; null means no income was linked yet.
+/// </summary>
+public sealed record MembershipLoyaltyView(
+    int? PointsSnapshot,
+    bool PredatesWallet,
+    string? Decision,
+    DateTime? DecidedAt,
+    int AccruedPoints,
+    int WithdrawnPoints);
 
 /// <summary>A membership-sale income an admin can link, with the memberships it already covers.</summary>
 public sealed record MembershipIncomeCandidateView(

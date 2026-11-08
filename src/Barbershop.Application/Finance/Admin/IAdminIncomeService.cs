@@ -2,7 +2,7 @@ namespace Barbershop.Application.Finance.Admin;
 
 public interface IAdminIncomeService
 {
-    Task<IReadOnlyList<IncomeEntryView>> GetAsync(DateOnly? date, Guid? staffProfileId, CancellationToken cancellationToken = default);
+    Task<IncomeEntriesPage> GetAsync(IncomeListQuery query, CancellationToken cancellationToken = default);
 
     Task<IncomeEntryView> CreateAsync(Guid currentUserId, IncomeEntryCreateRequest request, CancellationToken cancellationToken = default);
 

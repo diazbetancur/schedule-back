@@ -57,7 +57,7 @@ public sealed class AdminCustomersHttpIntegrationTests
     Assert.Contains(duplicates!, candidate => candidate.Id == source.Id);
     Assert.DoesNotContain(duplicates!, candidate => candidate.Id == target.Id);
 
-    var search = await context.Client.GetFromJsonAsync<List<CustomerListItem>>("/api/v1/admin/customers?q=carlos");
+    var search = await context.Client.GetPageItemsAsync<CustomerListItem>("/api/v1/admin/customers?q=carlos");
     Assert.Equal(2, search!.Count);
 
     var candidates = await context.Client.GetFromJsonAsync<List<CustomerAccountCandidate>>("/api/v1/admin/customers/account-candidates");
@@ -100,7 +100,7 @@ public sealed class AdminCustomersHttpIntegrationTests
     Assert.Equal(customerAccount.UserId, preview.AccountToTransfer!.UserId);
 
     using var mergeResponse = await context.Client.PostAsJsonAsync(
-        $"/api/v1/admin/customers/{target.Id}/merge", new CustomerMergeRequest(source.Id));
+        $"/api/v1/admin/customers/{target.Id}/merge", new CustomerMergeRequest(source.Id, preview.PreviewToken));
     Assert.Equal(HttpStatusCode.OK, mergeResponse.StatusCode);
     var merged = (await mergeResponse.Content.ReadFromJsonAsync<CustomerDetailView>())!;
     Assert.Equal(customerAccount.UserId, merged.LinkedAccount!.UserId);
@@ -108,7 +108,7 @@ public sealed class AdminCustomersHttpIntegrationTests
     var sourceAfter = await context.Client.GetFromJsonAsync<CustomerDetailView>($"/api/v1/admin/customers/{source.Id}");
     Assert.Equal(target.Id, sourceAfter!.MergedIntoCustomerId);
 
-    var searchAfter = await context.Client.GetFromJsonAsync<List<CustomerListItem>>("/api/v1/admin/customers?q=carlos");
+    var searchAfter = await context.Client.GetPageItemsAsync<CustomerListItem>("/api/v1/admin/customers?q=carlos");
     Assert.Equal(target.Id, Assert.Single(searchAfter!).Id);
 
     using var editMerged = await context.Client.PutAsJsonAsync(

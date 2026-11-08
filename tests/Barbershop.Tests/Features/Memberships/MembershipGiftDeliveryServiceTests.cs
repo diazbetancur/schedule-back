@@ -6,10 +6,13 @@ using Barbershop.Domain.Finance;
 using Barbershop.Domain.Services;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Customers;
+using Barbershop.Infrastructure.Identity;
 using Barbershop.Infrastructure.Memberships;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+
+using Barbershop.Tests.Infrastructure;
 
 namespace Barbershop.Tests.Features.Memberships;
 
@@ -40,7 +43,7 @@ public sealed class MembershipGiftDeliveryServiceTests : IDisposable
     _memberships = new MembershipSalesService(_dbContext, TimeProvider.System);
     _ledger = new MembershipLedgerService(_dbContext, _memberships, TimeProvider.System);
     _deliveries = new MembershipGiftDeliveryService(_dbContext, _memberships, TimeProvider.System);
-    _plans = new MembershipPlanManagementService(_dbContext, TimeProvider.System);
+    _plans = new MembershipPlanManagementService(_dbContext, TimeProvider.System, new NullCurrentUserAccessor());
     _customers = new CustomerManagementService(_dbContext, TimeProvider.System);
 
     var admin = new User("Admin Principal", "admin@example.com", "hash", DateTime.UtcNow);
@@ -248,7 +251,7 @@ public sealed class MembershipGiftDeliveryServiceTests : IDisposable
     var membership = await _memberships.SellAsync(_adminId, source.Id, new MembershipSaleRequest(plan.Id, _today, ActivateNow: true));
     await DeliverAsync(membership.Id, Gift(membership, "Gorra").Id);
 
-    await _customers.MergeAsync(_adminId, target.Id, new CustomerMergeRequest(source.Id));
+    await _customers.MergeWithPreviewAsync(_adminId, target.Id, source.Id);
 
     var moved = await _memberships.GetByIdAsync(membership.Id);
     Assert.Equal(target.Id, moved.CustomerId);

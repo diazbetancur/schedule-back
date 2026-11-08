@@ -166,11 +166,9 @@ internal sealed class PublicStaffService : IPublicStaffService
       return [];
     }
 
-    var services = await _dbContext.StaffServices
-        .AsNoTracking()
-        .Where(service => staffProfileIds.Contains(service.StaffProfileId) && service.IsActive)
-        .OrderBy(service => service.Name)
-        .ToListAsync(cancellationToken);
+    // ADR-0016 B2: what a professional offers is their bookable offering of general services (the legacy
+    // staff_services table is no longer read). Duration only, never a price.
+    var services = await _dbContext.GetBookableAsync(staffProfileIds, cancellationToken);
 
     return services
         .GroupBy(service => service.StaffProfileId)
@@ -209,14 +207,14 @@ internal sealed class PublicStaffService : IPublicStaffService
             decimal.Round(summary.AverageRating, 2, MidpointRounding.AwayFromZero)));
   }
 
-  private static PublicStaffServiceResponse MapService(StaffService service)
+  private static PublicStaffServiceResponse MapService(StaffOfferingQueries.BookableOffering offering)
       => new(
-          service.Id,
-          service.Name,
-          service.Description,
-          service.DurationMinutes,
-          service.Price,
-          service.IsActive);
+          offering.GeneralServiceId,
+          offering.Name,
+          offering.Description,
+          offering.CategoryId,
+          offering.CategoryName,
+          offering.DurationMinutes);
 
   private static string? ResolveMediaUrl(Guid? mediaAssetId, IReadOnlyDictionary<Guid, string?> mediaUrls)
   {

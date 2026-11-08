@@ -1,6 +1,7 @@
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Appointments;
 using Barbershop.Application.Auth;
+using Barbershop.Application.Common.Paging;
 using System.Security.Claims;
 
 namespace Api.Barbershop.Features.Staff.Appointments;
@@ -15,7 +16,15 @@ public static class StaffAppointmentsEndpoints
 
     appointments.MapGet(string.Empty, GetForCurrentStaffAsync)
         .WithName("GetCurrentStaffAppointments")
-        .Produces<IReadOnlyList<AppointmentView>>(StatusCodes.Status200OK)
+        .Produces<PagedResult<AppointmentView>>(StatusCodes.Status200OK)
+        .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden)
+        .ProducesProblem(StatusCodes.Status404NotFound);
+
+    appointments.MapGet("/service-options", GetServiceOptionsForCurrentStaffAsync)
+        .WithName("GetCurrentStaffAppointmentServiceOptions")
+        .Produces<IReadOnlyList<AppointmentServiceOption>>(StatusCodes.Status200OK)
         .ProducesProblem(StatusCodes.Status401Unauthorized)
         .ProducesProblem(StatusCodes.Status403Forbidden)
         .ProducesProblem(StatusCodes.Status404NotFound);
@@ -49,11 +58,18 @@ public static class StaffAppointmentsEndpoints
     return api;
   }
 
-  private static Task<IReadOnlyList<AppointmentView>> GetForCurrentStaffAsync(
+  private static Task<PagedResult<AppointmentView>> GetForCurrentStaffAsync(
+      ClaimsPrincipal user,
+      [AsParameters] StaffAppointmentListQuery query,
+      IStaffAppointmentsService service,
+      CancellationToken cancellationToken)
+      => service.GetForCurrentStaffAsync(user.GetRequiredUserId(), query, cancellationToken);
+
+  private static Task<IReadOnlyList<AppointmentServiceOption>> GetServiceOptionsForCurrentStaffAsync(
       ClaimsPrincipal user,
       IStaffAppointmentsService service,
       CancellationToken cancellationToken)
-      => service.GetForCurrentStaffAsync(user.GetRequiredUserId(), cancellationToken);
+      => service.GetServiceOptionsForCurrentStaffAsync(user.GetRequiredUserId(), cancellationToken);
 
   private static async Task<IResult> CreateForCurrentStaffAsync(
       ClaimsPrincipal user,

@@ -15,6 +15,8 @@ using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.Staff;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Barbershop.Tests.Infrastructure;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
@@ -38,6 +40,7 @@ public sealed class CustomerAppointmentsTests : IDisposable
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning))
             .Options;
 
         _dbContext = new AppDbContext(options);
@@ -85,7 +88,7 @@ public sealed class CustomerAppointmentsTests : IDisposable
 
         var created = await _customerAppointmentsService.CreateAsync(
             customer.Id,
-            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 0), "Window seat"));
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 0), "Window seat"));
 
         Assert.Equal(staff.StaffProfileId, created.StaffProfileId);
         Assert.Equal(customer.Id, created.CustomerUserId);
@@ -95,7 +98,7 @@ public sealed class CustomerAppointmentsTests : IDisposable
         Assert.Equal("book-customer@example.com", created.CustomerEmail);
         Assert.Equal("+5491100000001", created.CustomerPhone);
 
-        var slots = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay);
+        var slots = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
         Assert.DoesNotContain(slots.Slots, slot => slot.StartAtUtc == ToUtc(nextDay, 9, 0));
     }
 
@@ -110,7 +113,7 @@ public sealed class CustomerAppointmentsTests : IDisposable
         var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
             _customerAppointmentsService.CreateAsync(
                 customer.Id,
-                new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(CurrentDate, 10, 0), null)));
+                new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(CurrentDate, 10, 0), null)));
 
         Assert.Contains("startsAtUtc", exception.Errors.Keys);
     }
@@ -131,16 +134,16 @@ public sealed class CustomerAppointmentsTests : IDisposable
         await Assert.ThrowsAsync<ConflictException>(() =>
             _customerAppointmentsService.CreateAsync(
                 firstCustomer.Id,
-                new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 0), null)));
+                new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 0), null)));
 
         await _customerAppointmentsService.CreateAsync(
             firstCustomer.Id,
-            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 30), null));
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 30), null));
 
         await Assert.ThrowsAsync<ConflictException>(() =>
             _customerAppointmentsService.CreateAsync(
                 secondCustomer.Id,
-                new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 30), null)));
+                new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 30), null)));
     }
 
     [Fact]
@@ -155,20 +158,21 @@ public sealed class CustomerAppointmentsTests : IDisposable
 
         await _customerAppointmentsService.CreateAsync(
             firstCustomer.Id,
-            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 0), null));
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 0), null));
 
         await _customerAppointmentsService.CreateAsync(
             firstCustomer.Id,
-            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 30), null));
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 30), null));
 
         await _customerAppointmentsService.CreateAsync(
             secondCustomer.Id,
-            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 10, 0), null));
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 10, 0), null));
 
-        var history = await _customerAppointmentsService.GetHistoryAsync(firstCustomer.Id);
+        // Without a scope the list is a history window (the last 30 days by default); any period can be asked for.
+        var history = await _customerAppointmentsService.GetHistoryAsync(firstCustomer.Id, new CustomerAppointmentListQuery(From: nextDay));
 
-        Assert.Equal(2, history.Count);
-        Assert.All(history, item => Assert.Equal(firstCustomer.Id, item.CustomerUserId));
+        Assert.Equal(2, history.TotalCount);
+        Assert.All(history.Items, item => Assert.Equal(firstCustomer.Id, item.CustomerUserId));
     }
 
     [Fact]
@@ -183,7 +187,7 @@ public sealed class CustomerAppointmentsTests : IDisposable
 
         var appointment = await _customerAppointmentsService.CreateAsync(
             owner.Id,
-            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 0), null));
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 0), null));
 
         await Assert.ThrowsAsync<KeyNotFoundException>(() =>
             _customerAppointmentsService.CancelAsync(intruder.Id, appointment.Id));
@@ -200,16 +204,16 @@ public sealed class CustomerAppointmentsTests : IDisposable
 
         var appointment = await _customerAppointmentsService.CreateAsync(
             customer.Id,
-            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 0), null));
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 0), null));
 
-        var beforeCancel = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay);
+        var beforeCancel = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
         Assert.DoesNotContain(beforeCancel.Slots, slot => slot.StartAtUtc == ToUtc(nextDay, 9, 0));
 
         var cancelled = await _customerAppointmentsService.CancelAsync(customer.Id, appointment.Id);
 
         Assert.Equal(AppointmentStatus.Cancelled, cancelled.Status);
 
-        var afterCancel = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay);
+        var afterCancel = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
         Assert.Contains(afterCancel.Slots, slot => slot.StartAtUtc == ToUtc(nextDay, 9, 0));
     }
 
@@ -224,7 +228,7 @@ public sealed class CustomerAppointmentsTests : IDisposable
 
         var appointment = await _customerAppointmentsService.CreateAsync(
             customer.Id,
-            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 0), "Keep this note"));
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 0), "Keep this note"));
 
         var stored = await _dbContext.Appointments.SingleAsync(item => item.Id == appointment.Id);
         stored.UpdateStatus(AppointmentStatus.Confirmed, CurrentUtc.UtcDateTime);
@@ -241,7 +245,7 @@ public sealed class CustomerAppointmentsTests : IDisposable
         Assert.Equal("Keep this note", moved.Notes);
         Assert.Equal("Move Staff", moved.StaffName);
 
-        var slots = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay);
+        var slots = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
         Assert.Contains(slots.Slots, slot => slot.StartAtUtc == ToUtc(nextDay, 9, 0));
         Assert.DoesNotContain(slots.Slots, slot => slot.StartAtUtc == ToUtc(nextDay, 10, 0));
     }
@@ -258,11 +262,11 @@ public sealed class CustomerAppointmentsTests : IDisposable
 
         var appointment = await _customerAppointmentsService.CreateAsync(
             firstCustomer.Id,
-            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 0), null));
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 0), null));
 
         await _customerAppointmentsService.CreateAsync(
             secondCustomer.Id,
-            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 10, 0), null));
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 10, 0), null));
 
         await Assert.ThrowsAsync<ConflictException>(() =>
             _customerAppointmentsService.RescheduleAsync(
@@ -283,7 +287,7 @@ public sealed class CustomerAppointmentsTests : IDisposable
 
         var appointment = await _customerAppointmentsService.CreateAsync(
             owner.Id,
-            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 0), null));
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 0), null));
 
         await Assert.ThrowsAsync<KeyNotFoundException>(() =>
             _customerAppointmentsService.RescheduleAsync(
@@ -303,7 +307,7 @@ public sealed class CustomerAppointmentsTests : IDisposable
 
         var active = await _customerAppointmentsService.CreateAsync(
             customer.Id,
-            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 0), null));
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 0), null));
 
         var pastTarget = await Assert.ThrowsAsync<ValidationProblemException>(() =>
             _customerAppointmentsService.RescheduleAsync(
@@ -314,7 +318,7 @@ public sealed class CustomerAppointmentsTests : IDisposable
 
         var cancelled = await _customerAppointmentsService.CreateAsync(
             customer.Id,
-            new CustomerAppointmentCreateRequest(staff.StaffProfileId, ToUtc(nextDay, 9, 30), null));
+            new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 30), null));
         await _customerAppointmentsService.CancelAsync(customer.Id, cancelled.Id);
 
         var notActive = await Assert.ThrowsAsync<ValidationProblemException>(() =>
@@ -325,11 +329,75 @@ public sealed class CustomerAppointmentsTests : IDisposable
         Assert.Contains("appointmentId", notActive.Errors.Keys);
     }
 
+    [Fact]
+    public async Task CreateAsync_StoresTheServiceAndItsDuration_OnlyOnTheGrid_AndOnlyForOfferedServices()
+    {
+        var staff = await CreateStaffAsync("grid-staff@example.com", "Grid Staff", "Grid Staff");
+        var customer = await CreateCustomerAsync("grid-customer@example.com", "Grid Customer", null);
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 11, 0)]);
+        var color = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Color");
+        await ServiceOfferingTestData.OfferAsync(_dbContext, staff.StaffProfileId, color.Id, 45);
+        var notOffered = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Barba");
+
+        // 9:05 is not on the 15-minute grid of the rule (F1); 10:30 + 45 minutes does not fit before 11:00.
+        await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.CreateAsync(
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, color.Id, ToUtc(nextDay, 9, 5), null)));
+        await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.CreateAsync(
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, color.Id, ToUtc(nextDay, 10, 30), null)));
+        await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.CreateAsync(
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, notOffered.Id, ToUtc(nextDay, 9, 0), null)));
+        var missing = await Assert.ThrowsAsync<ValidationProblemException>(() => _customerAppointmentsService.CreateAsync(
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Guid.Empty, ToUtc(nextDay, 9, 0), null)));
+        Assert.Contains("generalServiceId", missing.Errors.Keys);
+
+        var created = await _customerAppointmentsService.CreateAsync(
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, color.Id, ToUtc(nextDay, 9, 15), null));
+
+        Assert.Equal((color.Id, "Color", 45), (created.GeneralServiceId!.Value, created.GeneralServiceName, created.ReservedDurationMinutes!.Value));
+        Assert.Equal(ToUtc(nextDay, 10, 0), created.EndsAtUtc);
+
+        // A 30-minute Corte overlapping the color is refused; right after it, it is accepted.
+        await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.CreateAsync(
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 45), null)));
+        await _customerAppointmentsService.CreateAsync(
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 10, 0), null));
+    }
+
+    [Fact]
+    public async Task RescheduleAsync_KeepsTheReservedDuration_EvenIfTheOfferingChanged()
+    {
+        var staff = await CreateStaffAsync("frozen-staff@example.com", "Frozen Staff", "Frozen Staff");
+        var customer = await CreateCustomerAsync("frozen-customer@example.com", "Frozen Customer", null);
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 12, 0)]);
+
+        var appointment = await _customerAppointmentsService.CreateAsync(
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 0), null));
+        var offering = await _dbContext.StaffServiceOfferings.SingleAsync(item => item.StaffProfileId == staff.StaffProfileId);
+        offering.Update(90, true, CurrentUtc.UtcDateTime);
+        await _dbContext.SaveChangesAsync();
+
+        var stored = await _dbContext.Appointments.AsNoTracking().SingleAsync(item => item.Id == appointment.Id);
+        Assert.Equal((30, ToUtc(nextDay, 9, 30)), (stored.ReservedDurationMinutes!.Value, stored.EndsAt));
+
+        var moved = await _customerAppointmentsService.RescheduleAsync(
+            customer.Id, appointment.Id, new CustomerAppointmentRescheduleRequest(ToUtc(nextDay, 11, 15)));
+        Assert.Equal((30, ToUtc(nextDay, 11, 45), Corte), (moved.ReservedDurationMinutes!.Value, moved.EndsAtUtc, moved.GeneralServiceId!.Value));
+
+        // Off the grid is refused for rescheduling too.
+        await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.RescheduleAsync(
+            customer.Id, appointment.Id, new CustomerAppointmentRescheduleRequest(ToUtc(nextDay, 10, 10))));
+    }
+
     private static AvailabilityRuleRequest Rule(DayOfWeek dayOfWeek, int startHour, int startMinute, int endHour, int endMinute)
         => new((int)dayOfWeek, new TimeOnly(startHour, startMinute), new TimeOnly(endHour, endMinute), true);
 
+    private static Guid Corte => ServiceOfferingTestData.Corte;
+
     private async Task<StaffManagementView> CreateStaffAsync(string email, string fullName, string displayName)
-        => await _adminStaffService.CreateAsync(new AdminStaffCreateRequest(
+    {
+        var staff = await _adminStaffService.CreateAsync(new AdminStaffCreateRequest(
             fullName,
             email,
             displayName,
@@ -340,6 +408,9 @@ public sealed class CustomerAppointmentsTests : IDisposable
             null,
             null,
             true));
+        await ServiceOfferingTestData.OfferCorteAsync(_dbContext, staff.StaffProfileId);
+        return staff;
+    }
 
     private async Task<User> CreateCustomerAsync(string email, string fullName, string? phoneNumber)
     {

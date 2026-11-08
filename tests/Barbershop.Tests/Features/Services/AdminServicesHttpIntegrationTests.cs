@@ -9,6 +9,7 @@ using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
+using Barbershop.Domain.Services;
 
 namespace Barbershop.Tests.Features.Services;
 
@@ -40,7 +41,7 @@ public sealed class AdminServicesHttpIntegrationTests
     AuthenticateAs(context.Client, admin.AccessToken);
 
     using var createResponse = await context.Client.PostAsJsonAsync(
-        "/api/v1/admin/services", new ServiceCreateRequest("Corte de Cabello", 25000, BusinessPercentage: 20));
+        "/api/v1/admin/services", new ServiceCreateRequest("Corte de Cabello", 25000, BusinessPercentage: 20, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
     Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
     var created = await createResponse.Content.ReadFromJsonAsync<ServiceView>();
     Assert.NotNull(created);
@@ -51,7 +52,7 @@ public sealed class AdminServicesHttpIntegrationTests
 
     using var listResponse = await context.Client.GetAsync("/api/v1/admin/services");
     Assert.Equal(HttpStatusCode.OK, listResponse.StatusCode);
-    var list = await listResponse.Content.ReadFromJsonAsync<List<ServiceView>>();
+    var list = await listResponse.Content.ReadPageItemsAsync<ServiceView>();
     Assert.Contains(list!, s => s.Id == created.Id);
 
     using var updateResponse = await context.Client.PutAsJsonAsync(
@@ -72,7 +73,7 @@ public sealed class AdminServicesHttpIntegrationTests
     Assert.Equal(HttpStatusCode.NoContent, deleteResponse.StatusCode);
 
     using var listAfterDelete = await context.Client.GetAsync("/api/v1/admin/services");
-    var listAfter = await listAfterDelete.Content.ReadFromJsonAsync<List<ServiceView>>();
+    var listAfter = await listAfterDelete.Content.ReadPageItemsAsync<ServiceView>();
     Assert.DoesNotContain(listAfter!, s => s.Id == created.Id);
   }
 
@@ -89,11 +90,11 @@ public sealed class AdminServicesHttpIntegrationTests
     AuthenticateAs(context.Client, admin.AccessToken);
 
     using var first = await context.Client.PostAsJsonAsync(
-        "/api/v1/admin/services", new ServiceCreateRequest("Barba", 10000));
+        "/api/v1/admin/services", new ServiceCreateRequest("Barba", 10000, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
     Assert.Equal(HttpStatusCode.Created, first.StatusCode);
 
     using var second = await context.Client.PostAsJsonAsync(
-        "/api/v1/admin/services", new ServiceCreateRequest("barba", 12000));
+        "/api/v1/admin/services", new ServiceCreateRequest("barba", 12000, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
     Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
   }
 
@@ -110,7 +111,7 @@ public sealed class AdminServicesHttpIntegrationTests
     AuthenticateAs(context.Client, customer.AccessToken);
 
     using var response = await context.Client.PostAsJsonAsync(
-        "/api/v1/admin/services", new ServiceCreateRequest("Tinte", 40000));
+        "/api/v1/admin/services", new ServiceCreateRequest("Tinte", 40000, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
     Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
   }
 
@@ -125,6 +126,93 @@ public sealed class AdminServicesHttpIntegrationTests
 
     using var response = await context.Client.GetAsync("/api/v1/admin/services");
     Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+  }
+
+  [Fact]
+  public async Task Admin_ManagesCategoriesAndGeneralServices_AndMovesARate()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAndPromoteAdminAsync(context, "catalog");
+    AuthenticateAs(context.Client, admin.AccessToken);
+
+    // The migration seeded Barbería and Corte.
+    var categories = await context.Client.GetFromJsonAsync<List<ServiceCategoryView>>("/api/v1/admin/service-categories");
+    Assert.Equal([ServiceCatalogDefaults.BarberiaCategoryId], categories!.Select(category => category.Id));
+
+    using var createCategory = await context.Client.PostAsJsonAsync(
+        "/api/v1/admin/service-categories", new ServiceCategoryCreateRequest("Cuidado facial", 1));
+    Assert.Equal(HttpStatusCode.Created, createCategory.StatusCode);
+    var care = (await createCategory.Content.ReadFromJsonAsync<ServiceCategoryView>())!;
+
+    using var createGeneral = await context.Client.PostAsJsonAsync(
+        "/api/v1/admin/general-services", new GeneralServiceCreateRequest(care.Id, "Limpieza facial", "Limpieza profunda", 0));
+    Assert.Equal(HttpStatusCode.Created, createGeneral.StatusCode);
+    var cleaning = (await createGeneral.Content.ReadFromJsonAsync<GeneralServiceView>())!;
+    Assert.Equal(("Cuidado facial", "Limpieza facial"), (cleaning.CategoryName, cleaning.Name));
+
+    // Unique per category: an equivalent name in the same category is a conflict, the same name elsewhere is fine.
+    using var duplicate = await context.Client.PostAsJsonAsync(
+        "/api/v1/admin/general-services", new GeneralServiceCreateRequest(care.Id, " LIMPIEZA FACIAL "));
+    Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+    using var sameNameElsewhere = await context.Client.PostAsJsonAsync(
+        "/api/v1/admin/general-services", new GeneralServiceCreateRequest(care.Id, "Corte"));
+    Assert.Equal(HttpStatusCode.Created, sameNameElsewhere.StatusCode);
+
+    // A rate must name its general service; then it can be moved to another one.
+    using var withoutGeneral = await context.Client.PostAsJsonAsync("/api/v1/admin/services", new { name = "Mascarilla", basePrice = 30000 });
+    Assert.Equal(HttpStatusCode.UnprocessableEntity, withoutGeneral.StatusCode);
+    using var createRate = await context.Client.PostAsJsonAsync(
+        "/api/v1/admin/services", new ServiceCreateRequest("Mascarilla", 30000, 40, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
+    var rate = (await createRate.Content.ReadFromJsonAsync<ServiceView>())!;
+    using var moveRate = await context.Client.PutAsJsonAsync(
+        $"/api/v1/admin/services/{rate.Id}", new ServiceUpdateRequest("Mascarilla", 30000, 40, GeneralServiceId: cleaning.Id));
+    Assert.Equal(HttpStatusCode.OK, moveRate.StatusCode);
+    var moved = (await moveRate.Content.ReadFromJsonAsync<ServiceView>())!;
+    Assert.Equal((rate.Id, cleaning.Id, "Limpieza facial", care.Id, "Cuidado facial"),
+        (moved.Id, moved.GeneralServiceId, moved.GeneralServiceName, moved.CategoryId, moved.CategoryName));
+
+    // Dependencies block deactivation and deletion with a conflict.
+    using var deactivateCategory = await context.Client.PatchAsJsonAsync(
+        $"/api/v1/admin/service-categories/{care.Id}/status", new ServiceCategoryStatusUpdateRequest(false));
+    Assert.Equal(HttpStatusCode.Conflict, deactivateCategory.StatusCode);
+    using var deleteGeneral = await context.Client.DeleteAsync($"/api/v1/admin/general-services/{cleaning.Id}");
+    Assert.Equal(HttpStatusCode.Conflict, deleteGeneral.StatusCode);
+
+    var filtered = await context.Client.GetFromJsonAsync<List<GeneralServiceView>>($"/api/v1/admin/general-services?categoryId={care.Id}");
+    Assert.Equal(["Corte", "Limpieza facial"], filtered!.Select(service => service.Name).Order());
+    var withCounts = await context.Client.GetFromJsonAsync<GeneralServiceView>($"/api/v1/admin/general-services/{cleaning.Id}");
+    Assert.Equal((1, 1), (withCounts!.RateCount, withCounts.ActiveRateCount));
+  }
+
+  [Fact]
+  public async Task TheCatalogMasters_AreForAdministratorsOnly()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    using (var anonymous = await context.Client.GetAsync("/api/v1/admin/service-categories"))
+    {
+      Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+    }
+
+    var customer = await RegisterCustomerAsync(context.Client, "catalog-forbidden");
+    AuthenticateAs(context.Client, customer.AccessToken);
+    using (var categories = await context.Client.GetAsync("/api/v1/admin/service-categories"))
+    {
+      Assert.Equal(HttpStatusCode.Forbidden, categories.StatusCode);
+    }
+
+    using var general = await context.Client.PostAsJsonAsync(
+        "/api/v1/admin/general-services", new GeneralServiceCreateRequest(ServiceCatalogDefaults.BarberiaCategoryId, "Barba"));
+    Assert.Equal(HttpStatusCode.Forbidden, general.StatusCode);
   }
 
   private async Task<AuthSession> RegisterAndPromoteAdminAsync(TestHttpContext context, string label)

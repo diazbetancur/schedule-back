@@ -1,9 +1,12 @@
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Memberships.Admin;
 using Barbershop.Domain.Common;
 using Barbershop.Domain.Customers;
 using Barbershop.Domain.Finance;
+using Barbershop.Domain.Loyalty;
 using Barbershop.Domain.Memberships;
+using Barbershop.Infrastructure.Loyalty;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -17,32 +20,76 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
     private const string ConcurrencyConflictMessage =
         "La membresía o el cliente fueron modificados por otra operación (por ejemplo, otra venta en curso). Recarga e intenta de nuevo.";
 
+    private const string MovedByMergeMessage =
+        "La membresía pasó a otro cliente por una fusión mientras la operación esperaba. Recarga e intenta de nuevo.";
+
     private readonly AppDbContext _dbContext;
     private readonly TimeProvider _timeProvider;
+    private readonly LoyaltyWalletService _wallet;
 
     public MembershipSalesService(AppDbContext dbContext, TimeProvider timeProvider)
     {
         _dbContext = dbContext;
         _timeProvider = timeProvider;
+        _wallet = new LoyaltyWalletService(dbContext, timeProvider);
     }
 
-    public async Task<IReadOnlyList<CustomerMembershipSummaryView>> GetCustomerMembershipsAsync(Guid customerId, CancellationToken cancellationToken = default)
+    /// <summary>Newest first (registration time, then id). The status filter uses the displayed status.</summary>
+    public async Task<PagedResult<CustomerMembershipSummaryView>> GetCustomerMembershipsAsync(
+        Guid customerId, MembershipListQuery query, CancellationToken cancellationToken = default)
     {
+        var page = PageRequest.Create(query.Page, query.PageSize);
+        var status = ListFilters.ParseOption(query.Status, "status", MembershipDisplayStatuses.All);
+        // Memberships are current items, not a history: no default date, so a membership sold long ago that is still
+        // active is never hidden. A sale range, when given, is limited like every date filter (30 days).
+        var soldRange = HistoryRange.ResolveOptional(query.SoldFrom, query.SoldTo, "soldFrom", "soldTo");
+
         if (!await _dbContext.Customers.AnyAsync(customer => customer.Id == customerId, cancellationToken))
         {
             throw new NotFoundException("El cliente no existe.");
         }
 
-        var memberships = await _dbContext.CustomerMemberships
+        var today = Today();
+        var memberships = _dbContext.CustomerMemberships.AsNoTracking()
+            .Where(membership => membership.CustomerId == customerId);
+
+        if (query.PlanId is { } planId)
+        {
+            memberships = memberships.Where(membership => membership.MembershipPlanId == planId);
+        }
+
+        if (soldRange?.From is { } soldFrom)
+        {
+            memberships = memberships.Where(membership => membership.SoldOn >= soldFrom);
+        }
+
+        if (soldRange?.To is { } soldTo)
+        {
+            memberships = memberships.Where(membership => membership.SoldOn <= soldTo);
+        }
+
+        // Same rules as DisplayStatus, translated to SQL.
+        memberships = status switch
+        {
+            MembershipDisplayStatuses.Annulled => memberships.Where(m => m.Status == MembershipStatus.Annulled),
+            MembershipDisplayStatuses.PendingActivation => memberships.Where(m => m.Status == MembershipStatus.PendingActivation),
+            MembershipDisplayStatuses.Scheduled => memberships.Where(m => m.Status == MembershipStatus.Active && today < m.StartsOn),
+            MembershipDisplayStatuses.Expired => memberships.Where(m => m.Status == MembershipStatus.Active && today >= m.StartsOn && today > m.EndsOn),
+            MembershipDisplayStatuses.Active => memberships.Where(m => m.Status == MembershipStatus.Active && today >= m.StartsOn && today <= m.EndsOn),
+            _ => memberships,
+        };
+
+        return await memberships
             .Include(membership => membership.Allowances)
             .Include(membership => membership.Gifts)
-            .Where(membership => membership.CustomerId == customerId)
             .OrderByDescending(membership => membership.CreatedAt)
+            .ThenByDescending(membership => membership.Id)
             .AsSplitQuery()
-            .ToListAsync(cancellationToken);
+            .ToPagedResultAsync(page, membership => MapSummary(membership, today), cancellationToken);
+    }
 
-        var today = Today();
-        return memberships.Select(membership => new CustomerMembershipSummaryView(
+    private static CustomerMembershipSummaryView MapSummary(CustomerMembership membership, DateOnly today)
+        => new(
                 membership.Id,
                 membership.CustomerId,
                 membership.PlanName,
@@ -57,9 +104,7 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
                 membership.Allowances.Where(line => line.Origin == MembershipAllowanceOrigin.Gift).Sum(line => line.GrantedQuantity),
                 membership.Gifts.Count(gift => gift.Kind == MembershipGiftKind.Physical),
                 membership.IncomeEntryId,
-                membership.CreatedAt))
-            .ToArray();
-    }
+                membership.CreatedAt);
 
     public async Task<CustomerMembershipDetailView> GetByIdAsync(Guid membershipId, CancellationToken cancellationToken = default)
     {
@@ -214,7 +259,23 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             });
         }
 
+        var holderId = await _dbContext.CustomerMemberships.AsNoTracking()
+            .Where(candidate => candidate.Id == membershipId)
+            .Select(candidate => (Guid?)candidate.CustomerId)
+            .SingleOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException("La membresía no existe.");
+
+        // One transaction: the annulment, the withdrawal of its usable points and the balances, or nothing.
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await _wallet.LockCustomersAsync([holderId], cancellationToken);
+        await LockMembershipsAsync([membershipId], cancellationToken);
+
         var membership = await LoadAsync(membershipId, cancellationToken);
+        if (membership.CustomerId != holderId)
+        {
+            throw new ConflictException(MovedByMergeMessage);
+        }
+
         if (membership.Status == MembershipStatus.Annulled)
         {
             throw new ConflictException("La membresía ya está anulada.");
@@ -224,8 +285,11 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         membership.Annul(currentUserId, reason, utcNow);
         _dbContext.MembershipEvents.Add(new MembershipEvent(membership.Id, MembershipEventType.Annulled, currentUserId, utcNow, reason));
+        await _wallet.WithdrawForMembershipAnnulmentInCurrentTransactionAsync(
+            membership.Id, membership.CustomerId, reason, currentUserId, utcNow, cancellationToken);
 
         await SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
         return await MapDetailAsync(membership, cancellationToken);
     }
 
@@ -255,21 +319,32 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             .Prepend(membershipId)
             .Distinct()
             .ToArray();
+        var holders = await _dbContext.CustomerMemberships.AsNoTracking()
+            .Where(candidate => membershipIds.Contains(candidate.Id))
+            .ToDictionaryAsync(candidate => candidate.Id, candidate => candidate.CustomerId, cancellationToken);
+        if (holders.Count != membershipIds.Length)
+        {
+            throw new NotFoundException("Alguna de las membresías no existe.");
+        }
+
+        // Lock order: income → customer profiles → memberships (the same as annulment and merge).
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await LockIncomeAsync(request.IncomeEntryId, cancellationToken);
+        await _wallet.LockCustomersAsync(holders.Values, cancellationToken);
+        await LockMembershipsAsync(membershipIds, cancellationToken);
+
         var toLink = await _dbContext.CustomerMemberships
             .Where(candidate => membershipIds.Contains(candidate.Id))
             .ToListAsync(cancellationToken);
-        if (toLink.Count != membershipIds.Length)
+        if (toLink.Any(candidate => candidate.CustomerId != holders[candidate.Id]))
         {
-            throw new NotFoundException("Alguna de las membresías no existe.");
+            throw new ConflictException(MovedByMergeMessage);
         }
 
         if (toLink.Any(candidate => candidate.IncomeEntryId is not null))
         {
             throw new ConflictException("Alguna de las membresías ya tiene un ingreso vinculado. Desvincúlalo antes de vincular otro.");
         }
-
-        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
-        await LockIncomeAsync(request.IncomeEntryId, cancellationToken);
 
         var income = await _dbContext.IncomeEntries
             .SingleOrDefaultAsync(entry => entry.Id == request.IncomeEntryId && !entry.IsDeleted, cancellationToken);
@@ -290,11 +365,20 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             income.Amount, alreadyLinkedTotal + toLink.Sum(candidate => candidate.Price), request.DiscrepancyJustification);
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        var programEnabled = await _wallet.IsProgramEnabledAsync(cancellationToken);
         foreach (var candidate in toLink)
         {
             candidate.LinkIncome(income.Id, utcNow);
             _dbContext.MembershipEvents.Add(new MembershipEvent(
                 candidate.Id, MembershipEventType.IncomeLinked, currentUserId, utcNow, justification, income.Id));
+
+            // The first link is the payment evidence and decides the points once (ADR-0014); later links decide nothing.
+            if (candidate.DecideLoyaltyAccrual(programEnabled, utcNow) == MembershipLoyaltyDecision.Accrued)
+            {
+                await _wallet.AccrueInCurrentTransactionAsync(
+                    candidate.CustomerId, LoyaltySourceType.Membership, candidate.Id, candidate.LoyaltyPointsSnapshot!.Value,
+                    currentUserId, utcNow, cancellationToken);
+            }
         }
 
         await SaveChangesAsync(cancellationToken);
@@ -475,6 +559,21 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             await _dbContext.Database.ExecuteSqlInterpolatedAsync(
                 $"SELECT 1 FROM public.income_entries WHERE \"Id\" = {incomeEntryId} FOR UPDATE",
                 cancellationToken);
+        }
+    }
+
+    /// <summary>Row locks on memberships in ascending id order, after the customer profile locks; PostgreSQL only.</summary>
+    private async Task LockMembershipsAsync(IEnumerable<Guid> membershipIds, CancellationToken cancellationToken)
+    {
+        if (!_dbContext.Database.IsNpgsql())
+        {
+            return;
+        }
+
+        foreach (var membershipId in membershipIds.Distinct().Order())
+        {
+            await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT 1 FROM public.customer_memberships WHERE \"Id\" = {membershipId} FOR UPDATE", cancellationToken);
         }
     }
 
@@ -755,6 +854,30 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             eventViews,
             consumptionViews,
             deliveryViews,
-            membership.CreatedAt);
+            membership.CreatedAt,
+            await MapLoyaltyAsync(membership, cancellationToken));
+    }
+
+    private async Task<MembershipLoyaltyView> MapLoyaltyAsync(CustomerMembership membership, CancellationToken cancellationToken)
+    {
+        var lotIds = await _dbContext.LoyaltyLots.AsNoTracking()
+            .Where(lot => lot.SourceType == LoyaltySourceType.Membership && lot.SourceId == membership.Id)
+            .Select(lot => new { lot.Id, lot.InitialPoints, lot.OriginLotId })
+            .ToListAsync(cancellationToken);
+        var ids = lotIds.Select(lot => lot.Id).ToArray();
+        var withdrawn = ids.Length == 0
+            ? 0
+            : await _dbContext.LoyaltyMovements.AsNoTracking()
+                .Where(movement => movement.LotId != null && ids.Contains(movement.LotId.Value)
+                    && movement.Type == LoyaltyMovementType.MembershipAnnulmentWithdrawal)
+                .SumAsync(movement => movement.Points, cancellationToken);
+
+        return new MembershipLoyaltyView(
+            membership.LoyaltyPointsSnapshot,
+            membership.LoyaltyPointsSnapshot is null,
+            membership.LoyaltyDecision?.ToString(),
+            membership.LoyaltyDecidedAt,
+            lotIds.Where(lot => lot.OriginLotId is null).Sum(lot => lot.InitialPoints),
+            withdrawn);
     }
 }

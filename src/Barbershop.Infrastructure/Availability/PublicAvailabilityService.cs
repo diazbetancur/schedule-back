@@ -2,12 +2,17 @@ using Barbershop.Application.Availability;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Domain.Appointments;
 using Barbershop.Domain.Common;
-using Barbershop.Domain.Scheduling;
 using Barbershop.Infrastructure.Persistence;
+using Barbershop.Infrastructure.Staff;
 using Microsoft.EntityFrameworkCore;
 
 namespace Barbershop.Infrastructure.Availability;
 
+/// <summary>
+/// Free slots of a professional for one service (ADR-0016 D10, F1): each slot lasts what that service takes them,
+/// starts on the 15-minute grid of an availability rule and fits inside it, and does not overlap an absence or a
+/// pending/confirmed appointment (appointments from before services keep their own EndsAt). No price (D9).
+/// </summary>
 internal sealed class PublicAvailabilityService : IPublicAvailabilityService
 {
   private readonly AppDbContext _dbContext;
@@ -23,9 +28,11 @@ internal sealed class PublicAvailabilityService : IPublicAvailabilityService
       Guid staffProfileId,
       DateOnly from,
       DateOnly to,
+      Guid? generalServiceId,
+      int? durationMinutes,
       CancellationToken cancellationToken = default)
   {
-    ValidateRange(from, to);
+    ValidateRequest(from, to, generalServiceId, durationMinutes);
 
     var staffProfile = await _dbContext.StaffProfiles
         .Include(profile => profile.User)
@@ -35,6 +42,17 @@ internal sealed class PublicAvailabilityService : IPublicAvailabilityService
     if (!staffProfile.IsActive || !staffProfile.User.IsActive)
     {
       throw new KeyNotFoundException("The staff profile was not found.");
+    }
+
+    var duration = durationMinutes ?? 0;
+    if (generalServiceId is { } serviceId)
+    {
+      var offering = await _dbContext.FindBookableAsync(staffProfileId, serviceId, cancellationToken)
+          ?? throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
+          {
+            ["generalServiceId"] = ["El profesional no ofrece este servicio."]
+          });
+      duration = offering.DurationMinutes;
     }
 
     var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
@@ -62,7 +80,7 @@ internal sealed class PublicAvailabilityService : IPublicAvailabilityService
         .GroupBy(rule => rule.DayOfWeek)
         .ToDictionary(group => group.Key, group => group.ToArray());
 
-    var slots = new List<PublicAvailabilitySlotResponse>();
+    var slots = new SortedDictionary<DateTime, PublicAvailabilitySlotResponse>();
     for (var date = from; date <= to; date = date.AddDays(1))
     {
       if (!rulesByDay.TryGetValue(date.DayOfWeek, out var dayRules))
@@ -72,21 +90,15 @@ internal sealed class PublicAvailabilityService : IPublicAvailabilityService
 
       foreach (var rule in dayRules)
       {
-        var slotStart = BogotaClock.ToUtc(date, rule.StartTime);
-        var ruleEnd = BogotaClock.ToUtc(date, rule.EndTime);
-
-        while (slotStart.AddMinutes(staffProfile.DefaultAppointmentDurationMinutes) <= ruleEnd)
+        foreach (var (slotStart, slotEnd) in AppointmentSlotGrid.Slots(date, rule, duration))
         {
-          var slotEnd = slotStart.AddMinutes(staffProfile.DefaultAppointmentDurationMinutes);
-
           if (slotStart >= utcNow
               && unavailablePeriods.All(period => !period.Overlaps(slotStart, slotEnd))
               && appointments.All(appointment => !appointment.Overlaps(slotStart, slotEnd)))
           {
-            slots.Add(new PublicAvailabilitySlotResponse(slotStart, slotEnd));
+            // Two rules of the same day could produce the same start; it is listed once.
+            slots.TryAdd(slotStart, new PublicAvailabilitySlotResponse(slotStart, slotEnd));
           }
-
-          slotStart = slotEnd;
         }
       }
     }
@@ -95,11 +107,13 @@ internal sealed class PublicAvailabilityService : IPublicAvailabilityService
         staffProfileId,
         from,
         to,
-        staffProfile.DefaultAppointmentDurationMinutes,
-        slots);
+        duration,
+        slots.Values.ToArray(),
+        generalServiceId,
+        AppointmentSlotGrid.StepMinutes);
   }
 
-  private static void ValidateRange(DateOnly from, DateOnly to)
+  private static void ValidateRequest(DateOnly from, DateOnly to, Guid? generalServiceId, int? durationMinutes)
   {
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 
@@ -120,6 +134,25 @@ internal sealed class PublicAvailabilityService : IPublicAvailabilityService
     else if (to.DayNumber - from.DayNumber > 30)
     {
       errors["to"] = ["The availability range cannot exceed 31 days."];
+    }
+
+    if (generalServiceId is null && durationMinutes is null)
+    {
+      errors["generalServiceId"] = ["Elige el servicio que quieres reservar."];
+    }
+    else if (generalServiceId is not null && durationMinutes is not null)
+    {
+      errors["durationMinutes"] = ["Indica el servicio o la duración, no ambos."];
+    }
+    else if (generalServiceId == Guid.Empty)
+    {
+      errors["generalServiceId"] = ["Elige el servicio que quieres reservar."];
+    }
+    else if (durationMinutes is { } minutes
+        && minutes is < AppointmentServiceReservation.MinDurationMinutes or > AppointmentServiceReservation.MaxDurationMinutes)
+    {
+      errors["durationMinutes"] =
+          [$"La duración debe estar entre {AppointmentServiceReservation.MinDurationMinutes} y {AppointmentServiceReservation.MaxDurationMinutes} minutos."];
     }
 
     if (errors.Count > 0)

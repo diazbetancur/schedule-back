@@ -40,7 +40,6 @@ public sealed class AuthServiceLockoutTests : IDisposable
         _authService = new AuthService(
             _dbContext,
             passwordHasher,
-            seedService,
             new NoOpEmailSender(),
             Options.Create(new JwtOptions
             {
@@ -54,6 +53,9 @@ public sealed class AuthServiceLockoutTests : IDisposable
             }),
             Options.Create(new AppOptions()),
             _timeProvider);
+
+        // Roles and permissions are bootstrapped at startup in the app, not by AuthService.
+        seedService.EnsureSeededAsync().GetAwaiter().GetResult();
     }
 
     public void Dispose()

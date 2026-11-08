@@ -6,10 +6,13 @@ using Barbershop.Domain.Common;
 using Barbershop.Domain.Services;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Customers;
+using Barbershop.Infrastructure.Identity;
 using Barbershop.Infrastructure.Memberships;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+
+using Barbershop.Tests.Infrastructure;
 
 namespace Barbershop.Tests.Features.Memberships;
 
@@ -40,7 +43,7 @@ public sealed class MyMembershipsServiceTests : IDisposable
     _memberships = new MembershipSalesService(_dbContext, TimeProvider.System);
     _ledger = new MembershipLedgerService(_dbContext, _memberships, TimeProvider.System);
     _deliveries = new MembershipGiftDeliveryService(_dbContext, _memberships, TimeProvider.System);
-    _plans = new MembershipPlanManagementService(_dbContext, TimeProvider.System);
+    _plans = new MembershipPlanManagementService(_dbContext, TimeProvider.System, new NullCurrentUserAccessor());
     _customers = new CustomerManagementService(_dbContext, TimeProvider.System);
     _mine = new MyMembershipsService(_dbContext, _memberships);
 
@@ -63,7 +66,7 @@ public sealed class MyMembershipsServiceTests : IDisposable
     var plan = await CreatePlanAsync();
     var membership = await SellAsync(stranger.Id, plan, activate: true);
 
-    Assert.Empty(await _mine.GetMineAsync(user));
+    Assert.Empty((await _mine.GetMineAsync(user, new MembershipListQuery())).Items);
     await Assert.ThrowsAsync<NotFoundException>(() => _mine.GetMineByIdAsync(user, membership.Id));
   }
 
@@ -73,7 +76,7 @@ public sealed class MyMembershipsServiceTests : IDisposable
     var user = await CreateUserAsync();
     await CreateCustomerAsync(linkedUserId: user);
 
-    Assert.Empty(await _mine.GetMineAsync(user));
+    Assert.Empty((await _mine.GetMineAsync(user, new MembershipListQuery())).Items);
   }
 
   [Fact]
@@ -87,7 +90,7 @@ public sealed class MyMembershipsServiceTests : IDisposable
     var own = await SellAsync(mine.Id, plan, activate: true);
     var foreign = await SellAsync(other.Id, plan, activate: true);
 
-    Assert.Equal([own.Id], (await _mine.GetMineAsync(user)).Select(summary => summary.Id));
+    Assert.Equal([own.Id], (await _mine.GetMineAsync(user, new MembershipListQuery())).Items.Select(summary => summary.Id));
     await Assert.ThrowsAsync<NotFoundException>(() => _mine.GetMineByIdAsync(user, foreign.Id));
     await Assert.ThrowsAsync<NotFoundException>(() => _mine.GetMineByIdAsync(user, Guid.NewGuid()));
   }
@@ -104,7 +107,7 @@ public sealed class MyMembershipsServiceTests : IDisposable
     var annulled = await SellAsync(customer.Id, plan, activate: true);
     await _memberships.AnnulAsync(_adminId, annulled.Id, new MembershipAnnulRequest("Retracto del cliente"));
 
-    var statuses = (await _mine.GetMineAsync(user)).ToDictionary(summary => summary.Id, summary => summary.DisplayStatus);
+    var statuses = (await _mine.GetMineAsync(user, new MembershipListQuery())).Items.ToDictionary(summary => summary.Id, summary => summary.DisplayStatus);
 
     Assert.Equal("Active", statuses[active.Id]);
     Assert.Equal("PendingActivation", statuses[pending.Id]);
@@ -153,7 +156,7 @@ public sealed class MyMembershipsServiceTests : IDisposable
     Assert.Equal(["Service:Barba:Granted:", $"Physical:Gorra:Delivered:{_today}", "Physical:Llavero:PendingDelivery:"],
         view.Gifts.Select(gift => $"{gift.Kind}:{gift.Description}:{gift.Status}:{gift.DeliveredOn}"));
 
-    var summary = Assert.Single(await _mine.GetMineAsync(user));
+    var summary = Assert.Single((await _mine.GetMineAsync(user, new MembershipListQuery())).Items);
     Assert.Equal((10, 9, 2, 0, 1), (summary.PurchasedGranted, summary.PurchasedAvailable, summary.GiftedGranted, summary.GiftedAvailable, summary.PendingPhysicalGifts));
   }
 
@@ -185,9 +188,9 @@ public sealed class MyMembershipsServiceTests : IDisposable
     var own = await SellAsync(surviving.Id, plan, activate: true);
     await Consume(moved.Id, _haircut.Id, 1);
 
-    await _customers.MergeAsync(_adminId, surviving.Id, new CustomerMergeRequest(duplicate.Id));
+    await _customers.MergeWithPreviewAsync(_adminId, surviving.Id, duplicate.Id);
 
-    Assert.Equal(new[] { moved.Id, own.Id }.Order(), (await _mine.GetMineAsync(user)).Select(summary => summary.Id).Order());
+    Assert.Equal(new[] { moved.Id, own.Id }.Order(), (await _mine.GetMineAsync(user, new MembershipListQuery())).Items.Select(summary => summary.Id).Order());
     var movedView = await _mine.GetMineByIdAsync(user, moved.Id);
     Assert.Equal("Carlos P.", movedView.PurchasedByName);
     Assert.Single(movedView.Consumptions);

@@ -16,6 +16,9 @@ internal sealed class ServiceConfiguration : IEntityTypeConfiguration<Service>
       tableBuilder.HasCheckConstraint(
               "ck_services_business_percentage_range",
               "\"BusinessPercentage\" >= 0 AND \"BusinessPercentage\" <= 100");
+      tableBuilder.HasCheckConstraint(
+              "ck_services_loyalty_points_non_negative",
+              "\"LoyaltyPoints\" >= 0");
     });
 
     builder.HasKey(x => x.Id);
@@ -24,10 +27,19 @@ internal sealed class ServiceConfiguration : IEntityTypeConfiguration<Service>
     builder.Property(x => x.Name).HasMaxLength(120).IsRequired();
     builder.Property(x => x.BasePrice).IsRequired();
     builder.Property(x => x.BusinessPercentage).IsRequired().HasDefaultValue(0);
+    builder.Property(x => x.LoyaltyPoints).IsRequired().HasDefaultValue(0);
     builder.Property(x => x.IsActive).HasDefaultValue(true);
     builder.Property(x => x.IsDeleted).HasDefaultValue(false);
     builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
     builder.Property(x => x.UpdatedAt).HasColumnType("timestamp with time zone");
+
+    // Every rate belongs to one general service (ADR-0016 D3). Restrict: a general service with rates is only ever
+    // deleted logically, so settled history keeps its reference.
+    builder.Property(x => x.GeneralServiceId).IsRequired();
+    builder.HasOne<GeneralService>()
+        .WithMany()
+        .HasForeignKey(x => x.GeneralServiceId)
+        .OnDelete(DeleteBehavior.Restrict);
 
     // Backstop: prevents exact-name duplicates among live services at the DB level.
     // Case-insensitive uniqueness is enforced in the service layer.

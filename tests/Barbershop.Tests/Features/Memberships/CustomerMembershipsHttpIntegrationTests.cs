@@ -16,6 +16,7 @@ using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
+using Barbershop.Domain.Services;
 
 namespace Barbershop.Tests.Features.Memberships;
 
@@ -64,7 +65,7 @@ public sealed class CustomerMembershipsHttpIntegrationTests
       await customers.LinkAccountAsync(adminId, betoProfile.Id, new CustomerLinkAccountRequest(beto.UserId, true));
 
       var haircut = await services.GetRequiredService<IAdminServicesService>()
-          .CreateAsync(new ServiceCreateRequest($"Corte {Guid.NewGuid():N}"[..20], 25000, 30));
+          .CreateAsync(new ServiceCreateRequest($"Corte {Guid.NewGuid():N}"[..20], 25000, 30, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
       var plan = await services.GetRequiredService<IAdminMembershipPlansService>().CreateAsync(new MembershipPlanUpsertRequest(
           $"Oro {Guid.NewGuid():N}"[..20], "Diez cortes", 250000, "Pool", 10, 90, Terms, null, [new(haircut.Id, null)],
           [new(null, "Service", haircut.Id, null, 1, "EveryPurchase"), new(null, "Physical", null, "Gorra", 1, "EveryPurchase")]));
@@ -90,7 +91,7 @@ public sealed class CustomerMembershipsHttpIntegrationTests
 
     // Ana sees her two memberships and nothing of Beto's.
     AuthenticateAs(context.Client, ana.AccessToken);
-    var list = (await context.Client.GetFromJsonAsync<List<MyMembershipSummaryView>>("/api/v1/customer/memberships"))!;
+    var list = (await context.Client.GetPageItemsAsync<MyMembershipSummaryView>("/api/v1/customer/memberships"))!;
     Assert.Equal(new[] { active, annulled }.Order(), list.Select(summary => summary.Id).Order());
     Assert.Equal("Annulled", list.Single(summary => summary.Id == annulled).DisplayStatus);
     var summaryOfActive = list.Single(summary => summary.Id == active);
@@ -125,7 +126,7 @@ public sealed class CustomerMembershipsHttpIntegrationTests
 
     // An account without a linked profile gets an empty list and no detail.
     AuthenticateAs(context.Client, sinPerfil.AccessToken);
-    Assert.Empty((await context.Client.GetFromJsonAsync<List<MyMembershipSummaryView>>("/api/v1/customer/memberships"))!);
+    Assert.Empty((await context.Client.GetPageItemsAsync<MyMembershipSummaryView>("/api/v1/customer/memberships"))!);
     using var noProfileDetail = await context.Client.GetAsync($"/api/v1/customer/memberships/{active}");
     Assert.Equal(HttpStatusCode.NotFound, noProfileDetail.StatusCode);
 
@@ -161,7 +162,7 @@ public sealed class CustomerMembershipsHttpIntegrationTests
       await customers.LinkAccountAsync(adminId, profileA, new CustomerLinkAccountRequest(account.UserId, true));
 
       var haircut = await services.GetRequiredService<IAdminServicesService>()
-          .CreateAsync(new ServiceCreateRequest($"Corte {Guid.NewGuid():N}"[..20], 25000, 30));
+          .CreateAsync(new ServiceCreateRequest($"Corte {Guid.NewGuid():N}"[..20], 25000, 30, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
       var plan = await services.GetRequiredService<IAdminMembershipPlansService>().CreateAsync(new MembershipPlanUpsertRequest(
           $"Oro {Guid.NewGuid():N}"[..20], null, 250000, "Pool", 10, 90, Terms, null, [new(haircut.Id, null)], []));
       var memberships = services.GetRequiredService<IAdminMembershipsService>();
@@ -208,7 +209,7 @@ public sealed class CustomerMembershipsHttpIntegrationTests
   }
 
   private static async Task<List<MyMembershipSummaryView>> ListMineAsync(HttpClient client)
-      => (await client.GetFromJsonAsync<List<MyMembershipSummaryView>>("/api/v1/customer/memberships"))!;
+      => (await client.GetPageItemsAsync<MyMembershipSummaryView>("/api/v1/customer/memberships"))!;
 
   [Fact]
   public async Task CustomerEndpoints_AreReadOnly()

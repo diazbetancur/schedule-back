@@ -16,7 +16,9 @@ using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.Reviews;
 using Barbershop.Infrastructure.Staff;
 using Microsoft.AspNetCore.Identity;
+using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
@@ -42,6 +44,7 @@ public sealed class ReviewEligibilityTests : IDisposable
   {
     var options = new DbContextOptionsBuilder<AppDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+        .ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning))
         .Options;
 
     _dbContext = new AppDbContext(options);
@@ -284,9 +287,12 @@ public sealed class ReviewEligibilityTests : IDisposable
   }
 
   private async Task<AppointmentView> CreateCustomerAppointmentAsync(Guid customerUserId, Guid staffProfileId, DateOnly date, int hour, int minute)
-      => await _customerAppointmentsService.CreateAsync(
-          customerUserId,
-          new CustomerAppointmentCreateRequest(staffProfileId, ToUtc(date, hour, minute), null));
+  {
+    await ServiceOfferingTestData.EnsureCorteOfferedAsync(_dbContext, staffProfileId);
+    return await _customerAppointmentsService.CreateAsync(
+        customerUserId,
+        new CustomerAppointmentCreateRequest(staffProfileId, ServiceOfferingTestData.Corte, ToUtc(date, hour, minute), null));
+  }
 
   private async Task CompleteAppointmentAsync(Guid appointmentId)
   {

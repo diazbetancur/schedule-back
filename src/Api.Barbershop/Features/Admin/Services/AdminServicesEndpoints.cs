@@ -1,5 +1,9 @@
+using System.Security.Claims;
+using Api.Barbershop.Features.Admin.Loyalty;
 using Barbershop.Application.Auth;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Services.Admin;
+using Microsoft.AspNetCore.Authorization;
 
 namespace Api.Barbershop.Features.Admin.Services;
 
@@ -11,8 +15,16 @@ public static class AdminServicesEndpoints
             .WithTags("Admin")
             .RequireAuthorization(AuthPolicyNames.Admin);
 
-        adminServices.MapGet(string.Empty, GetAllAsync)
+        adminServices.MapGet(string.Empty, ListAsync)
             .WithName("GetAdminServices")
+            .Produces<PagedResult<ServiceView>>(StatusCodes.Status200OK)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
+
+        // Every rate for the selectors (income, membership plans): a small catalog, not a history.
+        adminServices.MapGet("/options", GetAllAsync)
+            .WithName("GetAdminServiceOptions")
             .Produces<IReadOnlyList<ServiceView>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
@@ -61,17 +73,29 @@ public static class AdminServicesEndpoints
     private static Task<IReadOnlyList<ServiceView>> GetAllAsync(IAdminServicesService service, CancellationToken cancellationToken)
         => service.GetAllAsync(cancellationToken);
 
+    private static Task<PagedResult<ServiceView>> ListAsync(
+        [AsParameters] ServiceListQuery query, IAdminServicesService service, CancellationToken cancellationToken)
+        => service.ListAsync(query, cancellationToken);
+
     private static Task<ServiceView> GetByIdAsync(Guid serviceId, IAdminServicesService service, CancellationToken cancellationToken)
         => service.GetByIdAsync(serviceId, cancellationToken);
 
-    private static async Task<IResult> CreateAsync(ServiceCreateRequest request, IAdminServicesService service, CancellationToken cancellationToken)
+    private static async Task<IResult> CreateAsync(
+        ServiceCreateRequest request, ClaimsPrincipal user, IAuthorizationService authorizationService,
+        IAdminServicesService service, CancellationToken cancellationToken)
     {
+        await LoyaltyPointsAuthorization.EnsureCanSetAsync(request.LoyaltyPoints, user, authorizationService);
         var response = await service.CreateAsync(request, cancellationToken);
         return Results.Created($"/api/v1/admin/services/{response.Id}", response);
     }
 
-    private static Task<ServiceView> UpdateAsync(Guid serviceId, ServiceUpdateRequest request, IAdminServicesService service, CancellationToken cancellationToken)
-        => service.UpdateAsync(serviceId, request, cancellationToken);
+    private static async Task<ServiceView> UpdateAsync(
+        Guid serviceId, ServiceUpdateRequest request, ClaimsPrincipal user, IAuthorizationService authorizationService,
+        IAdminServicesService service, CancellationToken cancellationToken)
+    {
+        await LoyaltyPointsAuthorization.EnsureCanSetAsync(request.LoyaltyPoints, user, authorizationService);
+        return await service.UpdateAsync(serviceId, request, cancellationToken);
+    }
 
     private static Task<ServiceView> UpdateStatusAsync(Guid serviceId, ServiceStatusUpdateRequest request, IAdminServicesService service, CancellationToken cancellationToken)
         => service.UpdateStatusAsync(serviceId, request, cancellationToken);

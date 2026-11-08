@@ -99,7 +99,9 @@ public enum MediaAssetPurpose
   StaffPhoto = 4,
   TipsQr = 5,
   CustomerReference = 6,
-  Other = 7
+  Other = 7,
+  /// <summary>Image of a public catalog product (ADR-0016 B5).</summary>
+  ProductImage = 8
 }
 
 public enum MediaAssetStatus

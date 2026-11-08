@@ -1,5 +1,8 @@
+using System.Security.Claims;
+using Api.Barbershop.Features.Admin.Loyalty;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Memberships.Admin;
+using Microsoft.AspNetCore.Authorization;
 
 namespace Api.Barbershop.Features.Admin.Memberships;
 
@@ -68,15 +71,21 @@ public static class AdminMembershipPlansEndpoints
         => service.GetByIdAsync(planId, cancellationToken);
 
     private static async Task<IResult> CreateAsync(
-        MembershipPlanUpsertRequest request, IAdminMembershipPlansService service, CancellationToken cancellationToken)
+        MembershipPlanUpsertRequest request, ClaimsPrincipal user, IAuthorizationService authorizationService,
+        IAdminMembershipPlansService service, CancellationToken cancellationToken)
     {
+        await LoyaltyPointsAuthorization.EnsureCanSetAsync(request.LoyaltyPoints, user, authorizationService);
         var response = await service.CreateAsync(request, cancellationToken);
         return Results.Created($"/api/v1/admin/membership-plans/{response.Id}", response);
     }
 
-    private static Task<MembershipPlanView> UpdateAsync(
-        Guid planId, MembershipPlanUpsertRequest request, IAdminMembershipPlansService service, CancellationToken cancellationToken)
-        => service.UpdateAsync(planId, request, cancellationToken);
+    private static async Task<MembershipPlanView> UpdateAsync(
+        Guid planId, MembershipPlanUpsertRequest request, ClaimsPrincipal user, IAuthorizationService authorizationService,
+        IAdminMembershipPlansService service, CancellationToken cancellationToken)
+    {
+        await LoyaltyPointsAuthorization.EnsureCanSetAsync(request.LoyaltyPoints, user, authorizationService);
+        return await service.UpdateAsync(planId, request, cancellationToken);
+    }
 
     private static Task<MembershipPlanView> UpdateStatusAsync(
         Guid planId, MembershipPlanStatusUpdateRequest request, IAdminMembershipPlansService service, CancellationToken cancellationToken)

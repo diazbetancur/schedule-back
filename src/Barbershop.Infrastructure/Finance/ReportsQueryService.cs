@@ -2,6 +2,7 @@ using System.Globalization;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Finance.Admin;
 using Barbershop.Domain.Finance;
+using Barbershop.Domain.ServiceRecords;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -88,6 +89,43 @@ internal sealed class ReportsQueryService : IAdminReportsService
 
         var trend = BuildTrend(rangeFrom, rangeTo, incomes, expenses);
 
+        // Informative block (ADR-0015 R14): commissions the business covers for rewards delivered as services, from
+        // the snapshots of the confirmed records. They are not payments and do not enter any total above.
+        var rewardRecords = await _dbContext.ServiceRecords.AsNoTracking()
+            .Where(record => record.Status == ServiceRecordStatus.Approved
+                && record.OperationType == ServiceRecordOperationType.LoyaltyReward
+                && record.ApprovedPerformedOn >= rangeFrom && record.ApprovedPerformedOn <= rangeTo)
+            .Select(record => new
+            {
+                StaffProfileId = record.ApprovedStaffProfileId!.Value,
+                BasePrice = record.RewardBasePriceSnapshot!.Value,
+                Commission = record.RewardProfessionalCommission!.Value
+            })
+            .ToListAsync(cancellationToken);
+        var rewardStaffIds = rewardRecords.Select(record => record.StaffProfileId).Distinct().Where(id => !names.ContainsKey(id)).ToArray();
+        if (rewardStaffIds.Length > 0)
+        {
+            foreach (var staff in await _dbContext.StaffProfiles.AsNoTracking()
+                         .Where(staff => rewardStaffIds.Contains(staff.Id))
+                         .Select(staff => new { staff.Id, staff.DisplayName })
+                         .ToListAsync(cancellationToken))
+            {
+                names[staff.Id] = staff.DisplayName;
+            }
+        }
+
+        var rewardCommissions = rewardRecords
+            .GroupBy(record => record.StaffProfileId)
+            .Select(group => new ReportRewardCommissionView(
+                group.Key,
+                names.TryGetValue(group.Key, out var name) ? name : string.Empty,
+                group.Count(),
+                group.Sum(record => (long)record.BasePrice),
+                group.Sum(record => (long)(record.BasePrice - record.Commission)),
+                group.Sum(record => (long)record.Commission)))
+            .OrderByDescending(view => view.ProfessionalCommissionTotal)
+            .ToArray();
+
         return new ReportSummaryView(
             rangeFrom,
             rangeTo,
@@ -103,7 +141,9 @@ internal sealed class ReportsQueryService : IAdminReportsService
             byExpenseConcept,
             trend,
             membershipSalesIncome,
-            membershipSales.Count);
+            membershipSales.Count,
+            rewardCommissions,
+            rewardCommissions.Sum(view => view.ProfessionalCommissionTotal));
     }
 
     private static IReadOnlyList<ReportTrendPointView> BuildTrend(

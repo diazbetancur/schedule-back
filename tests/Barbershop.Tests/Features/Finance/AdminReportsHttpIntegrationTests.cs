@@ -11,6 +11,7 @@ using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
+using Barbershop.Domain.Services;
 
 namespace Barbershop.Tests.Features.Finance;
 
@@ -129,7 +130,7 @@ public sealed class AdminReportsHttpIntegrationTests
     var income = scope.ServiceProvider.GetRequiredService<IAdminIncomeService>();
     // Income needs a service; create one first.
     var services = scope.ServiceProvider.GetRequiredService<IAdminServicesService>();
-    var service = await services.CreateAsync(new ServiceCreateRequest("Corte", 25000, businessPercentage));
+    var service = await services.CreateAsync(new ServiceCreateRequest("Corte", 25000, businessPercentage, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
     await income.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, staffProfileId, amount, false, occurredOn));
   }
 

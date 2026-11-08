@@ -1,4 +1,5 @@
 using Barbershop.Domain.Appointments;
+using Barbershop.Domain.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -13,6 +14,14 @@ internal sealed class AppointmentConfiguration : IEntityTypeConfiguration<Appoin
       tableBuilder.HasCheckConstraint(
               "ck_appointments_time_range",
               "\"StartsAt\" < \"EndsAt\"");
+      // ADR-0016 B3: an appointment booked for a service keeps its service, name and reserved duration together, and
+      // ends exactly that duration after it starts. Appointments from before (all three null) are left as they are.
+      tableBuilder.HasCheckConstraint(
+              "ck_appointments_reserved_service",
+              "(\"GeneralServiceId\" IS NULL AND \"GeneralServiceNameSnapshot\" IS NULL AND \"ReservedDurationMinutes\" IS NULL) "
+              + "OR (\"GeneralServiceId\" IS NOT NULL AND \"GeneralServiceNameSnapshot\" IS NOT NULL "
+              + "AND \"ReservedDurationMinutes\" IS NOT NULL AND \"ReservedDurationMinutes\" >= 10 AND \"ReservedDurationMinutes\" <= 240 "
+              + "AND \"EndsAt\" = \"StartsAt\" + make_interval(mins => \"ReservedDurationMinutes\"))");
     });
 
     builder.HasKey(x => x.Id);
@@ -28,6 +37,12 @@ internal sealed class AppointmentConfiguration : IEntityTypeConfiguration<Appoin
     builder.Property(x => x.EndsAt).HasColumnType("timestamp with time zone").IsRequired();
     builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
     builder.Property(x => x.UpdatedAt).HasColumnType("timestamp with time zone");
+    builder.Property(x => x.GeneralServiceNameSnapshot).HasMaxLength(GeneralService.NameMaxLength);
+
+    builder.HasOne<GeneralService>()
+        .WithMany()
+        .HasForeignKey(x => x.GeneralServiceId)
+        .OnDelete(DeleteBehavior.Restrict);
 
     builder.HasOne(x => x.StaffProfile)
         .WithMany(x => x.Appointments)

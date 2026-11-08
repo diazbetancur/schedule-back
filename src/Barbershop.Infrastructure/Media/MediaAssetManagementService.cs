@@ -50,7 +50,8 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
         [MediaAssetPurpose.StaffPhoto] = ImageContentTypes.ToArray(),
         [MediaAssetPurpose.TipsQr] = ImageContentTypes.Concat(DocumentContentTypes).ToArray(),
         [MediaAssetPurpose.CustomerReference] = ImageContentTypes.Concat(DocumentContentTypes).ToArray(),
-        [MediaAssetPurpose.Other] = ImageContentTypes.Concat(DocumentContentTypes).ToArray()
+        [MediaAssetPurpose.Other] = ImageContentTypes.Concat(DocumentContentTypes).ToArray(),
+        [MediaAssetPurpose.ProductImage] = ImageContentTypes.ToArray()
       };
 
   private readonly AppDbContext _dbContext;
@@ -417,6 +418,16 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
         .AnyAsync(banner => banner.ImageMediaAssetId == mediaAssetId, cancellationToken);
 
     if (referencedByBanner)
+    {
+      return true;
+    }
+
+    // Kept even on a logically deleted product, so restoring its row never points to a removed file.
+    var referencedByProduct = await _dbContext.Products
+        .AsNoTracking()
+        .AnyAsync(product => product.ImageMediaAssetId == mediaAssetId, cancellationToken);
+
+    if (referencedByProduct)
     {
       return true;
     }

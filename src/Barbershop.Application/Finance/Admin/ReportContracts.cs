@@ -32,4 +32,18 @@ public sealed record ReportSummaryView(
     IReadOnlyList<ReportExpenseConceptView> ByExpenseConcept,
     IReadOnlyList<ReportTrendPointView> Trend,
     long MembershipSalesIncome,
-    int MembershipSalesCount);
+    int MembershipSalesCount,
+    IReadOnlyList<ReportRewardCommissionView>? RewardCommissions = null,
+    long RewardCommissionsTotal = 0);
+
+/// <summary>
+/// Informative (ADR-0015 R14): commissions the business covers for loyalty rewards delivered as services, by
+/// professional, from the snapshots of the confirmed records. Not a payment made, and not part of any other total.
+/// </summary>
+public sealed record ReportRewardCommissionView(
+    Guid StaffProfileId,
+    string StaffName,
+    int RewardCount,
+    long BasePriceTotal,
+    long BusinessShareTotal,
+    long ProfessionalCommissionTotal);

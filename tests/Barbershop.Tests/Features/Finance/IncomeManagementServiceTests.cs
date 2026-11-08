@@ -126,8 +126,8 @@ public sealed class IncomeManagementServiceTests : IDisposable
 
     await _service.SoftDeleteAsync(created.Id);
 
-    var list = await _service.GetAsync(Today, null);
-    Assert.DoesNotContain(list, e => e.Id == created.Id);
+    var list = await _service.GetAsync(new IncomeListQuery(Today, Today));
+    Assert.DoesNotContain(list.Items, e => e.Id == created.Id);
   }
 
   [Fact]
@@ -141,10 +141,10 @@ public sealed class IncomeManagementServiceTests : IDisposable
     await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, bianca.Id, 20000, false, Today));
     await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, alex.Id, 20000, false, Today.AddDays(-1)));
 
-    var todayAll = await _service.GetAsync(Today, null);
-    Assert.Equal(2, todayAll.Count);
+    var todayAll = await _service.GetAsync(new IncomeListQuery(Today, Today));
+    Assert.Equal(2, todayAll.TotalCount);
 
-    var todayAlex = await _service.GetAsync(Today, alex.Id);
+    var todayAlex = (await _service.GetAsync(new IncomeListQuery(Today, Today, alex.Id))).Items;
     Assert.Single(todayAlex);
     Assert.All(todayAlex, e => Assert.Equal(alex.Id, e.StaffProfileId));
   }
@@ -191,6 +191,88 @@ public sealed class IncomeManagementServiceTests : IDisposable
         second.Id, staff.Id, 45000, false, Today));
 
     Assert.Equal(50, updated.BusinessPercentage);
+  }
+
+  [Fact]
+  public async Task UpdateAsync_SameService_KeepsTheHistoricalBusinessPercentage()
+  {
+    var service = await AddServiceAsync("Corte", 20000, businessPercentage: 30);
+    var staff = await AddStaffAsync("Alex");
+    var created = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+        service.Id, staff.Id, 20000, false, Today));
+
+    // The master changes after the income was registered.
+    service.Update("Corte", 20000, DateTime.UtcNow, businessPercentage: 60);
+    await _dbContext.SaveChangesAsync();
+
+    var updated = await _service.UpdateAsync(created.Id, new IncomeEntryUpdateRequest(
+        service.Id, staff.Id, 18000, IsPromo: true, Today));
+
+    Assert.Equal(30, updated.BusinessPercentage);
+    Assert.Equal(5400, updated.BusinessAmount);
+    Assert.Equal(12600, updated.ProfessionalAmount);
+    Assert.Equal(18000, updated.Amount);
+    Assert.True(updated.IsPromo);
+  }
+
+  [Fact]
+  public async Task UpdateAsync_SameService_KeepsTheNameAndBasePriceSnapshots()
+  {
+    var service = await AddServiceAsync("Corte clásico", 20000, businessPercentage: 30);
+    var staff = await AddStaffAsync("Alex");
+    var created = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+        service.Id, staff.Id, 20000, false, Today));
+
+    service.Update("Corte premium", 35000, DateTime.UtcNow, businessPercentage: 30);
+    await _dbContext.SaveChangesAsync();
+
+    var updated = await _service.UpdateAsync(created.Id, new IncomeEntryUpdateRequest(
+        service.Id, staff.Id, 20000, false, Today.AddDays(-1)));
+
+    Assert.Equal("Corte clásico", updated.ServiceName);
+    Assert.Equal(20000, updated.BasePrice);
+    Assert.Equal(Today.AddDays(-1), updated.OccurredOn);
+  }
+
+  [Fact]
+  public async Task UpdateAsync_SameService_ChangingTheProfessional_KeepsTheSplit()
+  {
+    var service = await AddServiceAsync("Corte", 20000, businessPercentage: 40);
+    var first = await AddStaffAsync("Alex");
+    var second = await AddStaffAsync("Juan");
+    var created = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+        service.Id, first.Id, 20000, false, Today));
+
+    service.Update("Corte", 20000, DateTime.UtcNow, businessPercentage: 0);
+    await _dbContext.SaveChangesAsync();
+
+    var updated = await _service.UpdateAsync(created.Id, new IncomeEntryUpdateRequest(
+        service.Id, second.Id, 20000, false, Today));
+
+    Assert.Equal(second.Id, updated.StaffProfileId);
+    Assert.Equal(40, updated.BusinessPercentage);
+    Assert.Equal(8000, updated.BusinessAmount);
+    Assert.Equal(12000, updated.ProfessionalAmount);
+  }
+
+  [Fact]
+  public async Task UpdateAsync_ChangingToAnotherServiceAndBack_TakesTheCurrentSnapshot()
+  {
+    // Choosing a service is the explicit operation that captures its current values, even if it was the original one.
+    var first = await AddServiceAsync("Corte", 20000, businessPercentage: 10);
+    var second = await AddServiceAsync("Tinte", 45000, businessPercentage: 50);
+    var staff = await AddStaffAsync("Alex");
+    var created = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+        first.Id, staff.Id, 20000, false, Today));
+
+    await _service.UpdateAsync(created.Id, new IncomeEntryUpdateRequest(second.Id, staff.Id, 45000, false, Today));
+    first.Update("Corte", 22000, DateTime.UtcNow, businessPercentage: 20);
+    await _dbContext.SaveChangesAsync();
+
+    var updated = await _service.UpdateAsync(created.Id, new IncomeEntryUpdateRequest(first.Id, staff.Id, 22000, false, Today));
+
+    Assert.Equal(20, updated.BusinessPercentage);
+    Assert.Equal(22000, updated.BasePrice);
   }
 
   private async Task<Service> AddServiceAsync(string name, int basePrice, int businessPercentage = 0)

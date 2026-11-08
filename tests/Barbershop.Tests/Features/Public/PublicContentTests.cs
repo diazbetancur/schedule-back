@@ -8,6 +8,7 @@ using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Landing;
 using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.Staff;
+using Barbershop.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
 namespace Barbershop.Tests.Features.Public;
@@ -253,21 +254,28 @@ public sealed class PublicContentTests : IDisposable
   }
 
   [Fact]
-  public async Task GetPublicStaffByIdAsync_IncludesOnlyActiveServices()
+  public async Task GetPublicStaffByIdAsync_ShowsOnlyTheBookableOffering_NeverTheLegacyServicesNorPrices()
   {
     var staffProfile = await CreateStaffProfileAsync("Service Barber", isStaffActive: true, isUserActive: true);
-    var activeService = await CreateStaffServiceAsync(staffProfile.Id, "Classic Cut", true, "Classic fade", 30, 12m);
-    _ = await CreateStaffServiceAsync(staffProfile.Id, "Archived Service", false, "Not visible", 45, 18m);
+    // The legacy staff_services table is no longer read (ADR-0016 B2).
+    _ = await CreateStaffServiceAsync(staffProfile.Id, "Classic Cut", true, "Classic fade", 30, 12m);
+    await ServiceOfferingTestData.OfferAsync(_dbContext, staffProfile.Id, ServiceOfferingTestData.Corte, 40);
+    var beard = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Barba");
+    await ServiceOfferingTestData.OfferAsync(_dbContext, staffProfile.Id, beard.Id, 20, isActive: false);
+    var color = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Color");
+    await ServiceOfferingTestData.OfferAsync(_dbContext, staffProfile.Id, color.Id, 60);
+    color.Deactivate(CurrentUtc.UtcDateTime);
+    await _dbContext.SaveChangesAsync();
 
     var profile = await _publicStaffService.GetPublicStaffByIdAsync(staffProfile.Id);
+    var list = await _publicStaffService.GetPublicStaffAsync();
 
     var service = Assert.Single(profile.Services);
-    Assert.Equal(activeService.Id, service.Id);
-    Assert.Equal("Classic Cut", service.Name);
-    Assert.Equal("Classic fade", service.Description);
-    Assert.Equal(30, service.DurationMinutes);
-    Assert.Equal(12m, service.Price);
-    Assert.True(service.IsActive);
+    Assert.Equal(
+        (ServiceOfferingTestData.Corte, "Corte", "Barbería", 40),
+        (service.GeneralServiceId, service.Name, service.CategoryName, service.DurationMinutes));
+    Assert.Equal(service, Assert.Single(Assert.Single(list, item => item.StaffProfileId == staffProfile.Id).Services));
+    Assert.DoesNotContain(typeof(PublicStaffServiceResponse).GetProperties(), property => property.Name.Contains("Price"));
   }
 
   [Fact]

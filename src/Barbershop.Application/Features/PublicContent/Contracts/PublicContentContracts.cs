@@ -46,13 +46,17 @@ public sealed record BusinessScheduleDayResponse(
     string? OpenTime,
     string? CloseTime);
 
+/// <summary>
+/// A general service the professional offers (ADR-0016 B2), with how long it takes them. Never a price: booking
+/// shows only the service and its duration (F5).
+/// </summary>
 public sealed record PublicStaffServiceResponse(
-    Guid Id,
+    Guid GeneralServiceId,
     string Name,
     string? Description,
-    int DurationMinutes,
-    decimal? Price,
-    bool IsActive);
+    Guid CategoryId,
+    string CategoryName,
+    int DurationMinutes);
 
 public sealed record PublicStaffListItemResponse(
     Guid StaffProfileId,

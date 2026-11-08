@@ -1,8 +1,15 @@
+using Barbershop.Application.Common.Paging;
+
 namespace Barbershop.Application.Customers.Admin;
 
 public interface IAdminCustomersService
 {
-    Task<IReadOnlyList<CustomerListItem>> SearchAsync(string? query, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Live (not merged) customers whose name, email or phone contains <paramref name="query"/>, paginated in
+    /// alphabetical order (name, then id).
+    /// </summary>
+    Task<PagedResult<CustomerListItem>> SearchAsync(
+        string? query, int? page = null, int? pageSize = null, CancellationToken cancellationToken = default);
 
     Task<CustomerDetailView> GetByIdAsync(Guid customerId, CancellationToken cancellationToken = default);
 

@@ -92,8 +92,8 @@ public sealed record AppointmentView(
 /// <summary>
 /// Filters of <c>GET /admin/appointments</c> (ADR-0016 B7). <c>From</c>/<c>To</c> are inclusive Bogotá dates of the
 /// start. <c>Status</c> is an <see cref="AppointmentStatus"/> name or a comma-separated list of them (any of). <c>Customer</c> matches part of the customer's name,
-/// email or phone. <c>Sort</c> is "Desc" (newest start first, the default) or "Asc" (soonest first, for upcoming
-/// views); ties are broken by id in the same direction. <c>Scope</c> (<see cref="AppointmentListScopes"/>) separates
+/// email or phone. <c>Sort</c> is "Asc" (soonest first) or "Desc" (newest start first); without it the agenda scope is
+/// "Asc" and the history "Desc". Ties are broken by id in the same direction. <c>Scope</c> (<see cref="AppointmentListScopes"/>) separates
 /// the agenda (from today on, any length) from the history (at most 30 days per query, the last 30 by default).
 /// </summary>
 public sealed record AdminAppointmentListQuery(
@@ -110,7 +110,7 @@ public sealed record AdminAppointmentListQuery(
 
 /// <summary>
 /// Filters of <c>GET /staff/appointments</c>: the professional's own agenda. <c>Sort</c> as in
-/// <see cref="AdminAppointmentListQuery"/> (newest start first by default).
+/// <see cref="AdminAppointmentListQuery"/> (soonest first in the agenda, newest first in the history by default).
 /// </summary>
 public sealed record StaffAppointmentListQuery(
     DateOnly? From = null,

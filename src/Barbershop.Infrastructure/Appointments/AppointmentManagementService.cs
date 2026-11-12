@@ -262,7 +262,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       Guid currentUserId, StaffAppointmentListQuery query, CancellationToken cancellationToken)
   {
     var page = PageRequest.Create(query.Page, query.PageSize);
-    var ascending = ParseSort(query.Sort);
+    var ascending = ParseSort(query.Sort, query.Scope);
     var status = ListFilters.ParseEnumList<AppointmentStatus>(query.Status, "status");
     var (from, to) = ResolveListWindow(query.Scope, query.From, query.To);
 
@@ -351,7 +351,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       AdminAppointmentListQuery query, CancellationToken cancellationToken)
   {
     var page = PageRequest.Create(query.Page, query.PageSize);
-    var ascending = ParseSort(query.Sort);
+    var ascending = ParseSort(query.Sort, query.Scope);
     var status = ListFilters.ParseEnumList<AppointmentStatus>(query.Status, "status");
     var (from, to) = ResolveListWindow(query.Scope, query.From, query.To);
 
@@ -523,8 +523,21 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
   private DateOnly TodayInBogota()
       => DateOnly.FromDateTime(BogotaClock.ToLocal(_timeProvider.GetUtcNow().UtcDateTime));
 
-  private static bool ParseSort(string? sort)
-      => ListFilters.ParseOption(sort, "sort", AppointmentListSort.Asc, AppointmentListSort.Desc) == AppointmentListSort.Asc;
+  /// <summary>
+  /// An explicit <c>sort</c> wins. Without one, the agenda (the queue still to attend) is soonest first and the history
+  /// newest first (SONDA BUG-022: an empty value used to fall through to descending for the agenda too).
+  /// </summary>
+  private static bool ParseSort(string? sort, string? scope)
+  {
+    var parsed = ListFilters.ParseOption(sort, "sort", AppointmentListSort.Asc, AppointmentListSort.Desc);
+    if (parsed is not null)
+    {
+      return parsed == AppointmentListSort.Asc;
+    }
+
+    return ListFilters.ParseOption(scope, "scope", AppointmentListScopes.Agenda, AppointmentListScopes.History)
+        == AppointmentListScopes.Agenda;
+  }
 
   /// <summary>A total order: start, then id, both in the same direction.</summary>
   private static IQueryable<Appointment> OrderByStart(IQueryable<Appointment> appointments, bool ascending)

@@ -260,6 +260,18 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
   {
     ValidateMediaAssetId(mediaAssetId);
 
+    // Under the asset's row lock, the same one linking a profile slot takes (BUG-019): a link committing at the same
+    // time is either seen as a reference here or rejected because the asset was archived.
+    await MediaAssetReferences.InTransactionAsync<object?>(_dbContext, async () =>
+    {
+      await MediaAssetReferences.LockAsync(_dbContext, [mediaAssetId], cancellationToken);
+      await DeleteLockedAsync(mediaAssetId, cancellationToken);
+      return null;
+    }, cancellationToken);
+  }
+
+  private async Task DeleteLockedAsync(Guid mediaAssetId, CancellationToken cancellationToken)
+  {
     var mediaAsset = await _dbContext.MediaAssets
         .SingleOrDefaultAsync(asset => asset.Id == mediaAssetId, cancellationToken)
         ?? throw new KeyNotFoundException("The media asset was not found.");
@@ -393,49 +405,8 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     }
   }
 
-  private async Task<bool> IsMediaAssetReferencedAsync(Guid mediaAssetId, CancellationToken cancellationToken)
-  {
-    var referencedByUser = await _dbContext.Users
-        .AsNoTracking()
-        .AnyAsync(user => user.ProfilePhotoMediaAssetId == mediaAssetId, cancellationToken);
-
-    if (referencedByUser)
-    {
-      return true;
-    }
-
-    var referencedByStaff = await _dbContext.StaffProfiles
-        .AsNoTracking()
-        .AnyAsync(staff => staff.PhotoMediaAssetId == mediaAssetId || staff.TipsQrMediaAssetId == mediaAssetId, cancellationToken);
-
-    if (referencedByStaff)
-    {
-      return true;
-    }
-
-    var referencedByBanner = await _dbContext.Banners
-        .AsNoTracking()
-        .AnyAsync(banner => banner.ImageMediaAssetId == mediaAssetId, cancellationToken);
-
-    if (referencedByBanner)
-    {
-      return true;
-    }
-
-    // Kept even on a logically deleted product, so restoring its row never points to a removed file.
-    var referencedByProduct = await _dbContext.Products
-        .AsNoTracking()
-        .AnyAsync(product => product.ImageMediaAssetId == mediaAssetId, cancellationToken);
-
-    if (referencedByProduct)
-    {
-      return true;
-    }
-
-    return await _dbContext.AppBrandingSettings
-        .AsNoTracking()
-        .AnyAsync(branding => branding.LogoMediaAssetId == mediaAssetId || branding.AppIconMediaAssetId == mediaAssetId, cancellationToken);
-  }
+  private Task<bool> IsMediaAssetReferencedAsync(Guid mediaAssetId, CancellationToken cancellationToken)
+      => MediaAssetReferences.IsReferencedAsync(_dbContext, mediaAssetId, cancellationToken);
 
   private static string BuildStorageKey(MediaAssetPurpose purpose, string fileName, string contentType, DateTime timestamp)
   {

@@ -75,6 +75,12 @@ public static class ApiFoundationServiceCollectionExtensions
                     IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtOptions.SigningKey)),
                     ClockSkew = TimeSpan.FromMinutes(1)
                 };
+                jwtBearerOptions.Events = new JwtBearerEvents
+                {
+                    // BUG-013: a valid signature is not enough; the session must still be active. Tokens issued
+                    // before sessions were tracked (no "sid") get 401 and the app renews them with its refresh token.
+                    OnTokenValidated = ValidateSessionAsync,
+                };
             });
 
         services.AddAuthorization(options =>
@@ -94,13 +100,38 @@ public static class ApiFoundationServiceCollectionExtensions
         return services;
     }
 
+    private static async Task ValidateSessionAsync(TokenValidatedContext context)
+    {
+        var principal = context.Principal;
+        var userIdValue = principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+            ?? principal?.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
+        var sessionIdValue = principal?.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sid)?.Value
+            ?? principal?.FindFirst(System.Security.Claims.ClaimTypes.Sid)?.Value;
+
+        if (!Guid.TryParse(userIdValue, out var userId) || !Guid.TryParse(sessionIdValue, out var sessionId))
+        {
+            context.Fail("The access token does not belong to a session.");
+            return;
+        }
+
+        var validator = context.HttpContext.RequestServices.GetRequiredService<ISessionStateValidator>();
+        if (!await validator.IsActiveAsync(userId, sessionId, context.HttpContext.RequestAborted))
+        {
+            context.Fail("The session has ended.");
+        }
+    }
+
     private static void ConfigureRateLimiter(RateLimiterOptions options)
     {
         options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
         options.OnRejected = (context, cancellationToken) =>
         {
-            context.HttpContext.Response.Headers.RetryAfter = "60";
+            // The real wait of the fixed window when the limiter reports it, so clients do not wait longer than needed.
+            var retryAfterSeconds = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter)
+                ? Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds))
+                : 60;
+            context.HttpContext.Response.Headers.RetryAfter = retryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
             return new ValueTask(Results.Problem(
                 statusCode: StatusCodes.Status429TooManyRequests,
                 title: "Too many requests",
@@ -108,7 +139,9 @@ public static class ApiFoundationServiceCollectionExtensions
                 .ExecuteAsync(context.HttpContext));
         };
 
-        // Auth actions a user performs by hand (login/register): tight limit per client IP.
+        // Auth actions a user performs by hand (login/register): tight limit per client IP. One policy, so login and
+        // register share the same quota per client. The key is the client as seen by Cloudflare (ClientIpResolver),
+        // not the proxy hop. In-memory and per process: with several instances each keeps its own counters.
         options.AddPolicy(RateLimitPolicyNames.AuthCredentials, httpContext =>
             RateLimitPartition.GetFixedWindowLimiter(GetClientIp(httpContext), _ => new FixedWindowRateLimiterOptions
             {
@@ -136,8 +169,7 @@ public static class ApiFoundationServiceCollectionExtensions
             }));
     }
 
-    private static string GetClientIp(HttpContext httpContext) =>
-        httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    private static string GetClientIp(HttpContext httpContext) => ClientIpResolver.Resolve(httpContext);
 
     private static void ConfigureCorsPolicy(CorsPolicyBuilder policyBuilder, AppCorsOptions corsOptions, IHostEnvironment environment)
     {

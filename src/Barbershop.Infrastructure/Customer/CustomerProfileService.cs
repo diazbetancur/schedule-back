@@ -5,6 +5,7 @@ using Barbershop.Application.Storage;
 using Barbershop.Domain.Media;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Identity;
+using Barbershop.Infrastructure.Media;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -83,7 +84,7 @@ internal sealed class CustomerProfileService : ICustomerProfileService
 
         if (previousPhotoId is { } oldPhotoId && oldPhotoId != mediaView.Id)
         {
-            await TryDeleteMediaAssetAsync(oldPhotoId, "Replaced by new customer photo", cancellationToken);
+            await ReleasePhotoAsync(currentUserId, oldPhotoId, "Replaced by new customer photo", cancellationToken);
         }
 
         return await MapAsync(user, cancellationToken);
@@ -102,7 +103,7 @@ internal sealed class CustomerProfileService : ICustomerProfileService
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         user.SetProfilePhoto(null, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
-        await TryDeleteMediaAssetAsync(assetId, "Removed by customer from profile", cancellationToken);
+        await ReleasePhotoAsync(currentUserId, assetId, "Removed by customer from profile", cancellationToken);
         return await MapAsync(user, cancellationToken);
     }
 
@@ -113,22 +114,31 @@ internal sealed class CustomerProfileService : ICustomerProfileService
     {
         ValidatePasswordChangeRequest(request);
 
-        var user = await LoadActiveUserAsync(currentUserId, cancellationToken);
-
-        var verification = _passwordHasher.VerifyHashedPassword(new object(), user.PasswordHash, request.CurrentPassword);
-        if (verification == PasswordVerificationResult.Failed)
+        // Changing the password ends every session of the account, including the ones opened by whoever knew the
+        // old password (BUG-015). Under the account lock, so a refresh or login committing at the same time cannot
+        // leave a session alive. The caller opens a new session for the device that made the change.
+        await AccountSessions.InAccountTransactionAsync(_dbContext, async () =>
         {
-            throw new ValidationProblemException(new Dictionary<string, string[]>
+            await AccountSessions.LockAccountAsync(_dbContext, currentUserId, cancellationToken);
+
+            var user = await LoadActiveUserAsync(currentUserId, cancellationToken);
+
+            var verification = _passwordHasher.VerifyHashedPassword(new object(), user.PasswordHash, request.CurrentPassword);
+            if (verification == PasswordVerificationResult.Failed)
             {
-                ["currentPassword"] = ["The current password is incorrect."]
-            });
-        }
+                throw new ValidationProblemException(new Dictionary<string, string[]>
+                {
+                    ["currentPassword"] = ["The current password is incorrect."]
+                });
+            }
 
-        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var newHash = _passwordHasher.HashPassword(new object(), request.NewPassword);
-        user.SetPasswordHash(newHash, utcNow);
+            var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+            var newHash = _passwordHasher.HashPassword(new object(), request.NewPassword);
+            user.SetPasswordHash(newHash, utcNow);
+            await AccountSessions.RevokeAllRefreshTokensAsync(_dbContext, user.Id, utcNow, cancellationToken);
 
-        await _dbContext.SaveChangesAsync(cancellationToken);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     private async Task<User> LoadActiveUserAsync(Guid userId, CancellationToken cancellationToken)
@@ -165,29 +175,19 @@ internal sealed class CustomerProfileService : ICustomerProfileService
             photoUrl);
     }
 
-    private async Task TryDeleteMediaAssetAsync(Guid mediaAssetId, string reason, CancellationToken cancellationToken)
-    {
-        var asset = await _dbContext.MediaAssets
-            .SingleOrDefaultAsync(a => a.Id == mediaAssetId, cancellationToken);
-
-        if (asset is null || asset.Status == MediaAssetStatus.Archived)
-        {
-            return;
-        }
-
-        try
-        {
-            await _fileStorageService.DeleteAsync(asset.StorageKey, cancellationToken);
-            asset.Archive(_timeProvider.GetUtcNow().UtcDateTime);
-            await _dbContext.SaveChangesAsync(cancellationToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            var pending = new Barbershop.Domain.Media.PendingFileDeletion(asset.StorageKey, reason, _timeProvider.GetUtcNow().UtcDateTime);
-            _dbContext.PendingFileDeletions.Add(pending);
-            await _dbContext.SaveChangesAsync(cancellationToken);
-        }
-    }
+    /// <summary>
+    /// Deletes the previous avatar file only when it is a customer photo this same account uploaded and nothing else
+    /// uses it (BUG-019): an avatar that points to someone else's file, or to a staff photo, is only unlinked.
+    /// </summary>
+    private Task ReleasePhotoAsync(Guid currentUserId, Guid mediaAssetId, string reason, CancellationToken cancellationToken)
+        => MediaAssetReferences.ReleaseAsync(
+            _dbContext,
+            _fileStorageService,
+            _timeProvider,
+            mediaAssetId,
+            asset => Task.FromResult(asset.Purpose == MediaAssetPurpose.CustomerReference && asset.UploadedByUserId == currentUserId),
+            reason,
+            cancellationToken);
 
     private static void ValidateUpdateRequest(CustomerProfileUpdateRequest request)
     {

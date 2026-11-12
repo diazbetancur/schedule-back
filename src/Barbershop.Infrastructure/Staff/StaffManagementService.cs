@@ -9,6 +9,7 @@ using Barbershop.Domain.Media;
 using Barbershop.Domain.Staff;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Identity;
+using Barbershop.Infrastructure.Media;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
@@ -64,8 +65,17 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
     {
         ValidateCreateRequest(request);
         await _identitySeedService.EnsureSeededAsync(cancellationToken);
-        await EnsureMediaAssetsExistAsync(request.PhotoMediaAssetId, request.TipsQrMediaAssetId, cancellationToken);
 
+        return await MediaAssetReferences.InTransactionAsync(_dbContext, async () =>
+        {
+            await LockRequestedMediaAsync(request.PhotoMediaAssetId, request.TipsQrMediaAssetId, cancellationToken);
+            await ValidateMediaAssignmentAsync(null, request.PhotoMediaAssetId, request.TipsQrMediaAssetId, null, cancellationToken);
+            return await CreateStaffAsync(request, cancellationToken);
+        }, cancellationToken);
+    }
+
+    private async Task<StaffManagementView> CreateStaffAsync(AdminStaffCreateRequest request, CancellationToken cancellationToken)
+    {
         var normalizedEmail = NormalizeEmail(request.Email);
         var duplicateEmailExists = await _dbContext.Users.AnyAsync(user => user.NormalizedEmail == normalizedEmail, cancellationToken);
         if (duplicateEmailExists)
@@ -112,9 +122,18 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
     public async Task<StaffManagementView> UpdateAsync(Guid staffProfileId, AdminStaffUpdateRequest request, CancellationToken cancellationToken = default)
     {
         ValidateUpdateRequest(request);
-        await EnsureMediaAssetsExistAsync(request.PhotoMediaAssetId, request.TipsQrMediaAssetId, cancellationToken);
 
-        var staffProfile = await LoadStaffProfileAsync(staffProfileId, cancellationToken);
+        return await MediaAssetReferences.InTransactionAsync(_dbContext, async () =>
+        {
+            await LockRequestedMediaAsync(request.PhotoMediaAssetId, request.TipsQrMediaAssetId, cancellationToken);
+            var staffProfile = await LoadStaffProfileAsync(staffProfileId, cancellationToken);
+            await ValidateMediaAssignmentAsync(staffProfile, request.PhotoMediaAssetId, request.TipsQrMediaAssetId, null, cancellationToken);
+            return await UpdateStaffAsync(staffProfile, request, cancellationToken);
+        }, cancellationToken);
+    }
+
+    private async Task<StaffManagementView> UpdateStaffAsync(StaffProfile staffProfile, AdminStaffUpdateRequest request, CancellationToken cancellationToken)
+    {
         var normalizedEmail = NormalizeEmail(request.Email);
         var duplicateEmailExists = await _dbContext.Users.AnyAsync(
             user => user.Id != staffProfile.UserId && user.NormalizedEmail == normalizedEmail,
@@ -244,9 +263,20 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
     public async Task<StaffManagementView> UpdateCurrentAsync(Guid currentUserId, StaffProfileUpdateRequest request, CancellationToken cancellationToken = default)
     {
         ValidateSelfUpdateRequest(request);
-        await EnsureMediaAssetsExistAsync(request.PhotoMediaAssetId, request.TipsQrMediaAssetId, cancellationToken);
 
-        var staffProfile = await LoadStaffProfileByUserIdAsync(currentUserId, cancellationToken);
+        // A professional may only link files they uploaded for that slot (BUG-019); re-sending the current ids keeps
+        // saving the form working.
+        return await MediaAssetReferences.InTransactionAsync(_dbContext, async () =>
+        {
+            await LockRequestedMediaAsync(request.PhotoMediaAssetId, request.TipsQrMediaAssetId, cancellationToken);
+            var staffProfile = await LoadStaffProfileByUserIdAsync(currentUserId, cancellationToken);
+            await ValidateMediaAssignmentAsync(staffProfile, request.PhotoMediaAssetId, request.TipsQrMediaAssetId, currentUserId, cancellationToken);
+            return await UpdateCurrentStaffAsync(staffProfile, request, cancellationToken);
+        }, cancellationToken);
+    }
+
+    private async Task<StaffManagementView> UpdateCurrentStaffAsync(StaffProfile staffProfile, StaffProfileUpdateRequest request, CancellationToken cancellationToken)
+    {
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         var durationMinutes = request.DefaultAppointmentDurationMinutes is null or 0
             ? staffProfile.DefaultAppointmentDurationMinutes
@@ -289,14 +319,12 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
             cancellationToken);
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        if (staffProfile.PhotoMediaAssetId.HasValue)
-        {
-            await TryDeleteMediaAssetAsync(staffProfile.PhotoMediaAssetId.Value, "Replaced by new staff photo", cancellationToken);
-        }
+        var previousPhotoId = staffProfile.PhotoMediaAssetId;
 
         staffProfile.SetPhoto(mediaView.Id, utcNow);
         staffProfile.User.SetProfilePhoto(mediaView.Id, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
+        await ReleaseSlotMediaAsync(previousPhotoId, mediaView.Id, MediaAssetPurpose.StaffPhoto, staffProfile.UserId, "Replaced by new staff photo", cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
 
@@ -313,7 +341,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         staffProfile.SetPhoto(null, utcNow);
         staffProfile.User.SetProfilePhoto(null, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
-        await TryDeleteMediaAssetAsync(assetId, "Removed by staff from profile", cancellationToken);
+        await ReleaseSlotMediaAsync(assetId, null, MediaAssetPurpose.StaffPhoto, staffProfile.UserId, "Removed by staff from profile", cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
 
@@ -329,13 +357,11 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
             cancellationToken);
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        if (staffProfile.TipsQrMediaAssetId.HasValue)
-        {
-            await TryDeleteMediaAssetAsync(staffProfile.TipsQrMediaAssetId.Value, "Replaced by new tips QR", cancellationToken);
-        }
+        var previousTipsQrId = staffProfile.TipsQrMediaAssetId;
 
         staffProfile.SetTipsQr(mediaView.Id, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
+        await ReleaseSlotMediaAsync(previousTipsQrId, mediaView.Id, MediaAssetPurpose.TipsQr, staffProfile.UserId, "Replaced by new tips QR", cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
 
@@ -351,7 +377,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         staffProfile.SetTipsQr(null, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
-        await TryDeleteMediaAssetAsync(assetId, "Removed by staff from profile", cancellationToken);
+        await ReleaseSlotMediaAsync(assetId, null, MediaAssetPurpose.TipsQr, staffProfile.UserId, "Removed by staff from profile", cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
 
@@ -367,14 +393,12 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
             cancellationToken);
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        if (staffProfile.PhotoMediaAssetId.HasValue)
-        {
-            await TryDeleteMediaAssetAsync(staffProfile.PhotoMediaAssetId.Value, "Replaced by admin-uploaded staff photo", cancellationToken);
-        }
+        var previousPhotoId = staffProfile.PhotoMediaAssetId;
 
         staffProfile.SetPhoto(mediaView.Id, utcNow);
         staffProfile.User.SetProfilePhoto(mediaView.Id, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
+        await ReleaseSlotMediaAsync(previousPhotoId, mediaView.Id, MediaAssetPurpose.StaffPhoto, staffProfile.UserId, "Replaced by admin-uploaded staff photo", cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
 
@@ -391,7 +415,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         staffProfile.SetPhoto(null, utcNow);
         staffProfile.User.SetProfilePhoto(null, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
-        await TryDeleteMediaAssetAsync(assetId, "Removed by admin from staff profile", cancellationToken);
+        await ReleaseSlotMediaAsync(assetId, null, MediaAssetPurpose.StaffPhoto, staffProfile.UserId, "Removed by admin from staff profile", cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
 
@@ -407,13 +431,11 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
             cancellationToken);
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        if (staffProfile.TipsQrMediaAssetId.HasValue)
-        {
-            await TryDeleteMediaAssetAsync(staffProfile.TipsQrMediaAssetId.Value, "Replaced by admin-uploaded tips QR", cancellationToken);
-        }
+        var previousTipsQrId = staffProfile.TipsQrMediaAssetId;
 
         staffProfile.SetTipsQr(mediaView.Id, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
+        await ReleaseSlotMediaAsync(previousTipsQrId, mediaView.Id, MediaAssetPurpose.TipsQr, staffProfile.UserId, "Replaced by admin-uploaded tips QR", cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
 
@@ -429,32 +451,38 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         staffProfile.SetTipsQr(null, utcNow);
         await _dbContext.SaveChangesAsync(cancellationToken);
-        await TryDeleteMediaAssetAsync(assetId, "Removed by admin from staff profile", cancellationToken);
+        await ReleaseSlotMediaAsync(assetId, null, MediaAssetPurpose.TipsQr, staffProfile.UserId, "Removed by admin from staff profile", cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
 
-    private async Task TryDeleteMediaAssetAsync(Guid mediaAssetId, string reason, CancellationToken cancellationToken)
+    /// <summary>
+    /// Deletes the file a photo/QR slot no longer uses, only when it is a file of that kind uploaded by the
+    /// professional or by an administrator and nothing else references it (BUG-019). A file linked by mistake
+    /// (another kind, someone else's, or still in use) is only unlinked, never deleted.
+    /// </summary>
+    private async Task ReleaseSlotMediaAsync(
+        Guid? previousMediaAssetId,
+        Guid? currentMediaAssetId,
+        MediaAssetPurpose slotPurpose,
+        Guid staffUserId,
+        string reason,
+        CancellationToken cancellationToken)
     {
-        var asset = await _dbContext.MediaAssets
-            .SingleOrDefaultAsync(a => a.Id == mediaAssetId, cancellationToken);
-
-        if (asset is null || asset.Status == MediaAssetStatus.Archived)
+        if (previousMediaAssetId is not { } mediaAssetId || mediaAssetId == currentMediaAssetId)
         {
             return;
         }
 
-        try
-        {
-            await _fileStorageService.DeleteAsync(asset.StorageKey, cancellationToken);
-            asset.Archive(_timeProvider.GetUtcNow().UtcDateTime);
-            await _dbContext.SaveChangesAsync(cancellationToken);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            var pending = new PendingFileDeletion(asset.StorageKey, reason, _timeProvider.GetUtcNow().UtcDateTime);
-            _dbContext.PendingFileDeletions.Add(pending);
-            await _dbContext.SaveChangesAsync(cancellationToken);
-        }
+        await MediaAssetReferences.ReleaseAsync(
+            _dbContext,
+            _fileStorageService,
+            _timeProvider,
+            mediaAssetId,
+            async asset => asset.Purpose == slotPurpose
+                && (asset.UploadedByUserId == staffUserId
+                    || await MediaAssetReferences.IsAdminAsync(_dbContext, asset.UploadedByUserId, cancellationToken)),
+            reason,
+            cancellationToken);
     }
 
     private async Task<StaffProfile> LoadStaffProfileAsync(Guid staffProfileId, CancellationToken cancellationToken)
@@ -546,36 +574,74 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
             staffProfile.UpdatedAt);
     }
 
-    private async Task EnsureMediaAssetsExistAsync(Guid? photoMediaAssetId, Guid? tipsQrMediaAssetId, CancellationToken cancellationToken)
+    private Task LockRequestedMediaAsync(Guid? photoMediaAssetId, Guid? tipsQrMediaAssetId, CancellationToken cancellationToken)
     {
         var requestedIds = new[] { photoMediaAssetId, tipsQrMediaAssetId }
             .Where(mediaAssetId => mediaAssetId.HasValue)
             .Select(mediaAssetId => mediaAssetId!.Value)
-            .Distinct()
             .ToArray();
 
-        if (requestedIds.Length == 0)
-        {
-            return;
-        }
+        return MediaAssetReferences.LockAsync(_dbContext, requestedIds, cancellationToken);
+    }
 
-        var existingIds = await _dbContext.MediaAssets
-            .Where(asset => requestedIds.Contains(asset.Id))
-            .Select(asset => asset.Id)
-            .ToListAsync(cancellationToken);
-
+    /// <summary>
+    /// Which files a photo/QR slot may point to (BUG-019). Keeping the current file or clearing the slot is always
+    /// allowed (also for a file linked by mistake before this rule, so the form can still be saved or the link
+    /// removed). A new file must exist, be ready, be of the slot's kind, not be used by anything else and, when the
+    /// professional edits their own profile, have been uploaded by them. The error never says whose the file is.
+    /// </summary>
+    private async Task ValidateMediaAssignmentAsync(
+        StaffProfile? staffProfile,
+        Guid? photoMediaAssetId,
+        Guid? tipsQrMediaAssetId,
+        Guid? selfServiceUserId,
+        CancellationToken cancellationToken)
+    {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-        if (photoMediaAssetId.HasValue && !existingIds.Contains(photoMediaAssetId.Value))
+
+        if (!await IsAssignableAsync(photoMediaAssetId, staffProfile?.PhotoMediaAssetId, MediaAssetPurpose.StaffPhoto, staffProfile, selfServiceUserId, cancellationToken))
         {
-            errors["photoMediaAssetId"] = ["The selected photo media asset does not exist."];
+            errors["photoMediaAssetId"] = ["The selected photo is not available for this profile. Upload it from the profile instead."];
         }
 
-        if (tipsQrMediaAssetId.HasValue && !existingIds.Contains(tipsQrMediaAssetId.Value))
+        if (!await IsAssignableAsync(tipsQrMediaAssetId, staffProfile?.TipsQrMediaAssetId, MediaAssetPurpose.TipsQr, staffProfile, selfServiceUserId, cancellationToken))
         {
-            errors["tipsQrMediaAssetId"] = ["The selected tips QR media asset does not exist."];
+            errors["tipsQrMediaAssetId"] = ["The selected tips QR is not available for this profile. Upload it from the profile instead."];
         }
 
         ThrowIfAnyErrors(errors);
+    }
+
+    private async Task<bool> IsAssignableAsync(
+        Guid? requestedId,
+        Guid? currentId,
+        MediaAssetPurpose slotPurpose,
+        StaffProfile? staffProfile,
+        Guid? selfServiceUserId,
+        CancellationToken cancellationToken)
+    {
+        if (requestedId is not { } mediaAssetId || mediaAssetId == currentId)
+        {
+            return true;
+        }
+
+        var asset = await _dbContext.MediaAssets
+            .AsNoTracking()
+            .Where(candidate => candidate.Id == mediaAssetId)
+            .Select(candidate => new { candidate.Status, candidate.Purpose, candidate.UploadedByUserId })
+            .SingleOrDefaultAsync(cancellationToken);
+
+        if (asset is null
+            || asset.Status != MediaAssetStatus.Ready
+            || asset.Purpose != slotPurpose
+            || (selfServiceUserId is { } ownerId && asset.UploadedByUserId != ownerId))
+        {
+            return false;
+        }
+
+        // The professional's own account avatar mirrors the photo slot, so it does not count as another use.
+        return !await MediaAssetReferences.IsReferencedAsync(
+            _dbContext, mediaAssetId, cancellationToken, staffProfile?.UserId, staffProfile?.Id);
     }
 
     private static void ValidateCreateRequest(AdminStaffCreateRequest request)

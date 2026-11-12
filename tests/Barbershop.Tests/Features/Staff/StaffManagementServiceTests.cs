@@ -282,15 +282,17 @@ public sealed class StaffManagementServiceTests : IDisposable
   public async Task UploadPhotoAsync_Admin_ReplacingExistingPhoto_ArchivesThePreviousAsset()
   {
     var staff = await CreateStaffAsync("photo-replace@example.com", "Photo Replace", "Photo Replace");
+    // A real administrator: since BUG-019 only files uploaded by the professional or by an admin are deleted.
+    var adminUserId = await CreateAdminUserAsync("photo-replace-admin@example.com", "Photo Replace Admin");
 
     using var firstContent = new MemoryStream(new byte[] { 1 });
     var afterFirst = await _adminStaffService.UploadPhotoAsync(
-        staff.StaffProfileId, Guid.NewGuid(), new StaffMediaUploadRequest("first.jpg", "image/jpeg", 1, firstContent));
+        staff.StaffProfileId, adminUserId, new StaffMediaUploadRequest("first.jpg", "image/jpeg", 1, firstContent));
     var firstAssetId = afterFirst.PhotoMediaAssetId!.Value;
 
     using var secondContent = new MemoryStream(new byte[] { 2 });
     var afterSecond = await _adminStaffService.UploadPhotoAsync(
-        staff.StaffProfileId, Guid.NewGuid(), new StaffMediaUploadRequest("second.jpg", "image/jpeg", 1, secondContent));
+        staff.StaffProfileId, adminUserId, new StaffMediaUploadRequest("second.jpg", "image/jpeg", 1, secondContent));
 
     Assert.NotEqual(firstAssetId, afterSecond.PhotoMediaAssetId);
     var archivedAsset = await _dbContext.MediaAssets.SingleAsync(asset => asset.Id == firstAssetId);

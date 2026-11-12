@@ -108,7 +108,9 @@ public sealed class CriticalPermissionHttpIntegrationTests
       Assert.Equal(HttpStatusCode.NoContent, deactivate.StatusCode);
     }
 
-    Assert.Equal(HttpStatusCode.Forbidden, await ProbeAsync(context.Client, deliverer.AccessToken, PermissionCodes.LoyaltyRedemptionsDeliver));
+    // ADR-0005 only requires the request to be denied. Since BUG-013 (immediate revocation) a deactivated account's
+    // sessions are no longer valid, so the token itself is rejected (401) before any permission check (403).
+    Assert.Equal(HttpStatusCode.Unauthorized, await ProbeAsync(context.Client, deliverer.AccessToken, PermissionCodes.LoyaltyRedemptionsDeliver));
   }
 
   [Fact]

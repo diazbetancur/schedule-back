@@ -10,15 +10,6 @@ namespace Api.Barbershop.Features.Auth;
 
 public static class AuthEndpoints
 {
-    private const string RefreshTokenCookieName = "X-Refresh-Token";
-
-    // El refresh token va en cookie HttpOnly (todos los browsers) Y en el body
-    // (fallback para iOS standalone donde las cookies cross-origin son bloqueadas por ITP).
-    private sealed record AuthApiTokenResponse(string AccessToken, int ExpiresInSeconds, AuthUserResponse User, string RefreshToken);
-
-    // Cuerpo opcional en /auth/refresh — iOS standalone envía el token aquí cuando la cookie no llega.
-    private sealed record RefreshBodyRequest(string? RefreshToken);
-
     public static RouteGroupBuilder MapAuthEndpoints(this RouteGroupBuilder api)
     {
         var auth = api.MapGroup("/auth")
@@ -27,21 +18,22 @@ public static class AuthEndpoints
         auth.MapPost("/register", RegisterAsync)
             .WithName("Register")
             .RequireRateLimiting(RateLimitPolicyNames.AuthCredentials)
-            .Produces<AuthApiTokenResponse>(StatusCodes.Status201Created)
+            .Produces<RefreshTokenTransport.AuthApiTokenResponse>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
 
         auth.MapPost("/login", LoginAsync)
             .WithName("Login")
             .RequireRateLimiting(RateLimitPolicyNames.AuthCredentials)
-            .Produces<AuthApiTokenResponse>(StatusCodes.Status200OK)
+            .Produces<RefreshTokenTransport.AuthApiTokenResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
 
         auth.MapPost("/refresh", RefreshAsync)
             .WithName("RefreshToken")
             .RequireRateLimiting(RateLimitPolicyNames.AuthRefresh)
-            .Produces<AuthApiTokenResponse>(StatusCodes.Status200OK)
+            .Produces<RefreshTokenTransport.AuthApiTokenResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized);
 
         auth.MapPost("/logout", LogoutAsync)
@@ -79,10 +71,8 @@ public static class AuthEndpoints
         CancellationToken cancellationToken)
     {
         var response = await authService.RegisterAsync(request, cancellationToken);
-        SetRefreshTokenCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays);
-        return Results.Json(
-            new AuthApiTokenResponse(response.AccessToken, response.ExpiresInSeconds, response.User, response.RefreshToken),
-            statusCode: StatusCodes.Status201Created);
+        RefreshTokenTransport.SetCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays);
+        return Results.Json(RefreshTokenTransport.ToApiResponse(response), statusCode: StatusCodes.Status201Created);
     }
 
     private static async Task<IResult> LoginAsync(
@@ -93,8 +83,8 @@ public static class AuthEndpoints
         CancellationToken cancellationToken)
     {
         var response = await authService.LoginAsync(request, cancellationToken);
-        SetRefreshTokenCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays);
-        return Results.Ok(new AuthApiTokenResponse(response.AccessToken, response.ExpiresInSeconds, response.User, response.RefreshToken));
+        RefreshTokenTransport.SetCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays);
+        return Results.Ok(RefreshTokenTransport.ToApiResponse(response));
     }
 
     private static async Task<IResult> RefreshAsync(
@@ -103,24 +93,30 @@ public static class AuthEndpoints
         IOptions<JwtOptions> jwtOptions,
         CancellationToken cancellationToken)
     {
-        // Cookie-based (browsers estándar)
-        var refreshToken = httpContext.Request.Cookies[RefreshTokenCookieName];
+        // Cookie first (standard browsers); the body is the fallback for iOS standalone PWAs, where the cross-site
+        // cookie does not arrive. A missing or empty body means "no token" (401); a JSON body that does not parse is
+        // a malformed request (400). Neither reaches the server-error path (BUG-003).
+        var refreshToken = RefreshTokenTransport.ReadCookie(httpContext);
 
-        // Fallback body-based: iOS standalone PWA no envía cookies cross-origin confiablemente
-        if (string.IsNullOrWhiteSpace(refreshToken))
+        if (refreshToken is null)
         {
-            var body = await httpContext.Request.ReadFromJsonAsync<RefreshBodyRequest>(cancellationToken);
-            refreshToken = body?.RefreshToken;
+            var body = await RefreshTokenTransport.ReadBodyAsync(httpContext.Request, cancellationToken);
+            if (body.IsMalformed)
+            {
+                throw new ArgumentException("The request body must be JSON like {\"refreshToken\": \"...\"}.");
+            }
+
+            refreshToken = body.Token;
         }
 
-        if (string.IsNullOrWhiteSpace(refreshToken))
+        if (refreshToken is null)
         {
             return Results.Unauthorized();
         }
 
         var response = await authService.RefreshAsync(new RefreshRequest(refreshToken), cancellationToken);
-        SetRefreshTokenCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays);
-        return Results.Ok(new AuthApiTokenResponse(response.AccessToken, response.ExpiresInSeconds, response.User, response.RefreshToken));
+        RefreshTokenTransport.SetCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays);
+        return Results.Ok(RefreshTokenTransport.ToApiResponse(response));
     }
 
     [Authorize]
@@ -130,9 +126,14 @@ public static class AuthEndpoints
         IAuthService authService,
         CancellationToken cancellationToken)
     {
-        var refreshToken = httpContext.Request.Cookies[RefreshTokenCookieName];
-        await authService.LogoutAsync(user.GetRequiredUserId(), new LogoutRequest(refreshToken), cancellationToken);
-        ClearRefreshTokenCookie(httpContext);
+        // Both the cookie and the body token are revoked (BUG-002): clients without the cookie (iOS standalone PWA)
+        // can only present the body one. A body that cannot be read never blocks signing out.
+        var cookieToken = RefreshTokenTransport.ReadCookie(httpContext);
+        var bodyToken = await RefreshTokenTransport.ReadBodyAsync(httpContext.Request, cancellationToken);
+
+        await authService.LogoutAsync(
+            user.GetRequiredUserId(), new LogoutRequest(cookieToken, bodyToken.Token), cancellationToken);
+        RefreshTokenTransport.ClearCookie(httpContext);
         return Results.NoContent();
     }
 
@@ -159,39 +160,5 @@ public static class AuthEndpoints
     {
         await authService.ResetPasswordAsync(request, cancellationToken);
         return Results.NoContent();
-    }
-
-    private static void SetRefreshTokenCookie(HttpContext context, string refreshToken, int refreshTokenDays)
-    {
-        var options = BuildRefreshCookieOptions(context);
-        // iOS WebKit (PWA standalone) requiere Expires explícito — Max-Age solo
-        // hace que la cookie se trate como de sesión y se borre al cerrar la app.
-        var expiry = DateTimeOffset.UtcNow.AddDays(refreshTokenDays);
-        options.MaxAge = TimeSpan.FromDays(refreshTokenDays);
-        options.Expires = expiry;
-        context.Response.Cookies.Append(RefreshTokenCookieName, refreshToken, options);
-    }
-
-    private static void ClearRefreshTokenCookie(HttpContext context)
-    {
-        context.Response.Cookies.Delete(RefreshTokenCookieName, BuildRefreshCookieOptions(context));
-    }
-
-    // localhost is treated as a secure context by modern browsers, so SameSite=None; Secure
-    // works for cross-port dev traffic (localhost:4200 → localhost:5000). In production the
-    // app runs over HTTPS, which is also required by the PWA manifest.
-    private static CookieOptions BuildRefreshCookieOptions(HttpContext context)
-    {
-        var isSecureContext = context.Request.IsHttps
-            || context.Request.Host.Host is "localhost" or "127.0.0.1";
-
-        return new CookieOptions
-        {
-            HttpOnly = true,
-            Secure = isSecureContext,
-            SameSite = isSecureContext ? SameSiteMode.None : SameSiteMode.Lax,
-            Path = "/",
-            IsEssential = true,
-        };
     }
 }

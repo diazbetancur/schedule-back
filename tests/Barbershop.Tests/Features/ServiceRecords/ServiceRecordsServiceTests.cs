@@ -17,6 +17,7 @@ using Barbershop.Infrastructure.Identity;
 using Barbershop.Infrastructure.Memberships;
 using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.ServiceRecords;
+using Barbershop.Tests.Features.Notifications;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 
@@ -139,6 +140,40 @@ public sealed class ServiceRecordsServiceTests : IDisposable
 
     await Assert.ThrowsAsync<ConflictException>(() =>
         RegisterAsync(appointmentId: appointment.Id, performedOn: null, serviceIds: [_haircut.Id]));
+  }
+
+  /// <summary>
+  /// SONDA BUG-042 / ADR-0009: only appointments that already started can carry services. Same rule as the list of
+  /// appointments offered to register (StartsAt &lt;= now): an appointment of today that starts later is rejected.
+  /// </summary>
+  [Fact]
+  public async Task Register_OnAnAppointmentOfTodayThatHasNotStarted_IsRejected_AndOneThatStartedIsAccepted()
+  {
+    // 10:00 in Bogotá: the 15:00 appointment of the same day has not started, the 09:00 one has.
+    var day = new DateOnly(2030, 3, 14);
+    var clock = new ManualTimeProvider(new DateTimeOffset(BogotaClock.ToUtc(day, new TimeOnly(10, 0)), TimeSpan.Zero));
+    var service = new ServiceRecordsService(_dbContext, _ledger, clock);
+    var later = await CreateAppointmentAtAsync(BogotaClock.ToUtc(day, new TimeOnly(15, 0)));
+    var started = await CreateAppointmentAtAsync(BogotaClock.ToUtc(day, new TimeOnly(9, 0)));
+
+    var notYet = await Assert.ThrowsAsync<ValidationProblemException>(() => service.RegisterAsync(
+        _barberUser.Id, new ServiceRecordRegisterRequest(later.Id, null, null, [GeneralOf(_haircut.Id)], null, Guid.NewGuid())));
+    Assert.Contains("appointmentId", notYet.Errors.Keys);
+    Assert.Empty(await _dbContext.ServiceRecords.Where(record => record.AppointmentId == later.Id).ToListAsync());
+
+    // One minute before it starts it is still rejected; once it starts it is accepted.
+    clock.Now = new DateTimeOffset(later.StartsAt.AddMinutes(-1), TimeSpan.Zero);
+    await Assert.ThrowsAsync<ValidationProblemException>(() => service.RegisterAsync(
+        _barberUser.Id, new ServiceRecordRegisterRequest(later.Id, null, null, [GeneralOf(_haircut.Id)], null, Guid.NewGuid())));
+
+    clock.Now = new DateTimeOffset(later.StartsAt, TimeSpan.Zero);
+    var accepted = await service.RegisterAsync(
+        _barberUser.Id, new ServiceRecordRegisterRequest(later.Id, null, null, [GeneralOf(_haircut.Id)], null, Guid.NewGuid()));
+    Assert.Equal(day, Assert.Single(accepted).PerformedOn);
+
+    var earlier = await service.RegisterAsync(
+        _barberUser.Id, new ServiceRecordRegisterRequest(started.Id, null, null, [GeneralOf(_haircut.Id)], null, Guid.NewGuid()));
+    Assert.Single(earlier);
   }
 
   [Fact]
@@ -687,6 +722,16 @@ public sealed class ServiceRecordsServiceTests : IDisposable
     var appointment = new Appointment(
         staff.Id, customerUser?.FullName ?? "Cliente Cita", startsAt, startsAt.AddMinutes(30), status,
         AppointmentSource.Manual, DateTime.UtcNow, customerUser?.Id);
+    _dbContext.Appointments.Add(appointment);
+    await _dbContext.SaveChangesAsync();
+    return appointment;
+  }
+
+  private async Task<Appointment> CreateAppointmentAtAsync(DateTime startsAtUtc)
+  {
+    var appointment = new Appointment(
+        _barber.Id, "Cliente Cita", startsAtUtc, startsAtUtc.AddMinutes(30), AppointmentStatus.Confirmed,
+        AppointmentSource.Manual, startsAtUtc.AddDays(-1));
     _dbContext.Appointments.Add(appointment);
     await _dbContext.SaveChangesAsync();
     return appointment;

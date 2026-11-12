@@ -261,9 +261,12 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             errors["customerName"] = ["Con una cita, el cliente es el de la cita."];
         }
 
-        if (appointmentDate > today)
+        // ADR-0009: only an appointment that already started (same rule as the list of appointments to register,
+        // StartsAt <= now). Comparing the instant covers the hour too: one of today that starts later is rejected
+        // (SONDA BUG-042), and the Bogotá date of a started appointment can never be after today.
+        if (appointment.StartsAt > _timeProvider.GetUtcNow().UtcDateTime)
         {
-            errors["appointmentId"] = ["La cita todavía no ha ocurrido."];
+            errors["appointmentId"] = ["La cita todavía no ha empezado."];
         }
 
         if (errors.Count > 0)

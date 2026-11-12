@@ -3063,6 +3063,9 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<DateTime?>("RevokedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid>("SessionId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("TokenHash")
                         .IsRequired()
                         .HasMaxLength(512)
@@ -3074,6 +3077,8 @@ namespace Barbershop.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("ReplacedByRefreshTokenId");
+
+                    b.HasIndex("SessionId");
 
                     b.HasIndex("TokenHash")
                         .IsUnique();

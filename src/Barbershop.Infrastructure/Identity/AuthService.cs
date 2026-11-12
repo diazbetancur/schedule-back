@@ -90,7 +90,7 @@ internal sealed class AuthService : IAuthService
             throw new ConflictException(DuplicateEmailMessage);
         }
 
-        return CreateTokenResponse(user, [RoleNames.Customer], [], refreshToken.RawToken, null);
+        return CreateTokenResponse(user, [RoleNames.Customer], [], refreshToken, null);
     }
 
     public async Task<TokenResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
@@ -102,49 +102,71 @@ internal sealed class AuthService : IAuthService
         // bootstrapped once at startup (Program.cs).
 
         var normalizedEmail = NormalizeEmail(request.Email);
-        var user = await _dbContext.Users
-            .Include(candidate => candidate.UserRoles)
-            .ThenInclude(userRole => userRole.Role)
-            .ThenInclude(role => role.RolePermissions)
-            .ThenInclude(rolePermission => rolePermission.Permission)
-            .SingleOrDefaultAsync(candidate => candidate.NormalizedEmail == normalizedEmail, cancellationToken);
+        var userId = await _dbContext.Users
+            .AsNoTracking()
+            .Where(candidate => candidate.NormalizedEmail == normalizedEmail)
+            .Select(candidate => (Guid?)candidate.Id)
+            .SingleOrDefaultAsync(cancellationToken);
 
-        if (user is null || !user.IsActive)
+        if (userId is null)
         {
             throw new UnauthorizedException("Invalid email or password.");
         }
 
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
-        if (user.IsLockedOut(now))
+        // Under the account lock: a password change or reset committing while this login checks the old password
+        // cannot be followed by a new session issued for that old password (BUG-015).
+        var (user, refreshToken, failure) = await AccountSessions.InAccountTransactionAsync<(User User, RefreshTokenEnvelope? Token, bool Failed)>(_dbContext, async () =>
         {
-            throw new TooManyRequestsException("Demasiados intentos fallidos. Intenta de nuevo más tarde.");
-        }
+            await AccountSessions.LockAccountAsync(_dbContext, userId.Value, cancellationToken);
 
-        var verification = _passwordHasher.VerifyHashedPassword(new object(), user.PasswordHash, request.Password);
-        if (verification == PasswordVerificationResult.Failed)
-        {
-            user.RegisterFailedLogin(now, MaxFailedLoginAttempts, LockoutDuration);
+            var lockedUser = await _dbContext.Users
+                .Include(candidate => candidate.UserRoles)
+                .ThenInclude(userRole => userRole.Role)
+                .ThenInclude(role => role.RolePermissions)
+                .ThenInclude(rolePermission => rolePermission.Permission)
+                .SingleOrDefaultAsync(candidate => candidate.Id == userId.Value, cancellationToken);
+
+            if (lockedUser is null || !lockedUser.IsActive)
+            {
+                throw new UnauthorizedException("Invalid email or password.");
+            }
+
+            var now = _timeProvider.GetUtcNow().UtcDateTime;
+            if (lockedUser.IsLockedOut(now))
+            {
+                throw new TooManyRequestsException("Demasiados intentos fallidos. Intenta de nuevo más tarde.");
+            }
+
+            var verification = _passwordHasher.VerifyHashedPassword(new object(), lockedUser.PasswordHash, request.Password);
+            if (verification == PasswordVerificationResult.Failed)
+            {
+                // The failed attempt must be committed, so it is reported after the transaction instead of thrown.
+                lockedUser.RegisterFailedLogin(now, MaxFailedLoginAttempts, LockoutDuration);
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                return (lockedUser, (RefreshTokenEnvelope?)null, true);
+            }
+
+            if (lockedUser.FailedLoginCount > 0 || lockedUser.LockedUntil is not null)
+            {
+                lockedUser.RegisterSuccessfulLogin(now);
+            }
+
+            var issued = CreateRefreshToken(lockedUser.Id, _timeProvider.GetUtcNow().UtcDateTime);
+            _dbContext.RefreshTokens.Add(issued.Entity);
             await _dbContext.SaveChangesAsync(cancellationToken);
+            return (lockedUser, issued, false);
+        }, cancellationToken);
+
+        if (failure || refreshToken is null)
+        {
             throw new UnauthorizedException("Invalid email or password.");
         }
-
-        if (user.FailedLoginCount > 0 || user.LockedUntil is not null)
-        {
-            user.RegisterSuccessfulLogin(now);
-            await _dbContext.SaveChangesAsync(cancellationToken);
-        }
-
-        var issuedAt = _timeProvider.GetUtcNow().UtcDateTime;
-        var refreshToken = CreateRefreshToken(user.Id, issuedAt);
-
-        _dbContext.RefreshTokens.Add(refreshToken.Entity);
-        await _dbContext.SaveChangesAsync(cancellationToken);
 
         var roles = GetRoleNames(user);
         var permissions = GetPermissionCodes(user);
         var profilePhotoUrl = await GetProfilePhotoUrlAsync(user.ProfilePhotoMediaAssetId, cancellationToken);
 
-        return CreateTokenResponse(user, roles, permissions, refreshToken.RawToken, profilePhotoUrl);
+        return CreateTokenResponse(user, roles, permissions, refreshToken, profilePhotoUrl);
     }
 
     public async Task<TokenResponse> RefreshAsync(RefreshRequest request, CancellationToken cancellationToken = default)
@@ -164,44 +186,93 @@ internal sealed class AuthService : IAuthService
             .SingleOrDefaultAsync(token => token.TokenHash == refreshTokenHash, cancellationToken);
 
         if (existingToken is null
-            || existingToken.ReplacedByRefreshTokenId is not null
-            || !existingToken.IsActive(utcNow)
+            || !AccountSessions.IsUsable(existingToken, utcNow)
             || !existingToken.User.IsActive)
         {
             throw new UnauthorizedException("The refresh token is invalid or expired.");
         }
 
-        var rotatedToken = CreateRefreshToken(existingToken.UserId, utcNow);
-        existingToken.Revoke(utcNow, rotatedToken.Entity.Id);
+        // Single use even under concurrency (BUG-016): the check above ran without a lock, so two requests with the
+        // same token can both get here. Under the account lock they run one after the other and the token is read
+        // again; the second one finds it already rotated (or revoked by a logout/password change) and gets 401.
+        var rotatedToken = await AccountSessions.InAccountTransactionAsync(_dbContext, async () =>
+        {
+            await AccountSessions.LockAccountAsync(_dbContext, existingToken.UserId, cancellationToken);
+            await AccountSessions.ReloadAsync(_dbContext, existingToken, cancellationToken);
+            await AccountSessions.ReloadAsync(_dbContext, existingToken.User, cancellationToken);
 
-        _dbContext.RefreshTokens.Add(rotatedToken.Entity);
-        await _dbContext.SaveChangesAsync(cancellationToken);
+            var lockedNow = _timeProvider.GetUtcNow().UtcDateTime;
+            if (!AccountSessions.IsUsable(existingToken, lockedNow) || !existingToken.User.IsActive)
+            {
+                throw new UnauthorizedException("The refresh token is invalid or expired.");
+            }
+
+            var rotated = CreateRefreshToken(existingToken.UserId, lockedNow, existingToken.SessionId);
+            existingToken.Revoke(lockedNow, rotated.Entity.Id);
+
+            _dbContext.RefreshTokens.Add(rotated.Entity);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            return rotated;
+        }, cancellationToken);
 
         var roles = GetRoleNames(existingToken.User);
         var permissions = GetPermissionCodes(existingToken.User);
         var profilePhotoUrl = await GetProfilePhotoUrlAsync(existingToken.User.ProfilePhotoMediaAssetId, cancellationToken);
 
-        return CreateTokenResponse(existingToken.User, roles, permissions, rotatedToken.RawToken, profilePhotoUrl);
+        return CreateTokenResponse(existingToken.User, roles, permissions, rotatedToken, profilePhotoUrl);
     }
 
     public async Task LogoutAsync(Guid currentUserId, LogoutRequest request, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(request.RefreshToken))
+        // Cookie and body (iOS/PWA fallback, BUG-002) may both arrive, and may differ when one of them is stale:
+        // each one is revoked, but only if it belongs to the signed-in account.
+        var tokenHashes = new[] { request.RefreshToken, request.AdditionalRefreshToken }
+            .Where(token => !string.IsNullOrWhiteSpace(token))
+            .Select(token => ComputeTokenHash(token!))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        if (tokenHashes.Length == 0)
         {
             return;
         }
 
-        var refreshTokenHash = ComputeTokenHash(request.RefreshToken);
-        var refreshToken = await _dbContext.RefreshTokens
-            .SingleOrDefaultAsync(token => token.UserId == currentUserId && token.TokenHash == refreshTokenHash, cancellationToken);
-
-        if (refreshToken is null || refreshToken.RevokedAt is not null)
+        await AccountSessions.InAccountTransactionAsync(_dbContext, async () =>
         {
-            return;
+            await AccountSessions.LockAccountAsync(_dbContext, currentUserId, cancellationToken);
+
+            var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+            foreach (var tokenHash in tokenHashes)
+            {
+                await AccountSessions.RevokeSessionAsync(_dbContext, currentUserId, tokenHash, utcNow, cancellationToken);
+            }
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }, cancellationToken);
+    }
+
+    public async Task<TokenResponse> IssueSessionAsync(Guid userId, CancellationToken cancellationToken = default)
+    {
+        EnsureJwtConfigured();
+
+        var user = await _dbContext.Users
+            .Include(candidate => candidate.UserRoles)
+            .ThenInclude(userRole => userRole.Role)
+            .ThenInclude(role => role.RolePermissions)
+            .ThenInclude(rolePermission => rolePermission.Permission)
+            .SingleOrDefaultAsync(candidate => candidate.Id == userId, cancellationToken);
+
+        if (user is null || !user.IsActive)
+        {
+            throw new UnauthorizedException("The current user is not available.");
         }
 
-        refreshToken.Revoke(_timeProvider.GetUtcNow().UtcDateTime);
+        var refreshToken = CreateRefreshToken(user.Id, _timeProvider.GetUtcNow().UtcDateTime);
+        _dbContext.RefreshTokens.Add(refreshToken.Entity);
         await _dbContext.SaveChangesAsync(cancellationToken);
+
+        var profilePhotoUrl = await GetProfilePhotoUrlAsync(user.ProfilePhotoMediaAssetId, cancellationToken);
+        return CreateTokenResponse(user, GetRoleNames(user), GetPermissionCodes(user), refreshToken, profilePhotoUrl);
     }
 
     public async Task<AuthUserResponse> GetCurrentUserAsync(Guid currentUserId, CancellationToken cancellationToken = default)
@@ -276,28 +347,35 @@ internal sealed class AuthService : IAuthService
         var user = await _dbContext.Users
             .SingleOrDefaultAsync(u => u.PasswordResetTokenHash == tokenHash, cancellationToken);
 
-        if (user is null || !user.IsActive || !user.ConsumePasswordResetToken(utcNow))
+        if (user is null)
         {
-            throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
+            throw InvalidResetLink();
+        }
+
+        // Under the account lock, so a refresh committing at the same time cannot leave a session alive (BUG-015/016).
+        await AccountSessions.InAccountTransactionAsync(_dbContext, async () =>
+        {
+            await AccountSessions.LockAccountAsync(_dbContext, user.Id, cancellationToken);
+            await AccountSessions.ReloadAsync(_dbContext, user, cancellationToken);
+
+            if (!user.IsActive || user.PasswordResetTokenHash != tokenHash || !user.ConsumePasswordResetToken(utcNow))
             {
-                ["token"] = ["El enlace de recuperación es inválido o ha expirado."]
-            });
-        }
+                throw InvalidResetLink();
+            }
 
-        var newHash = _passwordHasher.HashPassword(new object(), request.NewPassword);
-        user.SetPasswordHash(newHash, utcNow);
+            var newHash = _passwordHasher.HashPassword(new object(), request.NewPassword);
+            user.SetPasswordHash(newHash, utcNow);
+            await AccountSessions.RevokeAllRefreshTokensAsync(_dbContext, user.Id, utcNow, cancellationToken);
 
-        var activeTokens = await _dbContext.RefreshTokens
-            .Where(t => t.UserId == user.Id && t.RevokedAt == null)
-            .ToListAsync(cancellationToken);
-
-        foreach (var token in activeTokens)
-        {
-            token.Revoke(utcNow);
-        }
-
-        await _dbContext.SaveChangesAsync(cancellationToken);
+            await _dbContext.SaveChangesAsync(cancellationToken);
+        }, cancellationToken);
     }
+
+    private static ValidationProblemException InvalidResetLink() =>
+        new(new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["token"] = ["El enlace de recuperación es inválido o ha expirado."]
+        });
 
     private static string BuildResetEmailHtml(string firstName, string resetUrl, int expiryMinutes) => $"""
         <!DOCTYPE html>
@@ -349,7 +427,7 @@ internal sealed class AuthService : IAuthService
         </html>
         """;
 
-    private TokenResponse CreateTokenResponse(User user, IReadOnlyList<string> roles, IReadOnlyList<string> permissions, string refreshToken, string? profilePhotoUrl)
+    private TokenResponse CreateTokenResponse(User user, IReadOnlyList<string> roles, IReadOnlyList<string> permissions, RefreshTokenEnvelope refreshToken, string? profilePhotoUrl)
     {
         var jwtOptions = _jwtOptions.Value;
         var expiresAt = _timeProvider.GetUtcNow().UtcDateTime.AddMinutes(jwtOptions.AccessTokenMinutes);
@@ -361,7 +439,10 @@ internal sealed class AuthService : IAuthService
             new(JwtRegisteredClaimNames.Email, user.Email),
             new(ClaimTypes.Email, user.Email),
             new(ClaimTypes.Name, user.FullName),
-            new("full_name", user.FullName)
+            new("full_name", user.FullName),
+            // The session this access token belongs to: checked on every request, so signing out or changing the
+            // password stops it right away instead of when it expires (BUG-013).
+            new(JwtRegisteredClaimNames.Sid, refreshToken.Entity.SessionId.ToString())
         };
 
         claims.AddRange(roles.Select(role => new Claim(ClaimTypes.Role, role)));
@@ -380,7 +461,7 @@ internal sealed class AuthService : IAuthService
             signingCredentials: credentials);
 
         var accessToken = new JwtSecurityTokenHandler().WriteToken(securityToken);
-        return new TokenResponse(accessToken, (int)TimeSpan.FromMinutes(jwtOptions.AccessTokenMinutes).TotalSeconds, refreshToken, CreateUserResponse(user, roles, permissions, profilePhotoUrl));
+        return new TokenResponse(accessToken, (int)TimeSpan.FromMinutes(jwtOptions.AccessTokenMinutes).TotalSeconds, refreshToken.RawToken, CreateUserResponse(user, roles, permissions, profilePhotoUrl));
     }
 
     private static IReadOnlyList<string> GetPermissionCodes(User user)
@@ -401,13 +482,13 @@ internal sealed class AuthService : IAuthService
             profilePhotoUrl,
             permissions);
 
-    private RefreshTokenEnvelope CreateRefreshToken(Guid userId, DateTime createdAt)
+    private RefreshTokenEnvelope CreateRefreshToken(Guid userId, DateTime createdAt, Guid? sessionId = null)
     {
         var jwtOptions = _jwtOptions.Value;
         var rawToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(64));
         var hash = ComputeTokenHash(rawToken);
         var expiresAt = createdAt.AddDays(jwtOptions.RefreshTokenDays);
-        var entity = new RefreshToken(userId, hash, expiresAt, createdAt);
+        var entity = new RefreshToken(userId, hash, expiresAt, createdAt, sessionId: sessionId);
 
         return new RefreshTokenEnvelope(rawToken, entity);
     }

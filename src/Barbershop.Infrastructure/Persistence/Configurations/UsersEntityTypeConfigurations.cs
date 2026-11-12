@@ -163,8 +163,12 @@ internal sealed class RefreshTokenConfiguration : IEntityTypeConfiguration<Refre
     builder.Property(x => x.ExpiresAt).HasColumnType("timestamp with time zone").IsRequired();
     builder.Property(x => x.RevokedAt).HasColumnType("timestamp with time zone");
 
+    builder.Property(x => x.SessionId).IsRequired();
+
     builder.HasIndex(x => x.TokenHash).IsUnique();
     builder.HasIndex(x => new { x.UserId, x.ExpiresAt });
+    // Checked on every authenticated request (BUG-013): is this session still active?
+    builder.HasIndex(x => x.SessionId);
 
     builder.HasOne(x => x.User)
         .WithMany(x => x.RefreshTokens)

@@ -8,9 +8,14 @@ public sealed class RefreshToken
   {
   }
 
-  public RefreshToken(Guid userId, string tokenHash, DateTime expiresAt, DateTime createdAt, string? deviceLabel = null)
+  /// <param name="sessionId">
+  /// The session (sign-in) this token belongs to. A new sign-in starts a session (defaults to this token's id); a
+  /// rotation passes the session of the token it replaces, so the id stays the same for the whole session.
+  /// </param>
+  public RefreshToken(Guid userId, string tokenHash, DateTime expiresAt, DateTime createdAt, string? deviceLabel = null, Guid? sessionId = null)
   {
     UserId = userId;
+    SessionId = sessionId ?? Id;
     TokenHash = DomainValidation.Required(tokenHash, nameof(tokenHash), 512, 32);
     ExpiresAt = DomainValidation.EnsureUtc(expiresAt, nameof(expiresAt));
     CreatedAt = DomainValidation.EnsureUtc(createdAt, nameof(createdAt));
@@ -23,6 +28,9 @@ public sealed class RefreshToken
   public DateTime ExpiresAt { get; private set; }
   public DateTime? RevokedAt { get; private set; }
   public Guid? ReplacedByRefreshTokenId { get; private set; }
+
+  /// <summary>Stable across rotations; access tokens carry it as <c>sid</c> and are valid only while it is active.</summary>
+  public Guid SessionId { get; private set; }
   public DateTime CreatedAt { get; private set; }
   public string? DeviceLabel { get; private set; }
   public User User { get; private set; } = null!;

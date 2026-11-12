@@ -12,7 +12,11 @@ public sealed record LoginRequest(
 
 public sealed record RefreshRequest(string RefreshToken);
 
-public sealed record LogoutRequest(string? RefreshToken);
+/// <summary>
+/// The refresh tokens a client presents when signing out: the cookie one and, for clients without cookies (iOS
+/// standalone PWA), the one sent in the body. Only tokens of the signed-in account are revoked.
+/// </summary>
+public sealed record LogoutRequest(string? RefreshToken, string? AdditionalRefreshToken = null);
 
 public sealed record ForgotPasswordRequest(string Email);
 

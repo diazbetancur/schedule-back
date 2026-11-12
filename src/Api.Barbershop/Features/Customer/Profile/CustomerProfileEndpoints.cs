@@ -2,6 +2,8 @@ using Api.Barbershop.Features.Auth;
 using Api.Barbershop.Features.Uploads;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Customer;
+using Barbershop.Infrastructure.Configuration;
+using Microsoft.Extensions.Options;
 using System.Security.Claims;
 
 namespace Api.Barbershop.Features.Customer.Profile;
@@ -44,9 +46,11 @@ public static class CustomerProfileEndpoints
             .Produces<CustomerProfileView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized);
 
+        // Changing the password signs out every session (BUG-015); the response carries a new session for the
+        // device that made the change, in the same shape as /auth/login.
         profile.MapPost("/password", ChangePasswordAsync)
             .WithName("ChangeCustomerPassword")
-            .Produces(StatusCodes.Status204NoContent)
+            .Produces<RefreshTokenTransport.AuthApiTokenResponse>(StatusCodes.Status200OK)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
@@ -105,10 +109,17 @@ public static class CustomerProfileEndpoints
     private static async Task<IResult> ChangePasswordAsync(
         ClaimsPrincipal user,
         CustomerPasswordChangeRequest request,
+        HttpContext httpContext,
         ICustomerProfileService service,
+        IAuthService authService,
+        IOptions<JwtOptions> jwtOptions,
         CancellationToken cancellationToken)
     {
-        await service.ChangePasswordAsync(user.GetRequiredUserId(), request, cancellationToken);
-        return Results.NoContent();
+        var userId = user.GetRequiredUserId();
+        await service.ChangePasswordAsync(userId, request, cancellationToken);
+
+        var session = await authService.IssueSessionAsync(userId, cancellationToken);
+        RefreshTokenTransport.SetCookie(httpContext, session.RefreshToken, jwtOptions.Value.RefreshTokenDays);
+        return Results.Ok(RefreshTokenTransport.ToApiResponse(session));
     }
 }

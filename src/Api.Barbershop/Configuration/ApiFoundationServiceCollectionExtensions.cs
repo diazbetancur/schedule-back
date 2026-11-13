@@ -10,6 +10,8 @@ using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
+using Microsoft.AspNetCore.Routing;
 using System.Threading.RateLimiting;
 using AppCorsOptions = Barbershop.Infrastructure.Configuration.CorsOptions;
 
@@ -26,7 +28,14 @@ public static class ApiFoundationServiceCollectionExtensions
         services.Configure<JsonOptions>(options =>
         {
             options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
+            // BUG-069 / BUG-081: value properties of write requests cannot be left out of the body.
+            options.SerializerOptions.TypeInfoResolver = (options.SerializerOptions.TypeInfoResolver ?? new DefaultJsonTypeInfoResolver())
+                .WithAddedModifier(RequiredRequestValues.Apply);
         });
+
+        // A body or parameter that cannot be read reaches GlobalExceptionHandler, which answers in Spanish with the
+        // field instead of the framework's bare 400 (BUG-021, BUG-069, BUG-081).
+        services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
 
         services.AddProblemDetails(options =>
         {

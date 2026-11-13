@@ -1,14 +1,36 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Api.Barbershop.Features.Uploads;
 using Barbershop.Application.Common.Exceptions;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Npgsql;
 using System.Net.Sockets;
 
 namespace Api.Barbershop.Middleware;
 
-public sealed class GlobalExceptionHandler : IExceptionHandler
+public sealed partial class GlobalExceptionHandler : IExceptionHandler
 {
+  /// <summary>BUG-021/036/040/006: a domain ArgumentException never sends its .NET message to the client.</summary>
+  public const string InvalidDataMessage = "Hay datos que no son válidos. Revisa la información e inténtalo de nuevo.";
+
+  public const string RequiredMessage = "Este dato es obligatorio.";
+  public const string WrongFormatMessage = "El valor no tiene el formato esperado.";
+  public const string UnreadableBodyMessage = "No se pudo leer la solicitud: revisa que los datos tengan el formato esperado.";
+
+  /// <summary>BUG-072: concurrent writes used to answer 500.</summary>
+  public const string DuplicateMessage = "Ya existe un registro con esos datos. Recarga la página y revisa antes de volver a intentarlo.";
+
+  public const string ConcurrentChangeMessage =
+      "Otra persona cambió estos datos al mismo tiempo. Recarga la página e inténtalo de nuevo.";
+
+  private const string UniqueViolation = "23505";
+  private const string ForeignKeyViolation = "23503";
+  private const string SerializationFailure = "40001";
+  private const string DeadlockDetected = "40P01";
+  private const string CharacterNotInRepertoire = "22021";
+
   private readonly IProblemDetailsService _problemDetailsService;
   private readonly IHostEnvironment _environment;
   private readonly ILogger<GlobalExceptionHandler> _logger;
@@ -29,33 +51,41 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
 
     if (exception is ValidationProblemException validationProblemException)
     {
-      httpContext.Response.StatusCode = StatusCodes.Status422UnprocessableEntity;
-
-      var validationProblemDetails = new HttpValidationProblemDetails(validationProblemException.Errors)
-      {
-        Status = StatusCodes.Status422UnprocessableEntity,
-        Title = "Validation failed",
-        Detail = validationProblemException.Message,
-        Instance = httpContext.Request.Path
-      };
-
-      validationProblemDetails.Extensions["code"] = "validation_failed";
-
-      var validationCorrelationId = httpContext.GetCorrelationId();
-      if (!string.IsNullOrWhiteSpace(validationCorrelationId))
-      {
-        validationProblemDetails.Extensions["correlationId"] = validationCorrelationId;
-      }
-
-      return await _problemDetailsService.TryWriteAsync(new ProblemDetailsContext
-      {
-        HttpContext = httpContext,
-        ProblemDetails = validationProblemDetails,
-        Exception = exception
-      });
+      return await WriteValidationAsync(
+          httpContext, exception, StatusCodes.Status422UnprocessableEntity, validationProblemException.Errors,
+          validationProblemException.Message);
     }
 
-    var (status, title, code) = IsInfrastructureUnavailable(exception)
+    // A body or a parameter that could not be read (BUG-069, BUG-081, BUG-021): field errors in Spanish.
+    if (exception is BadHttpRequestException { InnerException: JsonException jsonException }
+        && exception is not BadHttpRequestException { StatusCode: StatusCodes.Status413PayloadTooLarge })
+    {
+      var missing = MissingRequiredProperties(jsonException);
+      return missing.Count > 0
+          ? await WriteValidationAsync(
+              httpContext, exception, StatusCodes.Status422UnprocessableEntity,
+              missing.ToDictionary(name => name, _ => new[] { RequiredMessage }, StringComparer.Ordinal),
+              "Faltan datos obligatorios.")
+          : await WriteValidationAsync(
+              httpContext, exception, StatusCodes.Status400BadRequest,
+              new Dictionary<string, string[]>(StringComparer.Ordinal) { [FieldOf(jsonException.Path)] = [WrongFormatMessage] },
+              UnreadableBodyMessage);
+    }
+
+    // BUG-039 safety net: a NUL character that still reached PostgreSQL.
+    if (PostgresErrorOf(exception) is { SqlState: CharacterNotInRepertoire })
+    {
+      return await WriteValidationAsync(
+          httpContext, exception, StatusCodes.Status422UnprocessableEntity,
+          new Dictionary<string, string[]>(StringComparer.Ordinal) { ["texto"] = [InputValueGuard.NulMessage] },
+          InputValueGuard.NulMessage);
+    }
+
+    var conflict = ConflictMessageOf(exception);
+
+    var (status, title, code) = conflict is not null
+      ? (StatusCodes.Status409Conflict, "Conflict", "conflict")
+      : IsInfrastructureUnavailable(exception)
       ? (StatusCodes.Status503ServiceUnavailable, "Service unavailable", "service_unavailable")
       : exception switch
       {
@@ -77,9 +107,12 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
 
     var detail = exception switch
     {
+      _ when conflict is not null => conflict,
       // Kestrel's own reading errors (BUG-095): fixed Spanish text, the framework message is not for end users.
       BadHttpRequestException { StatusCode: StatusCodes.Status413PayloadTooLarge } => UploadRequestBody.TooLargeMessage,
-      BadHttpRequestException => UploadRequestBody.UnreadableMessage,
+      BadHttpRequestException when httpContext.Request.HasFormContentType => UploadRequestBody.UnreadableMessage,
+      BadHttpRequestException => UnreadableBodyMessage,
+      ArgumentException => InvalidDataMessage,
       _ when status >= 500 && !_environment.IsDevelopment() => "An unexpected error occurred while processing the request.",
       _ => exception.Message
     };
@@ -95,12 +128,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
     };
 
     problemDetails.Extensions["code"] = code;
-
-    var correlationId = httpContext.GetCorrelationId();
-    if (!string.IsNullOrWhiteSpace(correlationId))
-    {
-      problemDetails.Extensions["correlationId"] = correlationId;
-    }
+    AddCorrelationId(httpContext, problemDetails);
 
     return await _problemDetailsService.TryWriteAsync(new ProblemDetailsContext
     {
@@ -108,6 +136,95 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
       ProblemDetails = problemDetails,
       Exception = exception
     });
+  }
+
+  private async ValueTask<bool> WriteValidationAsync(
+      HttpContext httpContext, Exception exception, int status, IEnumerable<KeyValuePair<string, string[]>> errors, string detail)
+  {
+    httpContext.Response.StatusCode = status;
+
+    var problemDetails = new HttpValidationProblemDetails(errors)
+    {
+      Status = status,
+      Title = status == StatusCodes.Status400BadRequest ? "Invalid request" : "Validation failed",
+      Detail = detail,
+      Instance = httpContext.Request.Path
+    };
+
+    problemDetails.Extensions["code"] = status == StatusCodes.Status400BadRequest ? "invalid_request" : "validation_failed";
+    AddCorrelationId(httpContext, problemDetails);
+
+    return await _problemDetailsService.TryWriteAsync(new ProblemDetailsContext
+    {
+      HttpContext = httpContext,
+      ProblemDetails = problemDetails,
+      Exception = exception
+    });
+  }
+
+  private static void AddCorrelationId(HttpContext httpContext, ProblemDetails problemDetails)
+  {
+    var correlationId = httpContext.GetCorrelationId();
+    if (!string.IsNullOrWhiteSpace(correlationId))
+    {
+      problemDetails.Extensions["correlationId"] = correlationId;
+    }
+  }
+
+  /// <summary>
+  /// The JSON names System.Text.Json lists when required properties are missing ("...missing required properties
+  /// including: 'isActive', 'amount'."); empty for any other reading error.
+  /// </summary>
+  internal static IReadOnlyList<string> MissingRequiredProperties(JsonException exception)
+  {
+    var message = exception.Message;
+    var marker = message.IndexOf("missing required properties", StringComparison.OrdinalIgnoreCase);
+    if (marker < 0)
+    {
+      return [];
+    }
+
+    return QuotedNameRegex().Matches(message[marker..]).Select(match => match.Groups[1].Value).Distinct().ToList();
+  }
+
+  /// <summary>"$.days[2].isOpen" becomes "days[2].isOpen"; the whole body is "body".</summary>
+  internal static string FieldOf(string? jsonPath)
+  {
+    if (string.IsNullOrWhiteSpace(jsonPath) || jsonPath == "$")
+    {
+      return "body";
+    }
+
+    return jsonPath.StartsWith("$.", StringComparison.Ordinal) ? jsonPath[2..] : jsonPath.TrimStart('$');
+  }
+
+  /// <summary>BUG-072: unique, foreign key and concurrency failures of a write are conflicts, not server errors.</summary>
+  private static string? ConflictMessageOf(Exception exception)
+  {
+    if (exception is DbUpdateConcurrencyException)
+    {
+      return ConcurrentChangeMessage;
+    }
+
+    return PostgresErrorOf(exception)?.SqlState switch
+    {
+      UniqueViolation => DuplicateMessage,
+      ForeignKeyViolation or SerializationFailure or DeadlockDetected => ConcurrentChangeMessage,
+      _ => null
+    };
+  }
+
+  private static PostgresException? PostgresErrorOf(Exception exception)
+  {
+    for (Exception? current = exception; current is not null; current = current.InnerException)
+    {
+      if (current is PostgresException postgresException)
+      {
+        return postgresException;
+      }
+    }
+
+    return null;
   }
 
   private static bool IsInfrastructureUnavailable(Exception exception)
@@ -120,4 +237,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
         InvalidOperationException { InnerException: SocketException } => true,
         _ => false
       };
+
+  [GeneratedRegex("'([^']+)'")]
+  private static partial Regex QuotedNameRegex();
 }

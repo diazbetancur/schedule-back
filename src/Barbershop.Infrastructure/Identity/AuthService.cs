@@ -536,13 +536,16 @@ internal sealed class AuthService : IAuthService
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 
+        // BUG-006: the same limits as the User entity (email 5–256), checked first so the domain's ArgumentException
+        // never reaches the client.
         AddErrorIf(errors, "fullName", string.IsNullOrWhiteSpace(request.FullName) || request.FullName.Trim().Length is < 2 or > 120,
-            "Full name must be between 2 and 120 characters.");
-        AddErrorIf(errors, "email", !IsValidEmail(request.Email), "Email must be a valid email address.");
+            "El nombre debe tener entre 2 y 120 caracteres.");
+        AddErrorIf(errors, "email", !IsValidEmail(request.Email) || request.Email.Trim().Length is < 5 or > 256,
+            "Escribe un correo válido (máximo 256 caracteres).");
         AddErrorIf(errors, "password", string.IsNullOrWhiteSpace(request.Password) || request.Password.Length is < 8 or > 128,
-            "Password must be between 8 and 128 characters.");
+            "La contraseña debe tener entre 8 y 128 caracteres.");
         AddErrorIf(errors, "phoneNumber", !string.IsNullOrWhiteSpace(request.PhoneNumber) && request.PhoneNumber.Trim().Length > 40,
-            "Phone number must be 40 characters or fewer.");
+            "El teléfono no puede superar 40 caracteres.");
 
         ThrowIfAnyErrors(errors);
     }

@@ -767,6 +767,14 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
       ThrowIfAnyValidationErrors(errors);
     }
 
+    // BUG-097: a null element used to throw NullReferenceException (500).
+    var missingDay = request.Days!.ToList().FindIndex(day => day is null);
+    if (missingDay >= 0)
+    {
+      errors[$"days[{missingDay}]"] = ["Cada día debe tener datos: indica si abre y, si abre, su horario."];
+      ThrowIfAnyValidationErrors(errors);
+    }
+
     var orderedDayNumbers = request.Days!.Select(d => d.DayOfWeek).OrderBy(d => d).ToList();
     if (!orderedDayNumbers.SequenceEqual(Enumerable.Range(0, 7)))
     {

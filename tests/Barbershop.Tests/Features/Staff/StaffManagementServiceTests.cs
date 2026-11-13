@@ -316,6 +316,25 @@ public sealed class StaffManagementServiceTests : IDisposable
     Assert.Contains("https://", exception.Errors["instagramUrl"][0]);
   }
 
+  /// <summary>BUG-036: the server range is 10–240 and its message is in Spanish (the UI showed it in English).</summary>
+  [Theory]
+  [InlineData(5)]
+  [InlineData(9)]
+  [InlineData(241)]
+  [InlineData(480)]
+  public async Task UpdateCurrentAsync_RejectsADurationOutside10To240_InSpanish(int minutes)
+  {
+    var staff = await _adminStaffService.CreateAsync(CreateRequest($"dur-{minutes}@example.com", "Duration Staff", "Duration"));
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _staffProfileService.UpdateCurrentAsync(
+            staff.UserId,
+            new StaffProfileUpdateRequest("Duration", null, null, minutes, null, null, null, null, null, null, null)));
+
+    Assert.Equal("La duración de la cita debe estar entre 10 y 240 minutos.",
+        Assert.Single(exception.Errors["defaultAppointmentDurationMinutes"]));
+  }
+
   [Fact]
   public async Task UpdateCurrentAsync_AcceptsHttpAndHttpsSocialLinks()
   {

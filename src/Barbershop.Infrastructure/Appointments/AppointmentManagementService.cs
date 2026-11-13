@@ -304,7 +304,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       });
     }
 
-    ValidateManualSnapshot(request.CustomerName, request.CustomerEmail);
+    ValidateManualSnapshot(request.CustomerName, request.CustomerEmail, request.CustomerPhone, request.Notes);
 
     return await CreateManualAsync(
         staffProfileId,
@@ -409,7 +409,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     }
 
     ValidateManualCreate(request.StartsAtUtc, request.GeneralServiceId, request.DurationMinutes);
-    ValidateManualSnapshot(request.CustomerName, request.CustomerEmail);
+    ValidateManualSnapshot(request.CustomerName, request.CustomerEmail, request.CustomerPhone, request.Notes);
 
     return await CreateManualAsync(
         request.StaffProfileId,
@@ -891,6 +891,8 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       errors["startsAtUtc"] = ["StartsAtUtc must be provided in UTC."];
     }
 
+    AddNotesError(errors, request.Notes);
+
     ThrowIfAnyErrors(errors);
   }
 
@@ -913,35 +915,51 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     }
 
     AddDurationError(errors, request.DurationMinutes);
-
-    if (string.IsNullOrWhiteSpace(request.CustomerName))
-    {
-      errors["customerName"] = ["CustomerName is required."];
-    }
-
-    if (!string.IsNullOrWhiteSpace(request.CustomerEmail) && !IsValidEmail(request.CustomerEmail))
-    {
-      errors["customerEmail"] = ["CustomerEmail must be a valid email address."];
-    }
+    AddCustomerDetailsErrors(errors, request.CustomerName, request.CustomerEmail, request.CustomerPhone, request.Notes);
 
     ThrowIfAnyErrors(errors);
   }
 
-  private static void ValidateManualSnapshot(string customerName, string? customerEmail)
+  private static void ValidateManualSnapshot(string customerName, string? customerEmail, string? customerPhone, string? notes)
   {
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-
-    if (string.IsNullOrWhiteSpace(customerName))
-    {
-      errors["customerName"] = ["CustomerName is required."];
-    }
-
-    if (!string.IsNullOrWhiteSpace(customerEmail) && !IsValidEmail(customerEmail))
-    {
-      errors["customerEmail"] = ["CustomerEmail must be a valid email address."];
-    }
-
+    AddCustomerDetailsErrors(errors, customerName, customerEmail, customerPhone, notes);
     ThrowIfAnyErrors(errors);
+  }
+
+  /// <summary>
+  /// The limits of the Appointment entity, checked before building it (BUG-021): the domain's ArgumentException used to
+  /// reach the client as a 400 with the .NET message in English.
+  /// </summary>
+  private static void AddCustomerDetailsErrors(
+      Dictionary<string, string[]> errors, string? customerName, string? customerEmail, string? customerPhone, string? notes)
+  {
+    var name = customerName?.Trim() ?? string.Empty;
+    if (name.Length is < 2 or > 120)
+    {
+      errors["customerName"] = ["El nombre del cliente debe tener entre 2 y 120 caracteres."];
+    }
+
+    if (!string.IsNullOrWhiteSpace(customerEmail)
+        && (customerEmail.Trim().Length > 256 || !IsValidEmail(customerEmail.Trim())))
+    {
+      errors["customerEmail"] = ["Escribe un correo válido (máximo 256 caracteres)."];
+    }
+
+    if (!string.IsNullOrWhiteSpace(customerPhone) && customerPhone.Trim().Length > 40)
+    {
+      errors["customerPhone"] = ["El teléfono no puede superar 40 caracteres."];
+    }
+
+    AddNotesError(errors, notes);
+  }
+
+  private static void AddNotesError(Dictionary<string, string[]> errors, string? notes)
+  {
+    if (!string.IsNullOrWhiteSpace(notes) && notes.Trim().Length > 2000)
+    {
+      errors["notes"] = ["Las notas no pueden superar 2000 caracteres."];
+    }
   }
 
   private static bool IsValidEmail(string value)

@@ -691,7 +691,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         AddErrorIf(errors, "defaultAppointmentDurationMinutes",
             request.DefaultAppointmentDurationMinutes is not null and not 0 &&
             (request.DefaultAppointmentDurationMinutes < MinimumAppointmentDurationMinutes || request.DefaultAppointmentDurationMinutes > MaximumAppointmentDurationMinutes),
-            $"DefaultAppointmentDurationMinutes must be between {MinimumAppointmentDurationMinutes} and {MaximumAppointmentDurationMinutes}.");
+            $"La duración de la cita debe estar entre {MinimumAppointmentDurationMinutes} y {MaximumAppointmentDurationMinutes} minutos.");
         AddErrorIf(errors, "instagramUrl", !string.IsNullOrWhiteSpace(request.InstagramUrl) && request.InstagramUrl.Trim().Length > 2048,
             "InstagramUrl must be 2048 characters or fewer.");
         AddErrorIf(errors, "facebookUrl", !string.IsNullOrWhiteSpace(request.FacebookUrl) && request.FacebookUrl.Trim().Length > 2048,
@@ -735,7 +735,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         AddErrorIf(errors, "defaultAppointmentDurationMinutes",
             request.DefaultAppointmentDurationMinutes is not null and not 0 &&
             (request.DefaultAppointmentDurationMinutes < MinimumAppointmentDurationMinutes || request.DefaultAppointmentDurationMinutes > MaximumAppointmentDurationMinutes),
-            $"DefaultAppointmentDurationMinutes must be between {MinimumAppointmentDurationMinutes} and {MaximumAppointmentDurationMinutes}.");
+            $"La duración de la cita debe estar entre {MinimumAppointmentDurationMinutes} y {MaximumAppointmentDurationMinutes} minutos.");
 
         ThrowIfAnyErrors(errors);
     }
@@ -751,7 +751,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
     {
         AddErrorIf(errors, "fullName", string.IsNullOrWhiteSpace(fullName) || fullName.Trim().Length is < 2 or > 120,
             "FullName must be between 2 and 120 characters.");
-        AddErrorIf(errors, "email", !IsValidEmail(email), "Email must be a valid email address.");
+        AddErrorIf(errors, "email", !IsValidEmail(email) || email.Trim().Length > 256, "Escribe un correo válido (máximo 256 caracteres).");
         AddErrorIf(errors, "displayName", string.IsNullOrWhiteSpace(displayName) || displayName.Trim().Length is < 2 or > 120,
             "DisplayName must be between 2 and 120 characters.");
         AddErrorIf(errors, "phoneNumber", !string.IsNullOrWhiteSpace(phoneNumber) && phoneNumber.Trim().Length > 40,
@@ -761,7 +761,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         AddErrorIf(errors, "defaultAppointmentDurationMinutes",
             defaultAppointmentDurationMinutes is not null and not 0 &&
             (defaultAppointmentDurationMinutes < MinimumAppointmentDurationMinutes || defaultAppointmentDurationMinutes > MaximumAppointmentDurationMinutes),
-            $"DefaultAppointmentDurationMinutes must be between {MinimumAppointmentDurationMinutes} and {MaximumAppointmentDurationMinutes}.");
+            $"La duración de la cita debe estar entre {MinimumAppointmentDurationMinutes} y {MaximumAppointmentDurationMinutes} minutos.");
     }
 
     private static bool IsValidEmail(string email)

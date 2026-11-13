@@ -93,7 +93,8 @@ if (app.Environment.IsDevelopment())
 }
 
 var appOptions = app.Services.GetRequiredService<IOptions<AppOptions>>().Value;
-var api = app.MapGroup(appOptions.ApiBasePath);
+// BUG-039 / BUG-040: NUL characters and out-of-range dates are rejected once for every endpoint.
+var api = app.MapGroup(appOptions.ApiBasePath).AddEndpointFilterFactory(InputValueGuard.Create);
 api.MapAuthEndpoints();
 api.MapCustomerAppointmentsEndpoints();
 api.MapCustomerProfileEndpoints();

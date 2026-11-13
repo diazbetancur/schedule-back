@@ -160,6 +160,43 @@ public sealed class AdminNotificationsServiceTests : IDisposable
     Assert.Equal(3, _dispatcher.Calls.Count);
   }
 
+  /// <summary>BUG-112 (decision on Lote H): «Clientes seleccionados» compares the exact recipients, not their number.</summary>
+  [Fact]
+  public async Task BroadcastAsync_Selected_DifferentCustomersOfTheSameSize_AreNotADuplicate_TheSameOnesAre()
+  {
+    var admin = await CreateUserAsync("admin2@example.com", "Admin", RoleNames.Admin);
+    var ana = await CreateUserAsync("ana@example.com", "Ana", RoleNames.Customer);
+    var beto = await CreateUserAsync("beto@example.com", "Beto", RoleNames.Customer);
+    var carla = await CreateUserAsync("carla@example.com", "Carla", RoleNames.Customer);
+    NotificationBroadcastRequest Selected(params Guid[] ids)
+        => Request(NotificationTargetTypes.Selected) with { CustomerUserIds = ids };
+
+    await _service.BroadcastAsync(admin.Id, Selected(ana.Id, beto.Id));
+    await _service.BroadcastAsync(admin.Id, Selected(ana.Id, carla.Id));
+
+    // The same two customers in another order are the same audience.
+    await Assert.ThrowsAsync<ConflictException>(() => _service.BroadcastAsync(admin.Id, Selected(beto.Id, ana.Id)));
+    Assert.Equal(2, _dispatcher.Calls.Count);
+    var stored = await _dbContext.NotificationCampaigns.Select(campaign => campaign.RecipientsFingerprint).ToListAsync();
+    Assert.Contains(AdminNotificationsService.RecipientsFingerprint([beto.Id, ana.Id]), stored);
+    Assert.Contains(AdminNotificationsService.RecipientsFingerprint([carla.Id, ana.Id]), stored);
+  }
+
+  [Fact]
+  public void RecipientsFingerprint_DependsOnTheSetNotTheOrder()
+  {
+    var first = Guid.NewGuid();
+    var second = Guid.NewGuid();
+
+    Assert.Equal(
+        AdminNotificationsService.RecipientsFingerprint([first, second]),
+        AdminNotificationsService.RecipientsFingerprint([second, first, first]));
+    Assert.NotEqual(
+        AdminNotificationsService.RecipientsFingerprint([first]),
+        AdminNotificationsService.RecipientsFingerprint([second]));
+    Assert.Equal(64, AdminNotificationsService.RecipientsFingerprint([first]).Length);
+  }
+
   private static NotificationBroadcastRequest Request(string targetType, Guid? staffProfileId = null)
       => new("Promo de noviembre", "Corte con 10% de descuento esta semana.", targetType, null, staffProfileId);
 

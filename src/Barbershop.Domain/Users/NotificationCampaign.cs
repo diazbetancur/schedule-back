@@ -14,7 +14,8 @@ public sealed class NotificationCampaign
       string targetSummary,
       int recipientCount,
       Guid sentByUserId,
-      DateTime createdAt)
+      DateTime createdAt,
+      string? recipientsFingerprint = null)
   {
     Title = DomainValidation.Required(title, nameof(title), 160);
     Body = DomainValidation.Required(body, nameof(body), 1000);
@@ -22,6 +23,7 @@ public sealed class NotificationCampaign
     RecipientCount = DomainValidation.EnsureRange(recipientCount, 0, int.MaxValue, nameof(recipientCount));
     SentByUserId = sentByUserId;
     CreatedAt = DomainValidation.EnsureUtc(createdAt, nameof(createdAt));
+    RecipientsFingerprint = DomainValidation.Optional(recipientsFingerprint, 64);
   }
 
   public Guid Id { get; private set; } = Guid.NewGuid();
@@ -31,5 +33,11 @@ public sealed class NotificationCampaign
   public int RecipientCount { get; private set; }
   public Guid SentByUserId { get; private set; }
   public DateTime CreatedAt { get; private set; }
+
+  /// <summary>
+  /// SONDA BUG-112: SHA-256 (hex) of the sorted recipient ids, so a repeated broadcast is recognised by its exact
+  /// audience and not only by its summary and size. Null for campaigns sent before it existed.
+  /// </summary>
+  public string? RecipientsFingerprint { get; private set; }
   public User SentByUser { get; private set; } = null!;
 }

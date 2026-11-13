@@ -42,10 +42,13 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
     }
 
     var nowUtc = _timeProvider.GetUtcNow().UtcDateTime;
-    var campaign = new NotificationCampaign(request.Title, request.Body, targetSummary, recipientUserIds.Count, currentUserId, nowUtc);
+    var fingerprint = RecipientsFingerprint(recipientUserIds);
+    var campaign = new NotificationCampaign(
+        request.Title, request.Body, targetSummary, recipientUserIds.Count, currentUserId, nowUtc, fingerprint);
 
-    // BUG-112: the same text to the same audience within a short window is a repeated click, not a new campaign.
-    // Serialised by a lock so two identical requests at the same time cannot both pass the check.
+    // BUG-112: the same text to exactly the same recipients within a short window is a repeated click, not a new
+    // campaign. The audience is compared by its fingerprint (sorted ids), so two different selections of the same
+    // size are different campaigns. Serialised by a lock so two identical requests at once cannot both pass.
     await using (var transaction = _dbContext.Database.IsRelational()
         ? await _dbContext.Database.BeginTransactionAsync(cancellationToken)
         : null)
@@ -60,8 +63,7 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
           previous => previous.CreatedAt >= since
               && previous.Title == campaign.Title
               && previous.Body == campaign.Body
-              && previous.TargetSummary == targetSummary
-              && previous.RecipientCount == recipientUserIds.Count,
+              && previous.RecipientsFingerprint == fingerprint,
           cancellationToken);
       if (duplicated)
       {
@@ -94,6 +96,13 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
   internal static readonly TimeSpan DuplicateWindow = TimeSpan.FromMinutes(5);
 
   private const long BroadcastLockKey = 0x42524F4144; // "BROAD"
+
+  /// <summary>SHA-256 (hex) of the recipient ids in a fixed order: the same set gives the same value.</summary>
+  internal static string RecipientsFingerprint(IEnumerable<Guid> recipientUserIds)
+  {
+    var ordered = string.Join(',', recipientUserIds.Distinct().Order().Select(id => id.ToString("N")));
+    return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(ordered)));
+  }
 
   public async Task<NotificationBroadcastPreviewView> PreviewAsync(
       NotificationBroadcastRequest request, CancellationToken cancellationToken = default)

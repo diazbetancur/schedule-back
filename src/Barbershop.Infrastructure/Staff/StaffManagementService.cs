@@ -6,6 +6,7 @@ using Barbershop.Application.Staff;
 using Barbershop.Application.Staff.Admin;
 using Barbershop.Application.Staff.SelfService;
 using Barbershop.Application.Storage;
+using Barbershop.Domain.Common;
 using Barbershop.Domain.Media;
 using Barbershop.Domain.Staff;
 using Barbershop.Domain.Users;
@@ -702,7 +703,26 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         AddErrorIf(errors, "xUrl", !string.IsNullOrWhiteSpace(request.XUrl) && request.XUrl.Trim().Length > 2048,
             "XUrl must be 2048 characters or fewer.");
 
+        // BUG-047: the public profile publishes these links to anyone; only absolute http/https addresses.
+        AddSocialUrlError(errors, "instagramUrl", "Instagram", request.InstagramUrl, "https://instagram.com/tu_usuario");
+        AddSocialUrlError(errors, "facebookUrl", "Facebook", request.FacebookUrl, "https://facebook.com/tu_pagina");
+        AddSocialUrlError(errors, "tikTokUrl", "TikTok", request.TikTokUrl, "https://tiktok.com/@tu_usuario");
+        AddSocialUrlError(errors, "youtubeUrl", "YouTube", request.YoutubeUrl, "https://youtube.com/@tu_canal");
+        AddSocialUrlError(errors, "xUrl", "X", request.XUrl, "https://x.com/tu_usuario");
+
         ThrowIfAnyErrors(errors);
+    }
+
+    private static void AddSocialUrlError(
+        Dictionary<string, string[]> errors, string field, string network, string? value, string example)
+    {
+        if (!errors.ContainsKey(field) && !string.IsNullOrWhiteSpace(value) && !WebUrls.IsHttpUrl(value))
+        {
+            errors[field] =
+            [
+                $"El enlace de {network} debe ser una dirección web completa que empiece por https:// (por ejemplo {example})."
+            ];
+        }
     }
 
     private static void ValidateEnableRequest(EnableProfessionalProfileRequest request)

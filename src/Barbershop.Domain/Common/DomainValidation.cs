@@ -131,6 +131,28 @@ internal static partial class DomainValidation
   public static string? OptionalAbsoluteUriString(string? value, string paramName)
       => OptionalAbsoluteUri(value, paramName)?.ToString();
 
+  /// <summary>An optional public link: absolute http/https only and within the column length (BUG-047, BUG-096).</summary>
+  public static string? OptionalHttpUrlString(string? value, string paramName, int maxLength)
+  {
+    if (string.IsNullOrWhiteSpace(value))
+    {
+      return null;
+    }
+
+    if (!WebUrls.IsHttpUrl(value))
+    {
+      throw new ArgumentException($"{paramName} must be an absolute http or https URL.", paramName);
+    }
+
+    var normalized = new Uri(value.Trim(), UriKind.Absolute).ToString();
+    if (normalized.Length > maxLength)
+    {
+      throw new ArgumentException($"{paramName} must be {maxLength} characters or fewer.", paramName);
+    }
+
+    return normalized;
+  }
+
   public static string EnsureHexColor(string value, string paramName)
   {
     var normalized = Required(value, paramName, 7, 7);

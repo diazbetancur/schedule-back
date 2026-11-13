@@ -124,7 +124,7 @@ public sealed class MediaAssetUploadTests : IDisposable
   [Fact]
   public async Task UploadAsync_RejectsUnsupportedContentType()
   {
-    using var stream = CreateStream();
+    using var stream = new MemoryStream([0x50, 0x4B, 0x03, 0x04, 0x10, 0x20]); // a ZIP archive
 
     var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
         _mediaAssetsService.UploadAsync(
@@ -172,7 +172,7 @@ public sealed class MediaAssetUploadTests : IDisposable
   {
     var convertedBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xD9 };
     _imageTranscoder.Result = new TranscodedImage(new MemoryStream(convertedBytes), convertedBytes.Length);
-    using var stream = CreateStream();
+    using var stream = CreateHeicHeaderStream();
 
     var response = await _mediaAssetsService.UploadAsync(
         _currentUserId,
@@ -188,7 +188,7 @@ public sealed class MediaAssetUploadTests : IDisposable
   public async Task UploadAsync_WhenTranscodeFails_FallsBackToContentTypeValidationError()
   {
     _imageTranscoder.Result = null;
-    using var stream = CreateStream();
+    using var stream = CreateHeicHeaderStream();
 
     var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
         _mediaAssetsService.UploadAsync(
@@ -230,6 +230,205 @@ public sealed class MediaAssetUploadTests : IDisposable
 
     Assert.Contains("contentType", exception.Errors.Keys);
     Assert.Empty(await _dbContext.MediaAssets.ToListAsync());
+  }
+
+  // ── BUG-020 / BUG-058: the real content decides, not the declared Content-Type or extension ──
+
+  /// <summary>
+  /// SONDA cases: HTML and SVG as image/png, an executable (MZ) as .png, text renamed .png and HTML declared as PDF.
+  /// All of them used to be stored and published.
+  /// </summary>
+  [Theory]
+  [InlineData("html", "page.png", "image/png", MediaAssetPurpose.Banner)]
+  [InlineData("svg", "logo.png", "image/png", MediaAssetPurpose.Logo)]
+  [InlineData("mz", "tool.png", "image/png", MediaAssetPurpose.Banner)]
+  [InlineData("text", "notes.png", "image/png", MediaAssetPurpose.StaffPhoto)]
+  [InlineData("html", "invoice.pdf", "application/pdf", MediaAssetPurpose.CustomerReference)]
+  [InlineData("html", "qr.pdf", "application/pdf", MediaAssetPurpose.TipsQr)]
+  [InlineData("svg", "product.jpg", "image/jpeg", MediaAssetPurpose.ProductImage)]
+  public async Task UploadAsync_RejectsAFileWhoseContentIsNotAnAcceptedFormat(
+      string kind, string fileName, string declaredContentType, MediaAssetPurpose purpose)
+  {
+    using var stream = new MemoryStream(DisguisedContent(kind));
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _mediaAssetsService.UploadAsync(
+            _currentUserId,
+            [RoleNames.Admin],
+            new MediaAssetUploadRequest(fileName, declaredContentType, stream.Length, purpose, stream)));
+
+    Assert.StartsWith("El archivo no es una imagen", Assert.Single(exception.Errors["contentType"]));
+    Assert.Empty(await _dbContext.MediaAssets.ToListAsync());
+  }
+
+  [Fact]
+  public async Task UploadAsync_ARealPdf_IsAcceptedForTheTipsQr()
+  {
+    using var stream = new MemoryStream(PdfBytes());
+
+    var response = await _mediaAssetsService.UploadAsync(
+        _currentUserId,
+        [RoleNames.Staff],
+        new MediaAssetUploadRequest("qr.pdf", "application/pdf", stream.Length, MediaAssetPurpose.TipsQr, stream));
+
+    Assert.Equal("application/pdf", response.ContentType);
+    Assert.EndsWith(".pdf", response.StorageKey);
+  }
+
+  [Theory]
+  [InlineData("image/png")]
+  [InlineData("application/pdf")]
+  public async Task UploadAsync_ARealPdf_IsRejectedAsAStaffPhoto_WhateverItDeclares(string declaredContentType)
+  {
+    using var stream = new MemoryStream(PdfBytes());
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _mediaAssetsService.UploadAsync(
+            _currentUserId,
+            [RoleNames.Staff],
+            new MediaAssetUploadRequest("photo.png", declaredContentType, stream.Length, MediaAssetPurpose.StaffPhoto, stream)));
+
+    Assert.Contains("solo se aceptan imágenes", Assert.Single(exception.Errors["contentType"]));
+    Assert.Empty(await _dbContext.MediaAssets.ToListAsync());
+  }
+
+  [Fact]
+  public async Task UploadAsync_AJpegDeclaredAsPng_IsStoredWithItsRealType()
+  {
+    string? storedContentType = null;
+    _fileStorageService.OnUploadAsync = file =>
+    {
+      storedContentType = file.ContentType;
+      return Task.CompletedTask;
+    };
+    using var stream = new MemoryStream([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46]);
+
+    var response = await _mediaAssetsService.UploadAsync(
+        _currentUserId,
+        [RoleNames.Admin],
+        new MediaAssetUploadRequest("photo.png", "image/png", stream.Length, MediaAssetPurpose.Banner, stream));
+
+    Assert.Equal("image/jpeg", response.ContentType);
+    Assert.Equal("image/jpeg", storedContentType);
+    Assert.EndsWith(".jpg", response.StorageKey);
+  }
+
+  /// <summary>BUG-058: the customer's photo travels as CustomerReference (which admits PDF) but must be an image.</summary>
+  [Fact]
+  public async Task UploadAsync_ImagesOnly_RejectsARealPdf_ThatThePurposeWouldOtherwiseAdmit()
+  {
+    using var forPhoto = new MemoryStream(PdfBytes());
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _mediaAssetsService.UploadAsync(
+            _currentUserId,
+            [RoleNames.Customer],
+            new MediaAssetUploadRequest("foto.pdf", "application/pdf", forPhoto.Length, MediaAssetPurpose.CustomerReference, forPhoto, ImagesOnly: true)));
+    Assert.Equal("Aquí solo se aceptan imágenes (JPG, PNG, WebP, GIF o HEIC).", Assert.Single(exception.Errors["contentType"]));
+
+    using var asReference = new MemoryStream(PdfBytes());
+    var reference = await _mediaAssetsService.UploadAsync(
+        _currentUserId,
+        [RoleNames.Customer],
+        new MediaAssetUploadRequest("soporte.pdf", "application/pdf", asReference.Length, MediaAssetPurpose.CustomerReference, asReference));
+    Assert.Equal("application/pdf", reference.ContentType);
+  }
+
+  /// <summary>
+  /// HEIC/HEIF from phones keeps being converted to JPEG with the real transcoder, whatever the phone declares.
+  /// Magick.NET has no HEVC encoder to build an iPhone-like sample, so the sample is a HEIF file written with its
+  /// AV1 encoder and labelled with the generic HEIF brand (mif1): it goes through the same path as a HEIC upload
+  /// (signature of the HEIF family, read as HEIC through libheif, re-encoded as JPEG).
+  /// </summary>
+  [Theory]
+  [InlineData("image/heic")]
+  [InlineData("image/heif")]
+  [InlineData("application/octet-stream")]
+  public async Task UploadAsync_WithTheRealTranscoder_ConvertsHeicToJpeg(string declaredContentType)
+  {
+    byte[] heic;
+    using (var image = new ImageMagick.MagickImage(ImageMagick.MagickColors.Tomato, 16, 16) { Format = ImageMagick.MagickFormat.Avif })
+    {
+      heic = image.ToByteArray();
+    }
+
+    Assert.Equal("ftypavif", System.Text.Encoding.ASCII.GetString(heic, 4, 8));
+    System.Text.Encoding.ASCII.GetBytes("mif1").CopyTo(heic, 8);
+    Assert.Equal("image/heic", FileSignatures.DetectContentType(heic));
+
+    var service = new MediaAssetManagementService(
+        _dbContext,
+        _fileStorageService,
+        TimeProvider.System,
+        Options.Create(new FileStorageOptions()),
+        new MagickImageTranscoder(NullLogger<MagickImageTranscoder>.Instance),
+        NullLogger<MediaAssetManagementService>.Instance);
+    using var stream = new MemoryStream(heic);
+
+    var response = await service.UploadAsync(
+        _currentUserId,
+        [RoleNames.Staff],
+        new MediaAssetUploadRequest("IMG_0001.HEIC", declaredContentType, stream.Length, MediaAssetPurpose.StaffPhoto, stream));
+
+    Assert.Equal("image/jpeg", response.ContentType);
+    Assert.Equal("IMG_0001.jpg", response.FileName);
+    Assert.EndsWith(".jpg", response.StorageKey);
+  }
+
+  // ── BUG-098: purpose outside the enum and file names with paths or invalid characters ──
+
+  [Theory]
+  [InlineData(999)]
+  [InlineData(0)]
+  [InlineData(-1)]
+  public async Task UploadAsync_RejectsAPurposeOutsideTheEnum(int purpose)
+  {
+    using var stream = CreateStream();
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _mediaAssetsService.UploadAsync(
+            _currentUserId,
+            [RoleNames.Admin],
+            new MediaAssetUploadRequest("photo.png", "image/png", stream.Length, (MediaAssetPurpose)purpose, stream)));
+
+    Assert.Contains("purpose", exception.Errors.Keys);
+    Assert.Empty(await _dbContext.MediaAssets.ToListAsync());
+  }
+
+  [Theory]
+  [InlineData(@"C:\x.png", "x.png")]
+  [InlineData(@"C:\Users\ana\Fotos\perfil.png", "perfil.png")]
+  [InlineData("fotos/perfil.png", "perfil.png")]
+  [InlineData("a?b.png", "a_b.png")]
+  [InlineData("a<b>c:d|e*f\".png", "a_b_c_d_e_f_.png")]
+  [InlineData("tab\there.png", "tab_here.png")]
+  public async Task UploadAsync_SanitisesTheFileName(string fileName, string expected)
+  {
+    using var stream = CreateStream();
+
+    var response = await _mediaAssetsService.UploadAsync(
+        _currentUserId,
+        [RoleNames.Admin],
+        new MediaAssetUploadRequest(fileName, "image/png", stream.Length, MediaAssetPurpose.Banner, stream));
+
+    Assert.Equal(expected, response.FileName);
+    Assert.Equal(expected, (await _dbContext.MediaAssets.SingleAsync()).FileName);
+  }
+
+  [Theory]
+  [InlineData(@"C:\tools\payload.exe")]
+  [InlineData("../../script.js")]
+  [InlineData("index.html")]
+  public async Task UploadAsync_StillRejectsDangerousExtensions_AfterSanitising(string fileName)
+  {
+    using var stream = CreateStream();
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _mediaAssetsService.UploadAsync(
+            _currentUserId,
+            [RoleNames.Admin],
+            new MediaAssetUploadRequest(fileName, "image/png", stream.Length, MediaAssetPurpose.Banner, stream)));
+
+    Assert.Contains("fileName", exception.Errors.Keys);
   }
 
   [Fact]
@@ -357,9 +556,25 @@ public sealed class MediaAssetUploadTests : IDisposable
 
   private static MemoryStream CreateStream()
   {
-    var payload = new byte[] { 0x50, 0x4B, 0x03, 0x04, 0x10, 0x20 };
+    // A PNG signature: uploads are recognised by their first bytes (BUG-020).
+    var payload = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x01 };
     return new MemoryStream(payload, writable: false);
   }
+
+  private static MemoryStream CreateHeicHeaderStream()
+      => new([0, 0, 0, 0x18, (byte)'f', (byte)'t', (byte)'y', (byte)'p', (byte)'h', (byte)'e', (byte)'i', (byte)'c', 0, 0], writable: false);
+
+  private static byte[] PdfBytes()
+      => System.Text.Encoding.ASCII.GetBytes("%PDF-1.4\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+
+  private static byte[] DisguisedContent(string kind) => kind switch
+  {
+    "html" => System.Text.Encoding.UTF8.GetBytes("<!doctype html><html><body><script>alert(document.domain)</script></body></html>"),
+    "svg" => System.Text.Encoding.UTF8.GetBytes("<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"),
+    "mz" => [0x4D, 0x5A, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0xFF, 0xFF],
+    "text" => System.Text.Encoding.UTF8.GetBytes("esto es un archivo de texto renombrado"),
+    _ => throw new ArgumentOutOfRangeException(nameof(kind))
+  };
 
   private sealed class FakeFileStorageService : IFileStorageService
   {

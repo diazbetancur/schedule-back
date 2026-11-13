@@ -92,11 +92,38 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     request = await EnsureSeekableContentAsync(request, cancellationToken);
     using var bufferedContent = !ReferenceEquals(request.Content, originalContent) ? request.Content : null;
 
+    request = request with { FileName = SanitizeFileName(request.FileName) };
+
+    // The real type comes from the file's signature, never from the declared Content-Type (BUG-020, BUG-058).
+    string? contentError = null;
+    var detectedContentType = request.Content is null
+        ? null
+        : await FileSignatures.DetectContentTypeAsync(request.Content, cancellationToken);
+
+    if (request.Content is not null && detectedContentType is null)
+    {
+      contentError = NotAcceptedMessage(request);
+    }
+    else if (detectedContentType is not null)
+    {
+      request = request with { ContentType = detectedContentType };
+    }
+
     var contentBeforeTranscode = request.Content;
-    request = await TryTranscodeToJpegAsync(request, cancellationToken);
+    if (detectedContentType is not null
+        && FileSignatures.ConvertibleImages.Contains(detectedContentType)
+        && request.SizeBytes > 0 && request.SizeBytes <= _fileStorageOptions.MaxUploadBytes)
+    {
+      request = await TryTranscodeToJpegAsync(request, cancellationToken);
+      if (ReferenceEquals(request.Content, contentBeforeTranscode))
+      {
+        contentError = "No pudimos procesar esta imagen. Prueba con otra foto en JPG, PNG, WebP, GIF o HEIC.";
+      }
+    }
+
     using var transcodedContent = !ReferenceEquals(request.Content, contentBeforeTranscode) ? request.Content : null;
 
-    ValidateUploadRequest(currentUserId, roles, request);
+    ValidateUploadRequest(currentUserId, roles, request, contentError);
     await EnsureActiveUserExistsAsync(currentUserId, cancellationToken);
 
     var now = _timeProvider.GetUtcNow().UtcDateTime;
@@ -178,21 +205,10 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     return request with { Content = buffer, SizeBytes = buffer.Length };
   }
 
+  /// <summary>Converts a photo whose signature is HEIC/HEIF, AVIF, BMP or TIFF to JPEG; unchanged when it fails.</summary>
   private async Task<MediaAssetUploadRequest> TryTranscodeToJpegAsync(
       MediaAssetUploadRequest request, CancellationToken cancellationToken)
   {
-    var normalizedContentType = NormalizeContentType(request.ContentType);
-
-    if (ImageContentTypes.Contains(normalizedContentType))
-    {
-      return request;
-    }
-
-    if (!normalizedContentType.StartsWith("image/", StringComparison.Ordinal))
-    {
-      return request;
-    }
-
     if (request.SizeBytes <= 0 || request.SizeBytes > _fileStorageOptions.MaxUploadBytes)
     {
       return request;
@@ -310,7 +326,11 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     await _dbContext.SaveChangesAsync(cancellationToken);
   }
 
-  private void ValidateUploadRequest(Guid currentUserId, IReadOnlyCollection<string> roles, MediaAssetUploadRequest request)
+  private void ValidateUploadRequest(
+      Guid currentUserId,
+      IReadOnlyCollection<string> roles,
+      MediaAssetUploadRequest request,
+      string? contentError)
   {
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 
@@ -343,7 +363,11 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     }
 
     var normalizedContentType = NormalizeContentType(request.ContentType);
-    if (string.IsNullOrWhiteSpace(normalizedContentType))
+    if (contentError is not null)
+    {
+      errors["contentType"] = [contentError];
+    }
+    else if (string.IsNullOrWhiteSpace(normalizedContentType))
     {
       errors["contentType"] = ["ContentType is required."];
     }
@@ -351,22 +375,89 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     {
       if (_allowedContentTypes.Count > 0 && !_allowedContentTypes.Contains(normalizedContentType))
       {
-        errors["contentType"] = ["ContentType is not allowed for uploads."];
+        errors["contentType"] = ["Este tipo de archivo no está permitido."];
       }
 
-      if (PurposeContentTypes.TryGetValue(request.Purpose, out var allowedForPurpose)
-          && !allowedForPurpose.Contains(normalizedContentType, StringComparer.OrdinalIgnoreCase))
+      if (!IsAllowedForPurpose(request, normalizedContentType))
       {
-        errors["contentType"] = ["ContentType is invalid for the selected purpose."];
+        errors["contentType"] = [AcceptedForPurposeMessage(request)];
       }
     }
 
-    if (!CanUploadPurpose(roles, request.Purpose))
+    if (!Enum.IsDefined(request.Purpose))
+    {
+      errors["purpose"] = [MediaAssetPurposeParser.InvalidPurposeMessage];
+    }
+    else if (!CanUploadPurpose(roles, request.Purpose))
     {
       errors["purpose"] = ["The current role is not allowed to upload this media purpose."];
     }
 
     ThrowIfAnyErrors(errors);
+  }
+
+  private const string ImageFormatsText = "JPG, PNG, WebP, GIF o HEIC";
+
+  private static bool AdmitsDocuments(MediaAssetUploadRequest request)
+      => !request.ImagesOnly
+          && PurposeContentTypes.TryGetValue(request.Purpose, out var allowed)
+          && allowed.Contains(FileSignatures.Pdf, StringComparer.OrdinalIgnoreCase);
+
+  private static bool IsAllowedForPurpose(MediaAssetUploadRequest request, string contentType)
+  {
+    if (!PurposeContentTypes.TryGetValue(request.Purpose, out var allowedForPurpose))
+    {
+      return true; // An undefined purpose is reported on its own field.
+    }
+
+    return allowedForPurpose.Contains(contentType, StringComparer.OrdinalIgnoreCase)
+        && (!request.ImagesOnly || ImageContentTypes.Contains(contentType));
+  }
+
+  /// <summary>For a file whose signature is none of the accepted formats (HTML, SVG, text, executables...).</summary>
+  private static string NotAcceptedMessage(MediaAssetUploadRequest request)
+      => AdmitsDocuments(request)
+          ? $"El archivo no es una imagen ni un PDF válido. Sube una foto ({ImageFormatsText}) o un PDF."
+          : $"El archivo no es una imagen válida. Sube una foto en {ImageFormatsText}.";
+
+  /// <summary>For a real file of a type the purpose does not take (a PDF as a profile photo, for instance).</summary>
+  private static string AcceptedForPurposeMessage(MediaAssetUploadRequest request)
+      => AdmitsDocuments(request)
+          ? $"Aquí solo se aceptan imágenes ({ImageFormatsText}) o PDF."
+          : $"Aquí solo se aceptan imágenes ({ImageFormatsText}).";
+
+  /// <summary>Characters no file name may contain on any system, besides control characters.</summary>
+  private static readonly char[] InvalidFileNameChars = ['<', '>', ':', '"', '|', '?', '*'];
+
+  /// <summary>
+  /// The name is only metadata (the storage key never uses it), but it is shown back and must be a plain file name on
+  /// every system (BUG-098): Linux accepts "C:\x.png" or "a?b.png" as names. Keeps the last path segment and replaces
+  /// characters that are invalid on Windows or control characters with "_".
+  /// </summary>
+  internal static string SanitizeFileName(string? fileName)
+  {
+    if (string.IsNullOrWhiteSpace(fileName))
+    {
+      return fileName ?? string.Empty;
+    }
+
+    var name = fileName.Trim();
+    var lastSeparator = name.LastIndexOfAny(['/', '\\']);
+    if (lastSeparator >= 0)
+    {
+      name = name[(lastSeparator + 1)..];
+    }
+
+    var sanitized = string.Create(name.Length, name, static (buffer, source) =>
+    {
+      for (var index = 0; index < source.Length; index++)
+      {
+        var character = source[index];
+        buffer[index] = char.IsControl(character) || Array.IndexOf(InvalidFileNameChars, character) >= 0 ? '_' : character;
+      }
+    });
+
+    return sanitized.Trim().TrimEnd('.');
   }
 
   private static bool CanUploadPurpose(IReadOnlyCollection<string> roles, MediaAssetPurpose purpose)
@@ -420,6 +511,22 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
 
   private static string ResolveExtension(string fileName, string contentType)
   {
+    // The content type is the one read from the file's signature, so it decides the stored extension.
+    var byContentType = NormalizeContentType(contentType) switch
+    {
+      "image/jpeg" => ".jpg",
+      "image/png" => ".png",
+      "image/webp" => ".webp",
+      "image/gif" => ".gif",
+      "application/pdf" => ".pdf",
+      _ => null
+    };
+
+    if (byContentType is not null)
+    {
+      return byContentType;
+    }
+
     var extension = Path.GetExtension(fileName)?.Trim();
     if (!string.IsNullOrWhiteSpace(extension)
         && extension.StartsWith(".", StringComparison.Ordinal)

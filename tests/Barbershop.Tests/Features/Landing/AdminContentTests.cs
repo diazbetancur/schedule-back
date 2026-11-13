@@ -415,6 +415,92 @@ public sealed class AdminContentTests : IDisposable
     return media;
   }
 
+  // ── BUG-047 / BUG-096: links the public landing publishes ──
+
+  /// <summary>BUG-047: unsafe schemes and relative links ("/staff" was stored as file:///staff) are rejected.</summary>
+  [Theory]
+  [InlineData("javascript:alert(document.domain)")]
+  [InlineData("data:text/html,<script>alert(1)</script>")]
+  [InlineData("vbscript:msgbox(1)")]
+  [InlineData("file:///etc/passwd")]
+  [InlineData("/staff")]
+  [InlineData("example.com")]
+  [InlineData("ftp://example.com/file")]
+  [InlineData("https://user:secret@example.com/")]
+  public async Task CreateAndUpdateBannerAsync_RejectALinkThatIsNotHttp(string linkUrl)
+  {
+    var create = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _adminContentService.CreateBannerAsync(NewBanner("Enlace inseguro", linkUrl)));
+    Assert.Contains("linkUrl", create.Errors.Keys);
+
+    var banner = await _adminContentService.CreateBannerAsync(NewBanner("Enlace seguro", "https://example.com/promo"));
+    var update = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _adminContentService.UpdateBannerAsync(banner.Id, new UpdateBannerRequest(
+            "Enlace seguro", null, null, linkUrl, 1, false, null, null)));
+    Assert.Contains("linkUrl", update.Errors.Keys);
+    Assert.Equal("https://example.com/promo", (await _dbContext.Banners.AsNoTracking().SingleAsync()).LinkUrl);
+  }
+
+  /// <summary>BUG-096: a 2100-character link used to overflow the 2048 column and answer 500.</summary>
+  [Fact]
+  public async Task CreateBannerAsync_RejectsALinkLongerThanTheColumn_WithASpanishMessage()
+  {
+    var tooLong = "https://example.com/" + new string('a', 2100 - "https://example.com/".Length);
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _adminContentService.CreateBannerAsync(NewBanner("Enlace largo", tooLong)));
+
+    Assert.Contains("2048 caracteres", Assert.Single(exception.Errors["linkUrl"]));
+    Assert.Empty(await _dbContext.Banners.ToListAsync());
+  }
+
+  [Fact]
+  public async Task CreateBannerAsync_AcceptsAnHttpLinkOfExactlyTheColumnLength()
+  {
+    var atLimit = "https://example.com/" + new string('a', 2048 - "https://example.com/".Length);
+
+    var banner = await _adminContentService.CreateBannerAsync(NewBanner("Enlace al límite", atLimit));
+
+    Assert.Equal(atLimit, banner.LinkUrl);
+  }
+
+  /// <summary>BUG-047: the map link is opened and embedded by the landing; only Google Maps over https.</summary>
+  [Theory]
+  [InlineData("javascript:alert(1)")]
+  [InlineData("data:text/html,<script>alert(1)</script>")]
+  [InlineData("maps.google.com/?q=Calle+1")]
+  [InlineData("http://maps.google.com/?q=Calle+1")]
+  [InlineData("https://evil.example.com/maps?q=1")]
+  [InlineData("https://www.google.com/search?q=barberia")]
+  [InlineData("https://google.com.evil.example/maps")]
+  public async Task UpsertLandingAsync_RejectsAMapLinkThatIsNotGoogleMapsOverHttps(string mapsUrl)
+  {
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _adminContentService.UpsertLandingAsync(NewLanding(mapsUrl)));
+
+    Assert.Contains("mapsUrl", exception.Errors.Keys);
+  }
+
+  [Theory]
+  [InlineData("https://maps.app.goo.gl/AbCdEf123")]
+  [InlineData("https://goo.gl/maps/AbCdEf123")]
+  [InlineData("https://www.google.com/maps/place/Zona+8/@4.6,-74.1,17z")]
+  [InlineData("https://www.google.com/maps/embed?pb=!1m18!1m12")]
+  [InlineData("https://maps.google.com/?q=Calle+123")]
+  [InlineData("https://www.google.com.co/maps/place/Zona+8")]
+  public async Task UpsertLandingAsync_AcceptsGoogleMapsLinks(string mapsUrl)
+  {
+    var landing = await _adminContentService.UpsertLandingAsync(NewLanding(mapsUrl));
+
+    Assert.Equal(mapsUrl, landing.MapsUrl);
+  }
+
+  private static CreateBannerRequest NewBanner(string title, string? linkUrl)
+      => new(title, null, null, linkUrl, 1, false, null, null);
+
+  private static UpsertLandingContentRequest NewLanding(string? mapsUrl)
+      => new("Reserva online", null, null, null, null, mapsUrl, null);
+
   private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
   {
     public override DateTimeOffset GetUtcNow() => utcNow;

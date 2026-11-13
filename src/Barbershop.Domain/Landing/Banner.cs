@@ -13,7 +13,7 @@ public sealed class Banner
     Title = DomainValidation.Required(title, nameof(title), 160, 2);
     Subtitle = DomainValidation.Optional(subtitle, 300);
     ImageMediaAssetId = imageMediaAssetId;
-    LinkUrl = DomainValidation.OptionalAbsoluteUriString(linkUrl, nameof(linkUrl));
+    LinkUrl = DomainValidation.OptionalHttpUrlString(linkUrl, nameof(linkUrl), WebUrls.MaxLength);
     SortOrder = sortOrder;
     CreatedAt = DomainValidation.EnsureUtc(createdAt, nameof(createdAt));
     IsActive = true;
@@ -52,7 +52,7 @@ public sealed class Banner
     Title = DomainValidation.Required(title, nameof(title), 160, 2);
     Subtitle = DomainValidation.Optional(subtitle, 300);
     ImageMediaAssetId = imageMediaAssetId;
-    LinkUrl = DomainValidation.OptionalAbsoluteUriString(linkUrl, nameof(linkUrl));
+    LinkUrl = DomainValidation.OptionalHttpUrlString(linkUrl, nameof(linkUrl), WebUrls.MaxLength);
     SortOrder = sortOrder;
     IsActive = isActive;
     StartsAt = normalizedStartsAt;

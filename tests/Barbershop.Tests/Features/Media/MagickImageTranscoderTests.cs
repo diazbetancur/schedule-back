@@ -90,6 +90,33 @@ public sealed class MagickImageTranscoderTests
     Assert.Null(MagickImageTranscoder.DetectRasterFormat(System.Text.Encoding.ASCII.GetBytes(text)));
   }
 
+  /// <summary>BUG-020: the real type of an upload comes from its signature.</summary>
+  [Theory]
+  [InlineData(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 }, "image/jpeg")]
+  [InlineData(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A }, "image/png")]
+  [InlineData(new byte[] { (byte)'G', (byte)'I', (byte)'F', (byte)'8', (byte)'9', (byte)'a' }, "image/gif")]
+  [InlineData(new byte[] { (byte)'R', (byte)'I', (byte)'F', (byte)'F', 0, 0, 0, 0, (byte)'W', (byte)'E', (byte)'B', (byte)'P' }, "image/webp")]
+  [InlineData(new byte[] { (byte)'%', (byte)'P', (byte)'D', (byte)'F', (byte)'-', (byte)'1' }, "application/pdf")]
+  [InlineData(new byte[] { 0, 0, 0, 0x18, (byte)'f', (byte)'t', (byte)'y', (byte)'p', (byte)'h', (byte)'e', (byte)'i', (byte)'c' }, "image/heic")]
+  [InlineData(new byte[] { (byte)'B', (byte)'M', 0x36, 0 }, "image/bmp")]
+  public void FileSignatures_RecogniseTheAcceptedFormats(byte[] header, string expected)
+  {
+    Assert.Equal(expected, FileSignatures.DetectContentType(header));
+  }
+
+  [Theory]
+  [InlineData("<!doctype html><html>")]
+  [InlineData("<svg xmlns='http://www.w3.org/2000/svg'/>")]
+  [InlineData("MZ\u0090\0executable")]
+  [InlineData("PK\u0003\u0004zip")]
+  [InlineData("plain text renamed")]
+  [InlineData(" %PDF-1.4")]
+  [InlineData("")]
+  public void FileSignatures_RejectEverythingElse(string content)
+  {
+    Assert.Null(FileSignatures.DetectContentType(System.Text.Encoding.Latin1.GetBytes(content)));
+  }
+
   private static MemoryStream CreateTestImage(MagickFormat format)
   {
     using var image = new MagickImage(MagickColors.Tomato, 4, 4);

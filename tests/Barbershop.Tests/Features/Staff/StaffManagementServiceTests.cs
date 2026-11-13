@@ -293,6 +293,44 @@ public sealed class StaffManagementServiceTests : IDisposable
     Assert.Equal("second@example.com", untouched.Email);
   }
 
+  /// <summary>BUG-047: the public profile publishes the social links to anyone; only absolute http/https.</summary>
+  [Theory]
+  [InlineData("javascript:alert(document.domain)")]
+  [InlineData("data:text/html,<script>alert(1)</script>")]
+  [InlineData("instagram.com/tu_usuario")]
+  [InlineData("/instagram")]
+  [InlineData("file:///etc/passwd")]
+  public async Task UpdateCurrentAsync_RejectsASocialLinkThatIsNotHttp(string unsafeUrl)
+  {
+    var staff = await _adminStaffService.CreateAsync(CreateRequest("social@example.com", "Social Staff", "Social"));
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _staffProfileService.UpdateCurrentAsync(
+            staff.UserId,
+            new StaffProfileUpdateRequest("Social", null, null, 30, null, null,
+                unsafeUrl, unsafeUrl, unsafeUrl, unsafeUrl, unsafeUrl)));
+
+    Assert.Equal(
+        ["facebookUrl", "instagramUrl", "tikTokUrl", "xUrl", "youtubeUrl"],
+        exception.Errors.Keys.Order(StringComparer.Ordinal));
+    Assert.Contains("https://", exception.Errors["instagramUrl"][0]);
+  }
+
+  [Fact]
+  public async Task UpdateCurrentAsync_AcceptsHttpAndHttpsSocialLinks()
+  {
+    var staff = await _adminStaffService.CreateAsync(CreateRequest("social-ok@example.com", "Social Ok", "SocialOk"));
+
+    var updated = await _staffProfileService.UpdateCurrentAsync(
+        staff.UserId,
+        new StaffProfileUpdateRequest("SocialOk", null, null, 30, null, null,
+            "https://instagram.com/zona8", "http://facebook.com/zona8", null, null, "https://x.com/zona8"));
+
+    Assert.Equal("https://instagram.com/zona8", updated.InstagramUrl);
+    Assert.Equal("http://facebook.com/zona8", updated.FacebookUrl);
+    Assert.Equal("https://x.com/zona8", updated.XUrl);
+  }
+
   [Fact]
   public async Task CreateAsync_RejectsInvalidDuration()
   {

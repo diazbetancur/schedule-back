@@ -2,6 +2,7 @@ using System.Text.RegularExpressions;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Landing;
 using Barbershop.Application.PublicContent;
+using Barbershop.Domain.Common;
 using Barbershop.Domain.Landing;
 using Barbershop.Domain.Media;
 using Barbershop.Infrastructure.Media;
@@ -94,6 +95,7 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
 
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
     ValidateRequiredText(request.HeroTitle, "heroTitle", 2, 200, errors, "HeroTitle is required and must be between 2 and 200 characters.");
+    ValidateMapsUrl(request.MapsUrl, errors);
     ThrowIfAnyValidationErrors(errors);
 
     var now = _timeProvider.GetUtcNow().UtcDateTime;
@@ -558,6 +560,31 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
     _ => purpose.ToString()
   };
 
+  private const string LinkUrlMessage =
+      "El enlace debe ser una dirección web completa que empiece por https:// o http:// (por ejemplo https://instagram.com/zona8).";
+
+  /// <summary>BUG-047: the landing opens and embeds this link, so it must be a Google Maps address over https.</summary>
+  private static void ValidateMapsUrl(string? mapsUrl, Dictionary<string, string[]> errors)
+  {
+    if (string.IsNullOrWhiteSpace(mapsUrl))
+    {
+      return;
+    }
+
+    if (mapsUrl.Trim().Length > WebUrls.MapsMaxLength)
+    {
+      errors["mapsUrl"] = [$"El enlace de Google Maps no puede superar {WebUrls.MapsMaxLength} caracteres."];
+    }
+    else if (!WebUrls.IsGoogleMapsUrl(mapsUrl))
+    {
+      errors["mapsUrl"] =
+      [
+        "La ubicación debe ser un enlace de Google Maps que empiece por https:// "
+        + "(por ejemplo https://maps.app.goo.gl/… o https://www.google.com/maps/…)."
+      ];
+    }
+  }
+
   private static void ValidateBannerRequest(
       string title,
       string? subtitle,
@@ -574,9 +601,15 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
       errors["subtitle"] = ["Subtitle must be 300 characters or fewer."];
     }
 
-    if (!string.IsNullOrWhiteSpace(linkUrl) && !Uri.TryCreate(linkUrl.Trim(), UriKind.Absolute, out _))
+    // BUG-096: the column holds 2048 characters; a longer link used to reach the database and answer 500.
+    // BUG-047: only absolute http/https links; banners open them in a new tab as external pages.
+    if (!string.IsNullOrWhiteSpace(linkUrl) && linkUrl.Trim().Length > WebUrls.MaxLength)
     {
-      errors["linkUrl"] = ["LinkUrl must be a valid absolute URL."];
+      errors["linkUrl"] = [$"El enlace no puede superar {WebUrls.MaxLength} caracteres."];
+    }
+    else if (!string.IsNullOrWhiteSpace(linkUrl) && !WebUrls.IsHttpUrl(linkUrl))
+    {
+      errors["linkUrl"] = [LinkUrlMessage];
     }
 
     if (startsAtUtc.HasValue && endsAtUtc.HasValue && endsAtUtc.Value <= startsAtUtc.Value)

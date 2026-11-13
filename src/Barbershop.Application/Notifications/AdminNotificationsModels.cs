@@ -28,3 +28,9 @@ public sealed record CustomerSummaryView(
     string FullName,
     string Email,
     string? PhoneNumber);
+
+/// <summary>
+/// BUG-110: who a broadcast would reach, read before sending it (nothing is sent nor stored), so the admin confirms
+/// with the number of recipients.
+/// </summary>
+public sealed record NotificationBroadcastPreviewView(int RecipientCount, string TargetSummary);

@@ -1,5 +1,6 @@
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Notifications;
+using Barbershop.Domain.Appointments;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -43,8 +44,38 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
     var nowUtc = _timeProvider.GetUtcNow().UtcDateTime;
     var campaign = new NotificationCampaign(request.Title, request.Body, targetSummary, recipientUserIds.Count, currentUserId, nowUtc);
 
-    _dbContext.NotificationCampaigns.Add(campaign);
-    await _dbContext.SaveChangesAsync(cancellationToken);
+    // BUG-112: the same text to the same audience within a short window is a repeated click, not a new campaign.
+    // Serialised by a lock so two identical requests at the same time cannot both pass the check.
+    await using (var transaction = _dbContext.Database.IsRelational()
+        ? await _dbContext.Database.BeginTransactionAsync(cancellationToken)
+        : null)
+    {
+      if (_dbContext.Database.IsNpgsql())
+      {
+        await _dbContext.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock({0})", [BroadcastLockKey], cancellationToken);
+      }
+
+      var since = nowUtc - DuplicateWindow;
+      var duplicated = await _dbContext.NotificationCampaigns.AnyAsync(
+          previous => previous.CreatedAt >= since
+              && previous.Title == campaign.Title
+              && previous.Body == campaign.Body
+              && previous.TargetSummary == targetSummary
+              && previous.RecipientCount == recipientUserIds.Count,
+          cancellationToken);
+      if (duplicated)
+      {
+        throw new ConflictException(
+            $"Ya se envió esta misma notificación a este público hace menos de {DuplicateWindow.TotalMinutes:0} minutos. No se volvió a enviar.");
+      }
+
+      _dbContext.NotificationCampaigns.Add(campaign);
+      await _dbContext.SaveChangesAsync(cancellationToken);
+      if (transaction is not null)
+      {
+        await transaction.CommitAsync(cancellationToken);
+      }
+    }
 
     var message = new PushNotificationMessage(
         request.Title,
@@ -57,6 +88,20 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
     await _dispatcher.DispatchAsync(recipientUserIds, UserNotificationTypes.Campaign, message, cancellationToken);
 
     return Map(campaign, sentByUser.FullName);
+  }
+
+  /// <summary>How long an identical broadcast (same text and audience) is refused after the first one (BUG-112).</summary>
+  internal static readonly TimeSpan DuplicateWindow = TimeSpan.FromMinutes(5);
+
+  private const long BroadcastLockKey = 0x42524F4144; // "BROAD"
+
+  public async Task<NotificationBroadcastPreviewView> PreviewAsync(
+      NotificationBroadcastRequest request, CancellationToken cancellationToken = default)
+  {
+    var targetType = NormalizeTargetType(request.TargetType);
+    ValidateRequest(request, targetType);
+    var (recipientUserIds, targetSummary) = await ResolveRecipientsAsync(request, targetType, cancellationToken);
+    return new NotificationBroadcastPreviewView(recipientUserIds.Count, targetSummary);
   }
 
   public async Task<IReadOnlyList<NotificationCampaignView>> GetCampaignsAsync(CancellationToken cancellationToken = default)
@@ -74,19 +119,60 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
     var query = _dbContext.Users
         .Where(user => user.IsActive && user.UserRoles.Any(userRole => userRole.Role.NormalizedName == NormalizedCustomerRole));
 
-    if (!string.IsNullOrWhiteSpace(search))
+    if (string.IsNullOrWhiteSpace(search))
     {
-      var normalizedSearch = search.Trim().ToUpperInvariant();
-      query = query.Where(user =>
-          user.FullName.ToUpper().Contains(normalizedSearch)
-          || user.Email.ToUpper().Contains(normalizedSearch));
+      return await query
+          .OrderBy(user => user.FullName)
+          .Take(MaxSearchResults)
+          .Select(user => new CustomerSummaryView(user.Id, user.FullName, user.Email, user.PhoneNumber))
+          .ToListAsync(cancellationToken);
     }
 
-    return await query
+    var normalizedSearch = search.Trim().ToUpperInvariant();
+    var byNameOrEmail = await query
+        .Where(user => user.FullName.ToUpper().Contains(normalizedSearch) || user.Email.ToUpper().Contains(normalizedSearch))
         .OrderBy(user => user.FullName)
-        .Take(25)
+        .Take(MaxSearchResults)
         .Select(user => new CustomerSummaryView(user.Id, user.FullName, user.Email, user.PhoneNumber))
         .ToListAsync(cancellationToken);
+
+    // BUG-108: the field says «Nombre, correo o teléfono». Phones are free text ("+57 300 123 4567", "300-123-4567"),
+    // so both sides are compared by their digits, without the country code 57.
+    var searchDigits = NationalDigits(search);
+    if (searchDigits.Length < MinPhoneSearchDigits)
+    {
+      return byNameOrEmail;
+    }
+
+    var withPhone = await query
+        .Where(user => user.PhoneNumber != null)
+        .Select(user => new CustomerSummaryView(user.Id, user.FullName, user.Email, user.PhoneNumber))
+        .ToListAsync(cancellationToken);
+    var byPhone = withPhone.Where(user => NationalDigits(user.PhoneNumber).Contains(searchDigits, StringComparison.Ordinal));
+
+    return byNameOrEmail
+        .Concat(byPhone)
+        .DistinctBy(user => user.Id)
+        .OrderBy(user => user.FullName, StringComparer.CurrentCultureIgnoreCase)
+        .Take(MaxSearchResults)
+        .ToList();
+  }
+
+  private const int MaxSearchResults = 25;
+
+  /// <summary>Fewer digits than this would match almost any phone.</summary>
+  private const int MinPhoneSearchDigits = 4;
+
+  /// <summary>Only the digits, without the Colombian country code when it is written (57 + 10-digit number).</summary>
+  internal static string NationalDigits(string? phone)
+  {
+    var digits = new string((phone ?? string.Empty).Where(char.IsAsciiDigit).ToArray());
+    if (digits.StartsWith("0057", StringComparison.Ordinal))
+    {
+      digits = digits[2..];
+    }
+
+    return digits.Length == 12 && digits.StartsWith("57", StringComparison.Ordinal) ? digits[2..] : digits;
   }
 
   private async Task<(IReadOnlyCollection<Guid> RecipientUserIds, string TargetSummary)> ResolveRecipientsAsync(
@@ -120,10 +206,18 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
             .SingleOrDefaultAsync(profile => profile.Id == request.StaffProfileId!.Value, cancellationToken)
             ?? throw new KeyNotFoundException("The staff profile was not found.");
 
-        var filteredIds = await _dbContext.Appointments
-            .Where(appointment => appointment.StaffProfileId == staffProfile.Id && appointment.CustomerUserId != null)
-            .Select(appointment => appointment.CustomerUserId!.Value)
-            .Distinct()
+        // BUG-113: the same customers as the other targets (active accounts with the Customer role) that have at least
+        // one appointment with the professional that was not cancelled.
+        var staffCustomerIds = _dbContext.Appointments
+            .Where(appointment => appointment.StaffProfileId == staffProfile.Id
+                && appointment.CustomerUserId != null
+                && appointment.Status != AppointmentStatus.Cancelled)
+            .Select(appointment => appointment.CustomerUserId!.Value);
+        var filteredIds = await _dbContext.Users
+            .Where(user => user.IsActive
+                && staffCustomerIds.Contains(user.Id)
+                && user.UserRoles.Any(userRole => userRole.Role.NormalizedName == NormalizedCustomerRole))
+            .Select(user => user.Id)
             .ToListAsync(cancellationToken);
 
         return (filteredIds, $"Clientes de {staffProfile.DisplayName}");

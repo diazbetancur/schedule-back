@@ -21,4 +21,5 @@ public sealed record UserNotificationView(
     DateTime CreatedAtUtc,
     DateTime? ReadAtUtc);
 
-public sealed record UserNotificationInboxView(int UnreadCount, IReadOnlyList<UserNotificationView> Items);
+/// <param name="HasMore">BUG-107: more notifications after this page (the panel offers «Ver más»).</param>
+public sealed record UserNotificationInboxView(int UnreadCount, IReadOnlyList<UserNotificationView> Items, bool HasMore = false);

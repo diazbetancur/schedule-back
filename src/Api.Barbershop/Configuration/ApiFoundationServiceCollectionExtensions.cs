@@ -141,10 +141,14 @@ public static class ApiFoundationServiceCollectionExtensions
                 ? Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds))
                 : 60;
             context.HttpContext.Response.Headers.RetryAfter = retryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var policyName = context.HttpContext.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName;
+            var detail = policyName is RateLimitPolicyNames.NotificationTest or RateLimitPolicyNames.NotificationBroadcast
+                ? $"Enviaste demasiadas notificaciones seguidas. Espera {retryAfterSeconds} segundos y vuelve a intentarlo."
+                : "You have made too many requests. Please wait a moment and try again.";
             return new ValueTask(Results.Problem(
                 statusCode: StatusCodes.Status429TooManyRequests,
                 title: "Too many requests",
-                detail: "You have made too many requests. Please wait a moment and try again.")
+                detail: detail)
                 .ExecuteAsync(context.HttpContext));
         };
 
@@ -176,9 +180,33 @@ public static class ApiFoundationServiceCollectionExtensions
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0,
             }));
+
+        // BUG-112: sending notifications is limited per signed-in user, so a shared IP never blocks another admin.
+        options.AddPolicy(RateLimitPolicyNames.NotificationTest, httpContext =>
+            RateLimitPartition.GetFixedWindowLimiter(GetUserPartition(httpContext), _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = NotificationTestPermitLimit,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+
+        options.AddPolicy(RateLimitPolicyNames.NotificationBroadcast, httpContext =>
+            RateLimitPartition.GetFixedWindowLimiter(GetUserPartition(httpContext), _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = NotificationBroadcastPermitLimit,
+                Window = TimeSpan.FromMinutes(10),
+                QueueLimit = 0,
+            }));
     }
 
+    public const int NotificationTestPermitLimit = 3;
+    public const int NotificationBroadcastPermitLimit = 5;
+
     private static string GetClientIp(HttpContext httpContext) => ClientIpResolver.Resolve(httpContext);
+
+    // Signed-in user id; an anonymous call (rejected afterwards with 401) falls in the bucket of its IP.
+    private static string GetUserPartition(HttpContext httpContext)
+        => httpContext.User.TryGetUserId(out var userId) ? $"user:{userId:N}" : $"ip:{GetClientIp(httpContext)}";
 
     private static void ConfigureCorsPolicy(CorsPolicyBuilder policyBuilder, AppCorsOptions corsOptions, IHostEnvironment environment)
     {

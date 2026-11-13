@@ -85,8 +85,9 @@ app.UseExceptionHandler();
 app.UseStatusCodePages();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseCors(CorsOptions.PolicyName);
-app.UseRateLimiter();
 app.UseAuthentication();
+// BUG-112: after authentication so the notification limits can be counted per signed-in user (the auth limits stay per IP).
+app.UseRateLimiter();
 app.UseAuthorization();
 
 if (app.Environment.IsDevelopment())

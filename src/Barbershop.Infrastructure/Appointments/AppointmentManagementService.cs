@@ -592,6 +592,8 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     Appointment appointment;
     StaffProfile staffProfile;
     DateTime previousStartsAt;
+    DateTime previousEndsAt;
+    Guid? previousGeneralServiceId;
     await using (var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken))
     {
       await _dbContext.LockStaffProfileAsync(staffProfileId, cancellationToken);
@@ -625,6 +627,8 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
           staffProfileId, request.StartsAtUtc, request.StartsAtUtc.AddMinutes(duration), appointment.Id, requireGrid: false, cancellationToken);
 
       previousStartsAt = appointment.StartsAt;
+      previousEndsAt = appointment.EndsAt;
+      previousGeneralServiceId = appointment.GeneralServiceId;
       appointment.UpdateBooking(
           request.CustomerName,
           request.CustomerEmail,
@@ -642,7 +646,16 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     var notificationContext = new AppointmentNotificationContext(
         staffProfile.UserId, staffProfile.DisplayName, appointment.CustomerUserId, appointment.CustomerName, appointment.StartsAt, appointment.Id);
 
-    await _notificationService.NotifyCustomerOfAppointmentUpdateAsync(notificationContext, cancellationToken);
+    // BUG-115: "Nueva fecha" only when the date or time moved; a new service or duration gets its own message, and
+    // notes or contact data alone notify nobody.
+    if (appointment.StartsAt != previousStartsAt)
+    {
+      await _notificationService.NotifyCustomerOfAppointmentUpdateAsync(notificationContext, cancellationToken);
+    }
+    else if (appointment.EndsAt != previousEndsAt || appointment.GeneralServiceId != previousGeneralServiceId)
+    {
+      await _notificationService.NotifyCustomerOfAppointmentDetailsChangeAsync(notificationContext, cancellationToken);
+    }
 
     if (appointment.StartsAt != previousStartsAt)
     {

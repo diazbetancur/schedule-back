@@ -87,7 +87,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
     public async Task<ServiceView> CreateAsync(ServiceCreateRequest request, CancellationToken cancellationToken = default)
     {
         ValidateRequest(
-            request.Name, request.BasePrice, request.BusinessPercentage, request.LoyaltyPoints, request.GeneralServiceId,
+            request.Name, request.BasePrice, request.BusinessPercentage ?? 0, request.LoyaltyPoints, request.GeneralServiceId,
             requireGeneralService: true);
         await EnsureNameIsUniqueAsync(request.Name, null, cancellationToken);
 
@@ -98,7 +98,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
         await EnsureGeneralServiceCanReceiveAsync(request.GeneralServiceId!.Value, cancellationToken);
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var service = new Service(request.Name, request.BasePrice, utcNow, request.BusinessPercentage, request.GeneralServiceId);
+        var service = new Service(request.Name, request.BasePrice, utcNow, request.BusinessPercentage ?? 0, request.GeneralServiceId);
         ApplyLoyaltyPoints(service, request.LoyaltyPoints, utcNow);
 
         _dbContext.Services.Add(service);
@@ -110,7 +110,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
     public async Task<ServiceView> UpdateAsync(Guid serviceId, ServiceUpdateRequest request, CancellationToken cancellationToken = default)
     {
         ValidateRequest(
-            request.Name, request.BasePrice, request.BusinessPercentage, request.LoyaltyPoints, request.GeneralServiceId,
+            request.Name, request.BasePrice, request.BusinessPercentage ?? 0, request.LoyaltyPoints, request.GeneralServiceId,
             requireGeneralService: false);
         await EnsureNameIsUniqueAsync(request.Name, serviceId, cancellationToken);
 
@@ -130,7 +130,8 @@ internal sealed class ServiceManagementService : IAdminServicesService
         }
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        service.Update(request.Name, request.BasePrice, utcNow, request.BusinessPercentage);
+        // An omitted percentage keeps the current one (an omitted value used to reset the business share to 0).
+        service.Update(request.Name, request.BasePrice, utcNow, request.BusinessPercentage ?? service.BusinessPercentage);
         if (moveTo is { } destination)
         {
             // Only the rate moves: income, records, memberships and redemptions keep the rate id they already have.

@@ -1,7 +1,10 @@
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Finance.Admin;
+using Barbershop.Application.Auth;
 using Barbershop.Domain.Finance;
+using Barbershop.Domain.Memberships;
+using Barbershop.Infrastructure.Memberships;
 using Barbershop.Domain.Services;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -15,11 +18,13 @@ internal sealed class IncomeManagementService : IAdminIncomeService
 
     private readonly AppDbContext _dbContext;
     private readonly TimeProvider _timeProvider;
+    private readonly ICurrentUserAccessor? _currentUser;
 
-    public IncomeManagementService(AppDbContext dbContext, TimeProvider timeProvider)
+    public IncomeManagementService(AppDbContext dbContext, TimeProvider timeProvider, ICurrentUserAccessor? currentUser = null)
     {
         _dbContext = dbContext;
         _timeProvider = timeProvider;
+        _currentUser = currentUser;
     }
 
     /// <summary>
@@ -119,7 +124,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         {
             ValidateMembershipSaleShape(request.ServiceId, request.StaffProfileId, request.IsPromo);
             ValidateAmountAndDate(request.Amount, request.OccurredOn);
-            entry.UpdateMembershipSale(request.Amount, request.OccurredOn, utcNow);
+            return await UpdateMembershipSaleAsync(entry, request, utcNow, cancellationToken);
         }
         else
         {
@@ -145,6 +150,58 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
+        return await MapAsync(entry, cancellationToken);
+    }
+
+    /// <summary>
+    /// BUG-104: changing the amount of a membership sale that already pays for memberships follows the rule of the
+    /// link: when the new amount differs from the linked memberships' total a justification is required, and the change
+    /// is recorded in each membership's history with it. Under the income row lock the link takes, so a link committing
+    /// at the same time is seen here.
+    /// </summary>
+    private async Task<IncomeEntryView> UpdateMembershipSaleAsync(
+        IncomeEntry entry, IncomeEntryUpdateRequest request, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        await using var transaction = _dbContext.Database.IsRelational()
+            ? await _dbContext.Database.BeginTransactionAsync(cancellationToken)
+            : null;
+        if (_dbContext.Database.IsNpgsql())
+        {
+            await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+                $"SELECT 1 FROM public.income_entries WHERE \"Id\" = {entry.Id} FOR UPDATE", cancellationToken);
+            await _dbContext.Entry(entry).ReloadAsync(cancellationToken);
+        }
+
+        var previousAmount = entry.Amount;
+        if (request.Amount != previousAmount)
+        {
+            var linked = await _dbContext.CustomerMemberships
+                .Where(membership => membership.IncomeEntryId == entry.Id)
+                .ToListAsync(cancellationToken);
+            if (linked.Count > 0)
+            {
+                var justification = MembershipSalesService.RequireJustificationIfMismatch(
+                    request.Amount, linked.Sum(membership => (long)membership.Price), request.DiscrepancyJustification);
+                var changedBy = _currentUser?.UserId
+                    ?? throw new InvalidOperationException("The current user is required to change a linked income.");
+                var reason = $"Valor del ingreso cambiado de {previousAmount:N0} a {request.Amount:N0}."
+                    + (justification is null ? string.Empty : $" {justification}");
+                foreach (var membership in linked)
+                {
+                    _dbContext.MembershipEvents.Add(new MembershipEvent(
+                        membership.Id, MembershipEventType.IncomeAmountChanged, changedBy, utcNow,
+                        reason.Length <= 500 ? reason : reason[..500], entry.Id));
+                }
+            }
+        }
+
+        entry.UpdateMembershipSale(request.Amount, request.OccurredOn, utcNow);
+        await _dbContext.SaveChangesAsync(cancellationToken);
+        if (transaction is not null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+        }
+
         return await MapAsync(entry, cancellationToken);
     }
 

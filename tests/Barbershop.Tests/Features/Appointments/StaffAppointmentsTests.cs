@@ -28,6 +28,7 @@ public sealed class StaffAppointmentsTests : IDisposable
     private static readonly DateTimeOffset CurrentUtc = new(2026, 1, 5, 15, 15, 0, TimeSpan.Zero);
 
     private readonly AppDbContext _dbContext;
+    private readonly NoOpAppointmentNotificationService _notifications = new();
     private readonly IAdminStaffService _adminStaffService;
     private readonly IAdminStaffAvailabilityService _adminStaffAvailabilityService;
     private readonly IStaffAppointmentsService _staffAppointmentsService;
@@ -62,7 +63,7 @@ public sealed class StaffAppointmentsTests : IDisposable
             null!);
 
         var availabilityManagementService = new AvailabilityManagementService(_dbContext, timeProvider);
-        var appointmentManagementService = new AppointmentManagementService(_dbContext, timeProvider, new NoOpAppointmentNotificationService());
+        var appointmentManagementService = new AppointmentManagementService(_dbContext, timeProvider, _notifications);
 
         _adminStaffService = staffManagementService;
         _adminStaffAvailabilityService = availabilityManagementService;
@@ -136,6 +137,25 @@ public sealed class StaffAppointmentsTests : IDisposable
                     "customer-b@example.com",
                     null,
                     "Reschedule")));
+    }
+
+    /// <summary>BUG-114: administration cancels the appointments of a deactivated professional and the customer is told.</summary>
+    [Fact]
+    public async Task AdminUpdateStatusAsync_CancelsAnAppointmentOfADeactivatedProfessional_AndNotifiesTheCustomer()
+    {
+        var staff = await CreateStaffAsync("disabled-staff@example.com", "Disabled Staff", "Disabled Staff");
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(nextDay.DayOfWeek, 9, 0, 12, 0)]);
+        var created = await _adminAppointmentsService.CreateAsync(new AdminManualAppointmentCreateRequest(
+            staff.StaffProfileId, ToUtc(nextDay, 9, 0), Corte, "Cliente Afectado", "cliente@example.com", "+573001234567", null));
+
+        await _adminStaffService.UpdateStatusAsync(staff.StaffProfileId, new StaffStatusUpdateRequest(false));
+
+        var cancelled = await _adminAppointmentsService.UpdateStatusAsync(
+            created.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Cancelled));
+
+        Assert.Equal(AppointmentStatus.Cancelled, cancelled.Status);
+        Assert.Equal(1, _notifications.CustomerCancellations);
     }
 
     [Fact]
@@ -408,7 +428,13 @@ public sealed class StaffAppointmentsTests : IDisposable
 
         public Task NotifyCustomerOfAppointmentUpdateAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-        public Task NotifyCustomerOfAppointmentCancellationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public int CustomerCancellations { get; private set; }
+
+        public Task NotifyCustomerOfAppointmentCancellationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
+        {
+            CustomerCancellations++;
+            return Task.CompletedTask;
+        }
 
         public Task NotifyCustomerOfAppointmentConfirmationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }

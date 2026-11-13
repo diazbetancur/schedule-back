@@ -71,6 +71,18 @@ public sealed class ServiceManagementServiceTests : IDisposable
     Assert.Equal(15000, updated.BasePrice);
   }
 
+  /// <summary>Same pattern as BUG-068/070: an omitted business percentage used to reset the business share to 0.</summary>
+  [Fact]
+  public async Task UpdateAsync_WithoutBusinessPercentage_KeepsTheCurrentOne()
+  {
+    var created = await _service.CreateAsync(new ServiceCreateRequest("Cejas", 12000, 40, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
+
+    var updated = await _service.UpdateAsync(created.Id, new ServiceUpdateRequest("Cejas", 13000));
+
+    Assert.Equal(40, updated.BusinessPercentage);
+    Assert.Equal(13000, updated.BasePrice);
+  }
+
   [Fact]
   public async Task UpdateAsync_KeepingSameName_Succeeds()
   {

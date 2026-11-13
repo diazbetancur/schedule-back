@@ -164,21 +164,25 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         var durationMinutes = request.DefaultAppointmentDurationMinutes is null or 0
             ? staffProfile.DefaultAppointmentDurationMinutes
             : request.DefaultAppointmentDurationMinutes.Value;
+        // BUG-068: an omitted isActive leaves both the account and the profile as they are. It used to fall back to the
+        // profile's state and re-activate an account deactivated from «Usuarios»; reactivating is an explicit action.
         var isActive = request.IsActive ?? staffProfile.IsActive;
-        var deactivatesAccount = staffProfile.User.IsActive && !isActive;
+        var deactivatesAccount = request.IsActive is false && staffProfile.User.IsActive;
 
         staffProfile.User.SetEmail(request.Email);
         staffProfile.User.UpdateProfile(request.FullName, request.PhoneNumber, request.PhotoMediaAssetId, utcNow);
 
-        if (isActive)
+        if (request.IsActive is true)
         {
             staffProfile.User.Activate(utcNow);
         }
-        else
+        else if (request.IsActive is false)
         {
             staffProfile.User.Deactivate(utcNow);
         }
 
+        // BUG-070: the social links belong to the professional's own profile and the admin form does not carry them,
+        // so they are kept instead of being reset to null.
         staffProfile.UpdateDetails(
             request.DisplayName,
             request.Bio,
@@ -187,7 +191,12 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
             request.TipsQrMediaAssetId,
             durationMinutes,
             isActive,
-            utcNow);
+            utcNow,
+            staffProfile.InstagramUrl,
+            staffProfile.FacebookUrl,
+            staffProfile.TikTokUrl,
+            staffProfile.YoutubeUrl,
+            staffProfile.XUrl);
 
         await SaveAsync(deactivatesAccount, staffProfile.UserId, cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
@@ -216,7 +225,13 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
             staffProfile.TipsQrMediaAssetId,
             staffProfile.DefaultAppointmentDurationMinutes,
             request.IsActive,
-            utcNow);
+            utcNow,
+            // Same pattern as BUG-070: a status change keeps the professional's social links.
+            staffProfile.InstagramUrl,
+            staffProfile.FacebookUrl,
+            staffProfile.TikTokUrl,
+            staffProfile.YoutubeUrl,
+            staffProfile.XUrl);
 
         await SaveAsync(deactivatesAccount, staffProfile.UserId, cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);

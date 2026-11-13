@@ -45,6 +45,17 @@ public sealed class ServiceCatalogManagementServiceTests : IDisposable
         (general.Id, general.CategoryId, general.CategoryName, general.Name, general.PublicCode, general.IsActive));
   }
 
+  /// <summary>Same pattern as BUG-068/070: an omitted sort order used to move the category to position 0.</summary>
+  [Fact]
+  public async Task UpdateCategoryAsync_WithoutSortOrder_KeepsThePosition()
+  {
+    var category = await _catalog.CreateCategoryAsync(new ServiceCategoryCreateRequest("Uñas", 7));
+
+    var renamed = await _catalog.UpdateCategoryAsync(category.Id, new ServiceCategoryUpdateRequest("Uñas y manos"));
+
+    Assert.Equal(("Uñas y manos", 7), (renamed.Name, renamed.SortOrder));
+  }
+
   [Fact]
   public async Task Categories_HaveUniqueNames_IgnoringCaseAndSpaces()
   {

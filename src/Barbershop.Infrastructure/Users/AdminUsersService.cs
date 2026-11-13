@@ -61,7 +61,8 @@ internal sealed class AdminUsersService : IAdminUsersService
             ?? throw new NotFoundException($"User {userId} not found.");
 
         var updatedAt = _timeProvider.GetUtcNow().UtcDateTime;
-        user.UpdateCustomerProfile(request.FullName, request.PhoneNumber, null, updatedAt);
+        // BUG-075: the admin edits name and phone only; the birth date the customer entered is kept, not reset to null.
+        user.UpdateCustomerProfile(request.FullName, request.PhoneNumber, user.DateOfBirth, updatedAt);
 
         await _dbContext.SaveChangesAsync(cancellationToken);
         return ToListItem(user);

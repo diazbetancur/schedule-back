@@ -316,6 +316,41 @@ public sealed class StaffManagementServiceTests : IDisposable
     Assert.Contains("https://", exception.Errors["instagramUrl"][0]);
   }
 
+  // ── BUG-068 / BUG-070: the admin PUT no longer overwrites what it does not carry ──
+
+  [Fact]
+  public async Task AdminUpdateAsync_WithoutIsActive_DoesNotReactivateAnAccountDeactivatedFromUsers()
+  {
+    var staff = await _adminStaffService.CreateAsync(CreateRequest("deactivated@example.com", "Deactivated Staff", "Deactivated"));
+    var user = await _dbContext.Users.SingleAsync(candidate => candidate.Id == staff.UserId);
+    user.Deactivate(DateTime.UtcNow);
+    await _dbContext.SaveChangesAsync();
+
+    await _adminStaffService.UpdateAsync(staff.StaffProfileId, new AdminStaffUpdateRequest(
+        "Deactivated Staff", "deactivated@example.com", "Renamed", null, null, 30, null, null, IsActive: null));
+
+    Assert.False((await _dbContext.Users.AsNoTracking().SingleAsync(candidate => candidate.Id == staff.UserId)).IsActive);
+  }
+
+  [Fact]
+  public async Task AdminUpdateAndStatusChange_KeepTheSocialLinksTheProfessionalEntered()
+  {
+    var staff = await _adminStaffService.CreateAsync(CreateRequest("socials-kept@example.com", "Socials Staff", "Socials"));
+    await _staffProfileService.UpdateCurrentAsync(staff.UserId, new StaffProfileUpdateRequest(
+        "Socials", null, null, 30, null, null,
+        "https://instagram.com/zona8", "https://facebook.com/zona8", "https://tiktok.com/@zona8", "https://youtube.com/@zona8", "https://x.com/zona8"));
+
+    var afterEdit = await _adminStaffService.UpdateAsync(staff.StaffProfileId, new AdminStaffUpdateRequest(
+        "Socials Staff", "socials-kept@example.com", "Socials Renamed", null, "Bio nueva", 30, null, null, true));
+    Assert.Equal("https://instagram.com/zona8", afterEdit.InstagramUrl);
+    Assert.Equal("https://x.com/zona8", afterEdit.XUrl);
+
+    var afterStatus = await _adminStaffService.UpdateStatusAsync(staff.StaffProfileId, new StaffStatusUpdateRequest(false));
+    Assert.Equal("https://facebook.com/zona8", afterStatus.FacebookUrl);
+    Assert.Equal("https://tiktok.com/@zona8", afterStatus.TikTokUrl);
+    Assert.Equal("https://youtube.com/@zona8", afterStatus.YoutubeUrl);
+  }
+
   /// <summary>BUG-036: the server range is 10–240 and its message is in Spanish (the UI showed it in English).</summary>
   [Theory]
   [InlineData(5)]

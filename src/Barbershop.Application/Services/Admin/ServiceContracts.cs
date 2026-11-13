@@ -22,10 +22,10 @@ public sealed record ServiceView(
 // GeneralServiceId is required to create a rate; on update null keeps the current general service.
 
 public sealed record ServiceCreateRequest(
-    string Name, int BasePrice, int BusinessPercentage = 0, int? LoyaltyPoints = null, Guid? GeneralServiceId = null);
+    string Name, int BasePrice, int? BusinessPercentage = null, int? LoyaltyPoints = null, Guid? GeneralServiceId = null);
 
 public sealed record ServiceUpdateRequest(
-    string Name, int BasePrice, int BusinessPercentage = 0, int? LoyaltyPoints = null, Guid? GeneralServiceId = null);
+    string Name, int BasePrice, int? BusinessPercentage = null, int? LoyaltyPoints = null, Guid? GeneralServiceId = null);
 
 public sealed record ServiceStatusUpdateRequest(bool IsActive);
 

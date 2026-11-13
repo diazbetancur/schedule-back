@@ -66,13 +66,13 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
     public async Task<ProductCategoryView> UpdateCategoryAsync(
         Guid categoryId, ProductCategoryUpdateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateCategory(request.Name, request.SortOrder);
+        ValidateCategory(request.Name, request.SortOrder ?? 0);
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         await _dbContext.LockProductCategoryAsync(categoryId, cancellationToken);
         var category = await LoadCategoryAsync(categoryId, cancellationToken);
         await EnsureCategoryNameIsFreeAsync(request.Name, categoryId, cancellationToken);
 
-        category.Update(request.Name, request.SortOrder, UtcNow());
+        category.Update(request.Name, request.SortOrder ?? category.SortOrder, UtcNow());
         await _dbContext.SaveProductCatalogAndCommitAsync(transaction, cancellationToken);
         return await MapCategoryAsync(category, cancellationToken);
     }
@@ -185,7 +185,7 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
 
     public async Task<ProductView> UpdateProductAsync(Guid productId, ProductUpdateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateProduct(request.CategoryId, request.Name, request.Description, request.Price, request.SortOrder);
+        ValidateProduct(request.CategoryId, request.Name, request.Description, request.Price, request.SortOrder ?? 0);
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         // Category before product (the global order); the target is locked even if it does not change.
         await _dbContext.ShareProductCategoryAsync(request.CategoryId, cancellationToken);
@@ -200,7 +200,7 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
         await EnsureProductNameIsFreeAsync(request.CategoryId, request.Name, productId, cancellationToken);
 
         product.Update(
-            request.CategoryId, request.Name, NormalizeDescription(request.Description), request.Price!.Value, request.SortOrder, UtcNow());
+            request.CategoryId, request.Name, NormalizeDescription(request.Description), request.Price!.Value, request.SortOrder ?? product.SortOrder, UtcNow());
         await _dbContext.SaveProductCatalogAndCommitAsync(transaction, cancellationToken);
         return await MapProductAsync(product, cancellationToken);
     }

@@ -507,7 +507,7 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
         return trimmed;
     }
 
-    private static string? RequireJustificationIfMismatch(int incomeAmount, long membershipsTotal, string? justification)
+    internal static string? RequireJustificationIfMismatch(int incomeAmount, long membershipsTotal, string? justification)
     {
         var normalized = NormalizeOptionalReason(justification);
         if (incomeAmount == membershipsTotal)

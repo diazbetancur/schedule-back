@@ -317,6 +317,20 @@ public sealed class LoyaltyRedemptionServiceTests : IDisposable
 
   // ── Catalog snapshots ──────────────────────────────────────────────────────────────────────
 
+  /// <summary>Same pattern as BUG-068: an update without isActive used to re-activate an inactive reward.</summary>
+  [Fact]
+  public async Task UpdateAsync_WithoutIsActive_KeepsAnInactiveRewardInactive()
+  {
+    var reward = await CreateRewardAsync("Gorra", "Other", null, cost: 30);
+    var deactivated = await _redemptions.UpdateAsync(
+        _admin.Id, reward.Id, new LoyaltyRewardUpsertRequest("Gorra", null, "Other", null, 30, IsActive: false, reward.Version));
+
+    var renamed = await _redemptions.UpdateAsync(
+        _admin.Id, reward.Id, new LoyaltyRewardUpsertRequest("Gorra Zona 8", null, "Other", null, 30, Version: deactivated.Version));
+
+    Assert.Equal(("Gorra Zona 8", false), (renamed.Name, renamed.IsActive));
+  }
+
   [Fact]
   public async Task EditingOrDeactivatingTheReward_NeverChangesExistingRequests_AndIsAudited()
   {

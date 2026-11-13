@@ -95,6 +95,64 @@ public sealed class AdminMembershipsHttpIntegrationTests
     Assert.Equal(1, await scope.ServiceProvider.GetRequiredService<AppDbContext>().IncomeEntries.CountAsync());
   }
 
+  /// <summary>
+  /// BUG-104: editing the amount of a linked membership sale asks for the same justification as linking, and the
+  /// change is recorded in the membership's history (it used to pass silently while the detail claimed a justification).
+  /// </summary>
+  [Fact]
+  public async Task EditingTheAmountOfALinkedSale_RequiresAJustification_AndRecordsItInTheHistory()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAndPromoteAdminAsync(context, "amount-edit");
+    AuthenticateAs(context.Client, admin.AccessToken);
+    var (customerId, planId) = await SeedCustomerAndPlanAsync(context.Factory, admin.UserId, []);
+
+    using var sold = await context.Client.PostAsJsonAsync(
+        $"/api/v1/admin/customers/{customerId}/memberships", new MembershipSaleRequest(planId, Today));
+    var membership = (await sold.Content.ReadFromJsonAsync<CustomerMembershipDetailView>())!;
+    using var incomeResponse = await context.Client.PostAsJsonAsync("/api/v1/admin/income",
+        new IncomeEntryCreateRequest(null, null, membership.Price, false, Today, "MembershipSale"));
+    var income = (await incomeResponse.Content.ReadFromJsonAsync<IncomeEntryView>())!;
+    using (var linked = await context.Client.PutAsJsonAsync(
+               $"/api/v1/admin/memberships/{membership.Id}/income-link", new MembershipIncomeLinkRequest(income.Id)))
+    {
+      Assert.Equal(HttpStatusCode.OK, linked.StatusCode);
+    }
+
+    using (var unjustified = await context.Client.PutAsJsonAsync(
+               $"/api/v1/admin/income/{income.Id}", new IncomeEntryUpdateRequest(null, null, 1, false, Today, "MembershipSale")))
+    {
+      Assert.Equal(HttpStatusCode.UnprocessableEntity, unjustified.StatusCode);
+      Assert.Contains("discrepancyJustification", await unjustified.Content.ReadAsStringAsync());
+    }
+
+    var unchanged = (await context.Client.GetFromJsonAsync<CustomerMembershipDetailView>($"/api/v1/admin/memberships/{membership.Id}"))!;
+    Assert.Equal(membership.Price, unchanged.Income!.Amount);
+
+    using (var justified = await context.Client.PutAsJsonAsync(
+               $"/api/v1/admin/income/{income.Id}",
+               new IncomeEntryUpdateRequest(null, null, 1, false, Today, "MembershipSale", "Cortesía acordada con el cliente")))
+    {
+      Assert.Equal(HttpStatusCode.OK, justified.StatusCode);
+    }
+
+    var detail = (await context.Client.GetFromJsonAsync<CustomerMembershipDetailView>($"/api/v1/admin/memberships/{membership.Id}"))!;
+    Assert.True(detail.Income!.HasDiscrepancy);
+    var change = Assert.Single(detail.Events, membershipEvent => membershipEvent.Type == "IncomeAmountChanged");
+    Assert.Equal(income.Id, change.IncomeEntryId);
+    Assert.Contains("Cortesía acordada con el cliente", change.Reason);
+
+    // An edit that keeps the amount (only the date) needs nothing and records nothing.
+    using var dateOnly = await context.Client.PutAsJsonAsync(
+        $"/api/v1/admin/income/{income.Id}", new IncomeEntryUpdateRequest(null, null, 1, false, Today.AddDays(-1), "MembershipSale"));
+    Assert.Equal(HttpStatusCode.OK, dateOnly.StatusCode);
+  }
+
   [Fact]
   public async Task MembershipEndpoints_AreAdminOnly()
   {

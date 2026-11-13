@@ -54,13 +54,13 @@ internal sealed class ServiceCatalogManagementService : IAdminServiceCatalogServ
     public async Task<ServiceCategoryView> UpdateCategoryAsync(
         Guid categoryId, ServiceCategoryUpdateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateCategory(request.Name, request.SortOrder);
+        ValidateCategory(request.Name, request.SortOrder ?? 0);
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         await _dbContext.LockCategoryAsync(categoryId, cancellationToken);
         var category = await LoadCategoryAsync(categoryId, cancellationToken);
         await EnsureCategoryNameIsFreeAsync(request.Name, categoryId, cancellationToken);
 
-        category.Update(request.Name, request.SortOrder, UtcNow());
+        category.Update(request.Name, request.SortOrder ?? category.SortOrder, UtcNow());
         await _dbContext.SaveAndCommitAsync(transaction, cancellationToken);
         return await MapCategoryAsync(category, cancellationToken);
     }
@@ -155,7 +155,7 @@ internal sealed class ServiceCatalogManagementService : IAdminServiceCatalogServ
     public async Task<GeneralServiceView> UpdateGeneralServiceAsync(
         Guid generalServiceId, GeneralServiceUpdateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateGeneralService(request.CategoryId, request.Name, request.Description, request.SortOrder);
+        ValidateGeneralService(request.CategoryId, request.Name, request.Description, request.SortOrder ?? 0);
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         // Category before general service (the global order); the target is locked even if it does not change.
         await _dbContext.ShareCategoryAsync(request.CategoryId, cancellationToken);
@@ -169,7 +169,7 @@ internal sealed class ServiceCatalogManagementService : IAdminServiceCatalogServ
         // Checked in the target category, so moving a service where an equivalent name lives is a conflict too.
         await EnsureGeneralServiceNameIsFreeAsync(request.CategoryId, request.Name, generalServiceId, cancellationToken);
 
-        service.Update(request.CategoryId, request.Name, NormalizeDescription(request.Description), request.SortOrder, UtcNow());
+        service.Update(request.CategoryId, request.Name, NormalizeDescription(request.Description), request.SortOrder ?? service.SortOrder, UtcNow());
         await _dbContext.SaveAndCommitAsync(transaction, cancellationToken);
         return await MapGeneralServiceAsync(service, cancellationToken);
     }

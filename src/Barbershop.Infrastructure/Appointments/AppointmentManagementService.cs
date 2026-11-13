@@ -444,10 +444,18 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
         .SingleOrDefaultAsync(candidate => candidate.Id == appointmentId, cancellationToken)
         ?? throw new KeyNotFoundException("The appointment was not found.");
 
-    var staffProfile = await LoadActiveStaffProfileAsync(appointment.StaffProfileId, cancellationToken);
+    // BUG-114: administration must still be able to cancel or close the appointments of a deactivated professional
+    // (the customer is notified as usual), so the profile is loaded whatever its state.
+    var staffProfile = await LoadStaffProfileAnyStateAsync(appointment.StaffProfileId, cancellationToken);
 
     return await UpdateStatusCoreAsync(appointment, staffProfile, request, cancellationToken);
   }
+
+  private async Task<StaffProfile> LoadStaffProfileAnyStateAsync(Guid staffProfileId, CancellationToken cancellationToken)
+      => await _dbContext.StaffProfiles
+          .Include(profile => profile.User)
+          .SingleOrDefaultAsync(profile => profile.Id == staffProfileId, cancellationToken)
+          ?? throw new KeyNotFoundException("The staff profile was not found.");
 
   private async Task<AppointmentView> CreateManualAsync(
       Guid staffProfileId,

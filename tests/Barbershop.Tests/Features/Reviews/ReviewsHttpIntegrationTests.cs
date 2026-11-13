@@ -333,11 +333,15 @@ public sealed class ReviewsHttpIntegrationTests
     var payload = await response.Content.ReadFromJsonAsync<List<PublicStaffReviewView>>();
     Assert.NotNull(payload);
     Assert.Equal(2, payload!.Count);
+    Assert.Equal(["Excellent", "Great"], payload.Select(review => review.Comment!).Order(StringComparer.Ordinal));
 
-    var appointmentIds = payload.Select(review => review.AppointmentId).ToHashSet();
-
-    Assert.Contains(firstAppointment.Id, appointmentIds);
-    Assert.Contains(secondAppointment.Id, appointmentIds);
+    // BUG-041: an anonymous reader never gets the ids of the customers' appointments.
+    var raw = await response.Content.ReadAsStringAsync();
+    Assert.DoesNotContain("appointmentId", raw, StringComparison.OrdinalIgnoreCase);
+    Assert.DoesNotContain(firstAppointment.Id.ToString(), raw, StringComparison.OrdinalIgnoreCase);
+    Assert.DoesNotContain(secondAppointment.Id.ToString(), raw, StringComparison.OrdinalIgnoreCase);
+    // BUG-101: public and short-lived cache.
+    Assert.Equal("public, max-age=60", response.Headers.CacheControl?.ToString());
   }
 
   [Fact]

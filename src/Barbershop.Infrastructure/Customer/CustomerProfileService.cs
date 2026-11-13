@@ -2,6 +2,7 @@ using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Customer;
 using Barbershop.Application.Media;
 using Barbershop.Application.Storage;
+using Barbershop.Domain.Common;
 using Barbershop.Domain.Media;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Identity;
@@ -14,6 +15,8 @@ namespace Barbershop.Infrastructure.Customer;
 
 internal sealed class CustomerProfileService : ICustomerProfileService
 {
+    private static readonly DateOnly MinDateOfBirth = new(1900, 1, 1);
+
     private readonly AppDbContext _dbContext;
     private readonly IPasswordHasher<object> _passwordHasher;
     private readonly IMediaAssetsService _mediaAssetsService;
@@ -45,7 +48,7 @@ internal sealed class CustomerProfileService : ICustomerProfileService
         CustomerProfileUpdateRequest request,
         CancellationToken cancellationToken = default)
     {
-        ValidateUpdateRequest(request);
+        ValidateUpdateRequest(request, DateOnly.FromDateTime(BogotaClock.ToLocal(_timeProvider.GetUtcNow().UtcDateTime)));
 
         var user = await LoadActiveUserAsync(currentUserId, cancellationToken);
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
@@ -190,7 +193,7 @@ internal sealed class CustomerProfileService : ICustomerProfileService
             reason,
             cancellationToken);
 
-    private static void ValidateUpdateRequest(CustomerProfileUpdateRequest request)
+    private static void ValidateUpdateRequest(CustomerProfileUpdateRequest request, DateOnly todayInBogota)
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 
@@ -206,6 +209,13 @@ internal sealed class CustomerProfileService : ICustomerProfileService
         if (request.PhoneNumber is not null && request.PhoneNumber.Length > 40)
         {
             errors["phoneNumber"] = ["Phone number must be 40 characters or fewer."];
+        }
+
+        // BUG-059: between 1900-01-01 and today (Bogotá). No minimum age: the legal pages allow profiles of minors
+        // managed by an adult, so there is no documented rule to enforce.
+        if (request.DateOfBirth is { } dateOfBirth && (dateOfBirth < MinDateOfBirth || dateOfBirth > todayInBogota))
+        {
+            errors["dateOfBirth"] = ["La fecha de nacimiento debe estar entre el 1 de enero de 1900 y hoy."];
         }
 
         ThrowIfAnyErrors(errors);
@@ -224,13 +234,14 @@ internal sealed class CustomerProfileService : ICustomerProfileService
         {
             errors["newPassword"] = ["New password is required."];
         }
-        else if (request.NewPassword.Length < 8)
+        // BUG-018: the policy of registration and reset (8–128), and never the current password again.
+        else if (request.NewPassword.Length is < 8 or > 128)
         {
-            errors["newPassword"] = ["New password must be at least 8 characters."];
+            errors["newPassword"] = ["La nueva contraseña debe tener entre 8 y 128 caracteres."];
         }
-        else if (request.NewPassword.Length > 256)
+        else if (string.Equals(request.NewPassword, request.CurrentPassword, StringComparison.Ordinal))
         {
-            errors["newPassword"] = ["New password must be 256 characters or fewer."];
+            errors["newPassword"] = ["La nueva contraseña debe ser distinta de la actual."];
         }
 
         ThrowIfAnyErrors(errors);

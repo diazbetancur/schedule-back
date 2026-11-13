@@ -9,21 +9,23 @@ public static class PublicContentEndpoints
     var content = api.MapGroup("/public/content")
         .WithTags("Public");
 
+    // BUG-101: the public answers carry only what the landing shows (Public* contracts); the admin endpoints keep the
+    // full records with file ids, flags and timestamps.
     content.MapGet("/landing", GetLandingAsync)
         .WithName("GetPublicLandingContent")
-        .Produces<LandingContentResponse>(StatusCodes.Status200OK);
+        .Produces<PublicLandingContentResponse>(StatusCodes.Status200OK);
 
     content.MapGet("/banners", GetBannersAsync)
         .WithName("GetPublicBanners")
-        .Produces<IReadOnlyList<BannerResponse>>(StatusCodes.Status200OK);
+        .Produces<IReadOnlyList<PublicBannerResponse>>(StatusCodes.Status200OK);
 
     content.MapGet("/ticker-items", GetTickerItemsAsync)
         .WithName("GetPublicTickerItems")
-        .Produces<IReadOnlyList<TickerItemResponse>>(StatusCodes.Status200OK);
+        .Produces<IReadOnlyList<PublicTickerItemResponse>>(StatusCodes.Status200OK);
 
     content.MapGet("/branding", GetBrandingAsync)
         .WithName("GetPublicBranding")
-        .Produces<BrandingSettingsResponse>(StatusCodes.Status200OK);
+        .Produces<PublicBrandingResponse>(StatusCodes.Status200OK);
 
     content.MapGet("/business-hours", GetBusinessScheduleAsync)
         .WithName("GetPublicBusinessSchedule")
@@ -32,17 +34,17 @@ public static class PublicContentEndpoints
     return api;
   }
 
-  private static Task<LandingContentResponse> GetLandingAsync(IPublicContentService service, CancellationToken cancellationToken)
-      => service.GetPublicLandingAsync(cancellationToken);
+  private static async Task<PublicLandingContentResponse> GetLandingAsync(IPublicContentService service, CancellationToken cancellationToken)
+      => PublicLandingContentResponse.From(await service.GetPublicLandingAsync(cancellationToken));
 
-  private static Task<IReadOnlyList<BannerResponse>> GetBannersAsync(IPublicContentService service, CancellationToken cancellationToken)
-      => service.GetPublicBannersAsync(cancellationToken);
+  private static async Task<IReadOnlyList<PublicBannerResponse>> GetBannersAsync(IPublicContentService service, CancellationToken cancellationToken)
+      => (await service.GetPublicBannersAsync(cancellationToken)).Select(PublicBannerResponse.From).ToList();
 
-  private static Task<IReadOnlyList<TickerItemResponse>> GetTickerItemsAsync(IPublicContentService service, CancellationToken cancellationToken)
-      => service.GetPublicTickerItemsAsync(cancellationToken);
+  private static async Task<IReadOnlyList<PublicTickerItemResponse>> GetTickerItemsAsync(IPublicContentService service, CancellationToken cancellationToken)
+      => (await service.GetPublicTickerItemsAsync(cancellationToken)).Select(PublicTickerItemResponse.From).ToList();
 
-  private static Task<BrandingSettingsResponse> GetBrandingAsync(IPublicContentService service, CancellationToken cancellationToken)
-      => service.GetPublicBrandingAsync(cancellationToken);
+  private static async Task<PublicBrandingResponse> GetBrandingAsync(IPublicContentService service, CancellationToken cancellationToken)
+      => PublicBrandingResponse.From(await service.GetPublicBrandingAsync(cancellationToken));
 
   private static Task<BusinessScheduleResponse> GetBusinessScheduleAsync(IPublicContentService service, CancellationToken cancellationToken)
       => service.GetPublicBusinessScheduleAsync(cancellationToken);

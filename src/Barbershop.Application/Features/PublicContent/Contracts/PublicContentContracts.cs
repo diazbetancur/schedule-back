@@ -96,3 +96,48 @@ public sealed record TickerItemResponse(
     bool IsActive,
     DateTime CreatedAtUtc,
     DateTime? UpdatedAtUtc);
+
+// ── Public contracts (BUG-101): only what the public pages show. No file ids, no active flags (the public lists
+// only carry active items, already ordered), no sort order and no edit timestamps. ──
+
+public sealed record PublicLandingContentResponse(
+    string HeroTitle,
+    string? HeroSubtitle,
+    string? AboutTitle,
+    string? AboutText,
+    string? ContactPhone,
+    string? MapsUrl,
+    string? Address)
+{
+  public static PublicLandingContentResponse From(LandingContentResponse content)
+      => new(content.HeroTitle, content.HeroSubtitle, content.AboutTitle, content.AboutText, content.ContactPhone,
+          content.MapsUrl, content.Address);
+}
+
+public sealed record PublicBrandingResponse(
+    string AppName,
+    string PrimaryColor,
+    string SecondaryColor,
+    string? LogoUrl,
+    string? AppIconUrl)
+{
+  public static PublicBrandingResponse From(BrandingSettingsResponse branding)
+      => new(branding.AppName, branding.PrimaryColor, branding.SecondaryColor, branding.LogoUrl, branding.AppIconUrl);
+}
+
+/// <param name="Id">The banner's own id (a key for the list), never a file id.</param>
+public sealed record PublicBannerResponse(
+    Guid Id,
+    string Title,
+    string? Subtitle,
+    string? ImageUrl,
+    string? LinkUrl)
+{
+  public static PublicBannerResponse From(BannerResponse banner)
+      => new(banner.Id, banner.Title, banner.Subtitle, banner.ImageUrl, banner.LinkUrl);
+}
+
+public sealed record PublicTickerItemResponse(Guid Id, string Text)
+{
+  public static PublicTickerItemResponse From(TickerItemResponse item) => new(item.Id, item.Text);
+}

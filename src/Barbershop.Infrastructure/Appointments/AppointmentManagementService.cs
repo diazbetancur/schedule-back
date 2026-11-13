@@ -923,7 +923,8 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
   private static void ValidateManualSnapshot(string customerName, string? customerEmail, string? customerPhone, string? notes)
   {
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-    AddCustomerDetailsErrors(errors, customerName, customerEmail, customerPhone, notes);
+    // A new appointment's contact email is typed now: the strict rule (BUG-004, BUG-017).
+    AddCustomerDetailsErrors(errors, customerName, customerEmail, customerPhone, notes, strictEmail: true);
     ThrowIfAnyErrors(errors);
   }
 
@@ -932,7 +933,8 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
   /// reach the client as a 400 with the .NET message in English.
   /// </summary>
   private static void AddCustomerDetailsErrors(
-      Dictionary<string, string[]> errors, string? customerName, string? customerEmail, string? customerPhone, string? notes)
+      Dictionary<string, string[]> errors, string? customerName, string? customerEmail, string? customerPhone, string? notes,
+      bool strictEmail = false)
   {
     var name = customerName?.Trim() ?? string.Empty;
     if (name.Length is < 2 or > 120)
@@ -941,9 +943,9 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     }
 
     if (!string.IsNullOrWhiteSpace(customerEmail)
-        && (customerEmail.Trim().Length > 256 || !IsValidEmail(customerEmail.Trim())))
+        && (strictEmail ? !EmailRules.IsValid(customerEmail) : customerEmail.Trim().Length > 256 || !IsValidEmail(customerEmail.Trim())))
     {
-      errors["customerEmail"] = ["Escribe un correo válido (máximo 256 caracteres)."];
+      errors["customerEmail"] = [EmailRules.InvalidMessage];
     }
 
     if (!string.IsNullOrWhiteSpace(customerPhone) && customerPhone.Trim().Length > 40)

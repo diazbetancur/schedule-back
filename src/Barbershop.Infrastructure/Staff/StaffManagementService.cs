@@ -140,6 +140,16 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
 
     private async Task<StaffManagementView> UpdateStaffAsync(StaffProfile staffProfile, AdminStaffUpdateRequest request, CancellationToken cancellationToken)
     {
+        // BUG-004 / BUG-017: a changed email gets the strict rule; an unchanged one keeps the rule it was saved with.
+        var emailChanged = !string.Equals(request.Email?.Trim(), staffProfile.User.Email, StringComparison.OrdinalIgnoreCase);
+        if (emailChanged && !EmailRules.IsValid(request.Email))
+        {
+            throw new ValidationProblemException(new Dictionary<string, string[]>
+            {
+                ["email"] = [EmailRules.InvalidMessage]
+            });
+        }
+
         var normalizedEmail = NormalizeEmail(request.Email);
         var duplicateEmailExists = await _dbContext.Users.AnyAsync(
             user => user.Id != staffProfile.UserId && user.NormalizedEmail == normalizedEmail,
@@ -666,6 +676,8 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
         ValidateCommonAdminFields(errors, request.FullName, request.Email, request.DisplayName, request.PhoneNumber, request.Bio, request.DefaultAppointmentDurationMinutes);
+        // BUG-004 / BUG-017: a new account gets the strict rule (the email becomes its login).
+        AddErrorIf(errors, "email", !EmailRules.IsValid(request.Email), EmailRules.InvalidMessage);
         AddErrorIf(errors, "initialPassword", string.IsNullOrWhiteSpace(request.InitialPassword) || request.InitialPassword.Length is < 8 or > 128,
             "InitialPassword must be between 8 and 128 characters.");
         ThrowIfAnyErrors(errors);

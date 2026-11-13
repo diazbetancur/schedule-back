@@ -79,6 +79,8 @@ forwardedHeadersOptions.KnownProxies.Clear();
 app.UseForwardedHeaders(forwardedHeadersOptions);
 
 app.UseMiddleware<CorrelationIdMiddleware>();
+// BUG-101: no-store by default (personal data, errors); short public caching for anonymous public content.
+app.UseMiddleware<CacheControlMiddleware>();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 app.UseMiddleware<SecurityHeadersMiddleware>();

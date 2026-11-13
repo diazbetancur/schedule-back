@@ -123,7 +123,6 @@ internal sealed class ReviewManagementService : ICustomerReviewsService, IPublic
         .Where(review => review.Appointment.StaffProfileId == staffProfileId && review.Appointment.Status == AppointmentStatus.Completed)
         .OrderByDescending(review => review.CreatedAt)
         .Select(review => new PublicStaffReviewView(
-            review.AppointmentId,
             review.Stars,
             review.Comment,
             review.CreatedAt))

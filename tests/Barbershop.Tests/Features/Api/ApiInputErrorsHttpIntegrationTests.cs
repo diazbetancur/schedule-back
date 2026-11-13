@@ -160,7 +160,7 @@ public sealed class ApiInputErrorsHttpIntegrationTests
         "/api/v1/auth/register", new RegisterRequest("Correo Largo", new string('a', 250) + "@example.com", DefaultPassword, null));
 
     var problem = await AssertValidationAsync(response, HttpStatusCode.UnprocessableEntity);
-    Assert.Equal("Escribe un correo válido (máximo 256 caracteres).", problem.GetProperty("errors").GetProperty("email")[0].GetString());
+    Assert.Equal(Barbershop.Domain.Common.EmailRules.InvalidMessage, problem.GetProperty("errors").GetProperty("email")[0].GetString());
   }
 
   [Fact]

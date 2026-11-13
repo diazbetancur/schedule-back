@@ -291,7 +291,44 @@ public sealed class PublicContentTests : IDisposable
     Assert.Equal(4.5m, profile.AverageRating);
   }
 
-  private async Task<MediaAsset> CreateReadyMediaAssetAsync(MediaAssetPurpose purpose)
+  /// <summary>
+  /// BUG-093: links saved before the rule (a customer's private attachment, a PDF, an archived file) were published
+  /// to anyone. The public endpoints now leave out any file that is not a ready image of the slot's kind, URL and id.
+  /// </summary>
+  [Fact]
+  public async Task PublicBrandingAndBanners_DoNotPublishFilesLinkedBeforeTheRule()
+  {
+    var attachment = await CreateReadyMediaAssetAsync(MediaAssetPurpose.CustomerReference);
+    var pdfLogo = await CreateReadyMediaAssetAsync(MediaAssetPurpose.Logo, "application/pdf");
+    var archived = await CreateReadyMediaAssetAsync(MediaAssetPurpose.Banner);
+    archived.Archive(CurrentUtc.UtcDateTime);
+    var goodBanner = await CreateReadyMediaAssetAsync(MediaAssetPurpose.Banner);
+
+    var branding = new AppBrandingSettings("Zona", "#000000", "#FFFFFF", CurrentUtc.UtcDateTime);
+    branding.Update("Zona", "#000000", "#FFFFFF", pdfLogo.Id, attachment.Id, CurrentUtc.UtcDateTime);
+    _dbContext.AppBrandingSettings.Add(branding);
+    var now = CurrentUtc.UtcDateTime;
+    _dbContext.Banners.AddRange(
+        CreateBanner("Banner A", null, 1, true, now.AddMinutes(-3), null, null, attachment.Id, null),
+        CreateBanner("Banner B", null, 2, true, now.AddMinutes(-2), null, null, archived.Id, null),
+        CreateBanner("Banner C", null, 3, true, now.AddMinutes(-1), null, null, goodBanner.Id, null));
+    await _dbContext.SaveChangesAsync();
+
+    var publicBranding = await _publicContentService.GetPublicBrandingAsync();
+    var publicBanners = await _publicContentService.GetPublicBannersAsync();
+
+    Assert.Null(publicBranding.LogoUrl);
+    Assert.Null(publicBranding.LogoMediaAssetId);
+    Assert.Null(publicBranding.AppIconUrl);
+    Assert.Null(publicBranding.AppIconMediaAssetId);
+    Assert.Collection(
+        publicBanners,
+        a => { Assert.Null(a.ImageUrl); Assert.Null(a.ImageMediaAssetId); },
+        b => { Assert.Null(b.ImageUrl); Assert.Null(b.ImageMediaAssetId); },
+        c => { Assert.Equal(goodBanner.PublicUrl, c.ImageUrl); Assert.Equal(goodBanner.Id, c.ImageMediaAssetId); });
+  }
+
+  private async Task<MediaAsset> CreateReadyMediaAssetAsync(MediaAssetPurpose purpose, string contentType = "image/png")
   {
     var createdAt = CurrentUtc.UtcDateTime;
     var user = new User(
@@ -302,7 +339,7 @@ public sealed class PublicContentTests : IDisposable
 
     var media = new MediaAsset(
         fileName: $"asset-{Guid.NewGuid():N}.png",
-        contentType: "image/png",
+        contentType: contentType,
         sizeBytes: 1_024,
         storageKey: $"content/{Guid.NewGuid():N}.png",
         purpose: purpose,

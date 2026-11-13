@@ -250,7 +250,133 @@ public sealed class AdminContentTests : IDisposable
     Assert.Contains("imageMediaAssetId", exception.Errors.Keys);
   }
 
-  private async Task<MediaAsset> CreateReadyMediaAssetAsync(MediaAssetPurpose purpose)
+  // ── BUG-093: brand and banner slots only take a ready image uploaded for that slot ──
+
+  public static TheoryData<MediaAssetPurpose> PurposesThatAreNotALogo => new()
+  {
+    MediaAssetPurpose.CustomerReference,
+    MediaAssetPurpose.Other,
+    MediaAssetPurpose.AppIcon,
+    MediaAssetPurpose.Banner,
+    MediaAssetPurpose.StaffPhoto,
+    MediaAssetPurpose.TipsQr,
+    MediaAssetPurpose.ProductImage
+  };
+
+  [Theory]
+  [MemberData(nameof(PurposesThatAreNotALogo))]
+  public async Task UpsertBrandingAsync_RejectsALogoOfAnotherKind_IncludingACustomersPrivateAttachment(MediaAssetPurpose purpose)
+  {
+    var file = await CreateReadyMediaAssetAsync(purpose);
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _adminContentService.UpsertBrandingAsync(Branding(logoId: file.Id)));
+
+    Assert.Contains("logoMediaAssetId", exception.Errors.Keys);
+    Assert.Empty(await _dbContext.AppBrandingSettings.ToListAsync());
+  }
+
+  [Fact]
+  public async Task UpsertBrandingAsync_RejectsACustomersAttachmentAsAppIcon()
+  {
+    var attachment = await CreateReadyMediaAssetAsync(MediaAssetPurpose.CustomerReference);
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _adminContentService.UpsertBrandingAsync(Branding(appIconId: attachment.Id)));
+
+    Assert.Contains("appIconMediaAssetId", exception.Errors.Keys);
+  }
+
+  [Fact]
+  public async Task UpsertBrandingAsync_RejectsAPdfEvenWithTheLogoPurpose()
+  {
+    var pdf = await CreateReadyMediaAssetAsync(MediaAssetPurpose.Logo, contentType: "application/pdf");
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _adminContentService.UpsertBrandingAsync(Branding(logoId: pdf.Id)));
+
+    Assert.Contains("logoMediaAssetId", exception.Errors.Keys);
+  }
+
+  [Theory]
+  [InlineData(MediaAssetStatus.Archived)]
+  [InlineData(MediaAssetStatus.Pending)]
+  [InlineData(MediaAssetStatus.Failed)]
+  public async Task CreateBannerAsync_RejectsAFileThatIsNotReady(MediaAssetStatus status)
+  {
+    var file = await CreateReadyMediaAssetAsync(MediaAssetPurpose.Banner, status: status);
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _adminContentService.CreateBannerAsync(BannerRequest(file.Id)));
+
+    Assert.Contains("imageMediaAssetId", exception.Errors.Keys);
+    Assert.Empty(await _dbContext.Banners.ToListAsync());
+  }
+
+  [Theory]
+  [InlineData(MediaAssetPurpose.CustomerReference)]
+  [InlineData(MediaAssetPurpose.Other)]
+  [InlineData(MediaAssetPurpose.Logo)]
+  public async Task CreateAndUpdateBannerAsync_RejectAnImageOfAnotherKind(MediaAssetPurpose purpose)
+  {
+    var file = await CreateReadyMediaAssetAsync(purpose);
+    var banner = await _adminContentService.CreateBannerAsync(BannerRequest(null));
+
+    var onCreate = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _adminContentService.CreateBannerAsync(BannerRequest(file.Id)));
+    var onUpdate = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _adminContentService.UpdateBannerAsync(banner.Id, new UpdateBannerRequest(
+            "Promo", null, file.Id, null, 1, true, null, null)));
+
+    Assert.Contains("imageMediaAssetId", onCreate.Errors.Keys);
+    Assert.Contains("imageMediaAssetId", onUpdate.Errors.Keys);
+    Assert.Null((await _dbContext.Banners.AsNoTracking().SingleAsync()).ImageMediaAssetId);
+  }
+
+  [Fact]
+  public async Task UpdateBannerAsync_KeepingAnImageLinkedBeforeTheRule_MustReplaceIt()
+  {
+    var attachment = await CreateReadyMediaAssetAsync(MediaAssetPurpose.CustomerReference);
+    var banner = new Barbershop.Domain.Landing.Banner("Promo", 1, CurrentUtc.UtcDateTime, null, attachment.Id, null);
+    _dbContext.Banners.Add(banner);
+    await _dbContext.SaveChangesAsync();
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _adminContentService.UpdateBannerAsync(banner.Id, new UpdateBannerRequest(
+            "Promo editada", null, attachment.Id, null, 1, true, null, null)));
+
+    Assert.Contains("imageMediaAssetId", exception.Errors.Keys);
+  }
+
+  [Fact]
+  public async Task BrandAndBannerImages_OfTheirOwnKind_AreAccepted_AndTheFileCannotBeDeletedWhileLinked()
+  {
+    var logo = await CreateReadyMediaAssetAsync(MediaAssetPurpose.Logo);
+    var icon = await CreateReadyMediaAssetAsync(MediaAssetPurpose.AppIcon);
+    var image = await CreateReadyMediaAssetAsync(MediaAssetPurpose.Banner);
+
+    var branding = await _adminContentService.UpsertBrandingAsync(Branding(logoId: logo.Id, appIconId: icon.Id));
+    var banner = await _adminContentService.CreateBannerAsync(BannerRequest(image.Id));
+
+    Assert.Equal(logo.PublicUrl, branding.LogoUrl);
+    Assert.Equal(icon.PublicUrl, branding.AppIconUrl);
+    Assert.Equal(image.PublicUrl, banner.ImageUrl);
+    foreach (var id in new[] { logo.Id, icon.Id, image.Id })
+    {
+      Assert.True(await Barbershop.Infrastructure.Media.MediaAssetReferences.IsReferencedAsync(_dbContext, id, CancellationToken.None));
+    }
+  }
+
+  private static UpsertBrandingSettingsRequest Branding(Guid? logoId = null, Guid? appIconId = null)
+      => new("Barbershop", "#010101", "#FFFFFF", logoId, appIconId);
+
+  private static CreateBannerRequest BannerRequest(Guid? imageId)
+      => new("Promo", null, imageId, null, 1, true, null, null);
+
+  private async Task<MediaAsset> CreateReadyMediaAssetAsync(
+      MediaAssetPurpose purpose,
+      string contentType = "image/png",
+      MediaAssetStatus status = MediaAssetStatus.Ready)
   {
     var createdAt = CurrentUtc.UtcDateTime;
     var user = new User(
@@ -261,14 +387,26 @@ public sealed class AdminContentTests : IDisposable
 
     var media = new MediaAsset(
         fileName: $"asset-{Guid.NewGuid():N}.png",
-        contentType: "image/png",
+        contentType: contentType,
         sizeBytes: 2_048,
         storageKey: $"branding/{Guid.NewGuid():N}.png",
         purpose: purpose,
         uploadedByUserId: user.Id,
         createdAt: createdAt);
 
-    media.MarkReady($"https://assets.example.com/{media.StorageKey}", createdAt.AddMinutes(1));
+    switch (status)
+    {
+      case MediaAssetStatus.Ready:
+        media.MarkReady($"https://assets.example.com/{media.StorageKey}", createdAt.AddMinutes(1));
+        break;
+      case MediaAssetStatus.Archived:
+        media.MarkReady($"https://assets.example.com/{media.StorageKey}", createdAt.AddMinutes(1));
+        media.Archive(createdAt.AddMinutes(2));
+        break;
+      case MediaAssetStatus.Failed:
+        media.MarkFailed("storage down", createdAt.AddMinutes(1));
+        break;
+    }
 
     _dbContext.Users.Add(user);
     _dbContext.MediaAssets.Add(media);

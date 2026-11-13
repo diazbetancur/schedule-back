@@ -209,6 +209,27 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender, IPush
 
     foreach (var subscription in subscriptions)
     {
+      if (!PushEndpointPolicy.IsAllowed(subscription.Endpoint))
+      {
+        // BUG-106: a subscription saved before the rule may point to an internal address. It is never contacted
+        // and is removed, like an expired one.
+        _logger.LogWarning(
+            "Push subscription {SubscriptionId} points to a host outside the known push services; it was removed without contacting it.",
+            subscription.Id);
+        staleSubscriptionIds.Add(subscription.Id);
+        results.Add(new DeviceAttempt(
+            new PushDeviceResultView(
+                subscription.Id,
+                "desconocido",
+                subscription.UserAgent,
+                false,
+                null,
+                "La dirección de notificaciones de este dispositivo no era válida y se eliminó. Vuelve a activar las notificaciones.",
+                true),
+            false));
+        continue;
+      }
+
       var target = new WebPushSubscription(subscription.Endpoint, subscription.P256dhKey, subscription.AuthKey);
       var pushService = DescribePushService(subscription.Endpoint);
 
@@ -246,9 +267,11 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender, IPush
             (int)webPushException.StatusCode,
             detail);
 
+        // The push service's response body stays in the server log; the caller only gets a fixed description
+        // (BUG-106: the body of a third-party response is never echoed back).
         var statusCode = (int)webPushException.StatusCode;
         results.Add(new DeviceAttempt(
-            new PushDeviceResultView(subscription.Id, pushService, subscription.UserAgent, false, statusCode, detail, false),
+            new PushDeviceResultView(subscription.Id, pushService, subscription.UserAgent, false, statusCode, DescribeFailure(statusCode), false),
             IsTransientStatus(statusCode)));
       }
       catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
@@ -262,20 +285,47 @@ internal sealed class WebPushNotificationSender : IPushNotificationSender, IPush
 
         // Network errors and timeouts: worth retrying.
         results.Add(new DeviceAttempt(
-            new PushDeviceResultView(subscription.Id, pushService, subscription.UserAgent, false, null, Truncate(ex.Message), false),
+            new PushDeviceResultView(subscription.Id, pushService, subscription.UserAgent, false, null, ConnectionFailure, false),
             true));
       }
     }
 
     if (staleSubscriptionIds.Count > 0)
     {
-      await _dbContext.PushSubscriptions
-          .Where(subscription => staleSubscriptionIds.Contains(subscription.Id))
-          .ExecuteDeleteAsync(cancellationToken);
+      await DeleteSubscriptionsAsync(staleSubscriptionIds, cancellationToken);
     }
 
     return results;
   }
+
+  private async Task DeleteSubscriptionsAsync(IReadOnlyCollection<Guid> subscriptionIds, CancellationToken cancellationToken)
+  {
+    if (_dbContext.Database.IsRelational())
+    {
+      // A direct delete: never flushes other pending changes of the shared context.
+      await _dbContext.PushSubscriptions
+          .Where(subscription => subscriptionIds.Contains(subscription.Id))
+          .ExecuteDeleteAsync(cancellationToken);
+      return;
+    }
+
+    // The in-memory provider (unit tests) has no ExecuteDelete.
+    _dbContext.PushSubscriptions.RemoveRange(
+        _dbContext.PushSubscriptions.Local.Where(subscription => subscriptionIds.Contains(subscription.Id)).ToList());
+    await _dbContext.SaveChangesAsync(cancellationToken);
+  }
+
+  private const string ConnectionFailure = "No se pudo conectar con el servicio push. Se reintentará más tarde.";
+
+  internal static string DescribeFailure(int statusCode) => statusCode switch
+  {
+    400 => "El servicio push rechazó la notificación (400).",
+    401 or 403 => $"El servicio push rechazó las credenciales VAPID del servidor ({statusCode}).",
+    413 => "La notificación es demasiado grande para el servicio push (413).",
+    429 => "El servicio push está limitando los envíos (429). Se reintentará más tarde.",
+    >= 500 => $"El servicio push no está disponible ({statusCode}). Se reintentará más tarde.",
+    _ => $"El servicio push rechazó la notificación ({statusCode})."
+  };
 
   private static bool IsTransientStatus(int statusCode)
       => statusCode == 429 || statusCode >= 500;

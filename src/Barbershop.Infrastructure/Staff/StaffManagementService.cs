@@ -1,4 +1,5 @@
 using System.Net.Mail;
+using Barbershop.Application.Auth;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Media;
 using Barbershop.Application.Staff;
@@ -11,6 +12,7 @@ using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Identity;
 using Barbershop.Infrastructure.Media;
 using Barbershop.Infrastructure.Persistence;
+using Barbershop.Infrastructure.Users;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
@@ -28,6 +30,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
     private readonly TimeProvider _timeProvider;
     private readonly IMediaAssetsService _mediaAssetsService;
     private readonly IFileStorageService _fileStorageService;
+    private readonly ICurrentUserAccessor? _currentUser;
 
     public StaffManagementService(
         AppDbContext dbContext,
@@ -35,7 +38,8 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         IPasswordHasher<object> passwordHasher,
         TimeProvider timeProvider,
         IMediaAssetsService mediaAssetsService,
-        IFileStorageService fileStorageService)
+        IFileStorageService fileStorageService,
+        ICurrentUserAccessor? currentUser = null)
     {
         _dbContext = dbContext;
         _identitySeedService = identitySeedService;
@@ -43,6 +47,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         _timeProvider = timeProvider;
         _mediaAssetsService = mediaAssetsService;
         _fileStorageService = fileStorageService;
+        _currentUser = currentUser;
     }
 
     public async Task<IReadOnlyList<StaffManagementView>> GetAllAsync(CancellationToken cancellationToken = default)
@@ -149,6 +154,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
             ? staffProfile.DefaultAppointmentDurationMinutes
             : request.DefaultAppointmentDurationMinutes.Value;
         var isActive = request.IsActive ?? staffProfile.IsActive;
+        var deactivatesAccount = staffProfile.User.IsActive && !isActive;
 
         staffProfile.User.SetEmail(request.Email);
         staffProfile.User.UpdateProfile(request.FullName, request.PhoneNumber, request.PhotoMediaAssetId, utcNow);
@@ -172,7 +178,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
             isActive,
             utcNow);
 
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        await SaveAsync(deactivatesAccount, staffProfile.UserId, cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
 
@@ -180,6 +186,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
     {
         var staffProfile = await LoadStaffProfileAsync(staffProfileId, cancellationToken);
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        var deactivatesAccount = staffProfile.User.IsActive && !request.IsActive;
 
         if (request.IsActive)
         {
@@ -200,9 +207,19 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
             request.IsActive,
             utcNow);
 
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        await SaveAsync(deactivatesAccount, staffProfile.UserId, cancellationToken);
         return await MapAsync(staffProfile, cancellationToken);
     }
+
+    /// <summary>
+    /// Deactivating a professional deactivates their account, which may be an administrator's (BUG-076): the same
+    /// rules as DELETE /admin/users apply (not one's own account, never the last active Admin).
+    /// </summary>
+    private Task<int> SaveAsync(bool deactivatesAccount, Guid userId, CancellationToken cancellationToken)
+        => deactivatesAccount
+            ? AdminAccountGuard.DeactivateAsync(
+                _dbContext, userId, _currentUser?.UserId, () => _dbContext.SaveChangesAsync(cancellationToken), cancellationToken)
+            : _dbContext.SaveChangesAsync(cancellationToken);
 
     public async Task<StaffManagementView> EnableProfessionalForCurrentUserAsync(
         Guid currentUserId,

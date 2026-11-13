@@ -3,6 +3,8 @@ using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Landing;
 using Barbershop.Application.PublicContent;
 using Barbershop.Domain.Landing;
+using Barbershop.Domain.Media;
+using Barbershop.Infrastructure.Media;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -48,10 +50,11 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
         .ThenBy(banner => banner.CreatedAt)
         .ToListAsync(cancellationToken);
 
-    var mediaUrls = await LoadMediaUrlsAsync(banners.Select(banner => banner.ImageMediaAssetId), cancellationToken);
+    var mediaUrls = await LoadPublishableMediaUrlsAsync(
+        banners.Select(banner => (banner.ImageMediaAssetId, MediaAssetPurpose.Banner)), cancellationToken);
 
     return banners
-        .Select(banner => MapBanner(banner, mediaUrls))
+        .Select(banner => MapBanner(banner, mediaUrls, hideUnpublishable: true))
         .ToList();
   }
 
@@ -67,8 +70,10 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
       return CreateDefaultBrandingSettingsResponse();
     }
 
-    var mediaUrls = await LoadMediaUrlsAsync([branding.LogoMediaAssetId, branding.AppIconMediaAssetId], cancellationToken);
-    return MapBranding(branding, mediaUrls);
+    var mediaUrls = await LoadPublishableMediaUrlsAsync(
+        [(branding.LogoMediaAssetId, MediaAssetPurpose.Logo), (branding.AppIconMediaAssetId, MediaAssetPurpose.AppIcon)],
+        cancellationToken);
+    return MapBranding(branding, mediaUrls, hideUnpublishable: true);
   }
 
   public async Task<LandingContentResponse> GetLandingAsync(CancellationToken cancellationToken = default)
@@ -158,9 +163,29 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
 
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
     ValidateBannerRequest(request.Title, request.Subtitle, request.LinkUrl, request.StartsAtUtc, request.EndsAtUtc, "imageMediaAssetId", errors);
-    await ValidateMediaAssetReferenceAsync(request.ImageMediaAssetId, "imageMediaAssetId", errors, cancellationToken);
     ThrowIfAnyValidationErrors(errors);
 
+    // BUG-093: the file is checked under its row lock and the banner saved in the same transaction, so a
+    // DELETE /media/{id} running at the same time either sees the banner as a reference or archives the file first
+    // and this link is rejected.
+    var banner = await MediaAssetReferences.InTransactionAsync(_dbContext, async () =>
+    {
+      await LockMediaAsync([request.ImageMediaAssetId], cancellationToken);
+      await ValidateMediaAssetReferenceAsync(request.ImageMediaAssetId, MediaAssetPurpose.Banner, "imageMediaAssetId", errors, cancellationToken);
+      ThrowIfAnyValidationErrors(errors);
+
+      var created = NewBanner(request);
+      _dbContext.Banners.Add(created);
+      await _dbContext.SaveChangesAsync(cancellationToken);
+      return created;
+    }, cancellationToken);
+
+    var mediaUrls = await LoadMediaUrlsAsync([banner.ImageMediaAssetId], cancellationToken);
+    return MapBanner(banner, mediaUrls);
+  }
+
+  private Banner NewBanner(CreateBannerRequest request)
+  {
     var now = _timeProvider.GetUtcNow().UtcDateTime;
 
     var banner = new Banner(
@@ -182,11 +207,7 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
         request.EndsAtUtc,
         now);
 
-    _dbContext.Banners.Add(banner);
-    await _dbContext.SaveChangesAsync(cancellationToken);
-
-    var mediaUrls = await LoadMediaUrlsAsync([banner.ImageMediaAssetId], cancellationToken);
-    return MapBanner(banner, mediaUrls);
+    return banner;
   }
 
   public async Task<BannerResponse> UpdateBannerAsync(Guid bannerId, UpdateBannerRequest request, CancellationToken cancellationToken = default)
@@ -203,27 +224,33 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
 
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
     ValidateBannerRequest(request.Title, request.Subtitle, request.LinkUrl, request.StartsAtUtc, request.EndsAtUtc, "imageMediaAssetId", errors);
-    await ValidateMediaAssetReferenceAsync(request.ImageMediaAssetId, "imageMediaAssetId", errors, cancellationToken);
     ThrowIfAnyValidationErrors(errors);
 
-    var banner = await _dbContext.Banners
-        .SingleOrDefaultAsync(candidate => candidate.Id == bannerId, cancellationToken)
-        ?? throw new KeyNotFoundException("The banner was not found.");
+    var banner = await MediaAssetReferences.InTransactionAsync(_dbContext, async () =>
+    {
+      await LockMediaAsync([request.ImageMediaAssetId], cancellationToken);
 
-    var now = _timeProvider.GetUtcNow().UtcDateTime;
+      var existing = await _dbContext.Banners
+          .SingleOrDefaultAsync(candidate => candidate.Id == bannerId, cancellationToken)
+          ?? throw new KeyNotFoundException("The banner was not found.");
 
-    banner.Update(
-        request.Title,
-        request.Subtitle,
-        request.ImageMediaAssetId,
-        request.LinkUrl,
-        request.SortOrder,
-        request.IsActive,
-        request.StartsAtUtc,
-        request.EndsAtUtc,
-        now);
+      await ValidateMediaAssetReferenceAsync(request.ImageMediaAssetId, MediaAssetPurpose.Banner, "imageMediaAssetId", errors, cancellationToken);
+      ThrowIfAnyValidationErrors(errors);
 
-    await _dbContext.SaveChangesAsync(cancellationToken);
+      existing.Update(
+          request.Title,
+          request.Subtitle,
+          request.ImageMediaAssetId,
+          request.LinkUrl,
+          request.SortOrder,
+          request.IsActive,
+          request.StartsAtUtc,
+          request.EndsAtUtc,
+          _timeProvider.GetUtcNow().UtcDateTime);
+
+      await _dbContext.SaveChangesAsync(cancellationToken);
+      return existing;
+    }, cancellationToken);
 
     var mediaUrls = await LoadMediaUrlsAsync([banner.ImageMediaAssetId], cancellationToken);
     return MapBanner(banner, mediaUrls);
@@ -377,31 +404,38 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
     ValidateRequiredText(request.AppName, "appName", 2, 120, errors, "AppName is required and must be between 2 and 120 characters.");
     ValidateHexColor(request.PrimaryColor, "primaryColor", errors);
     ValidateHexColor(request.SecondaryColor, "secondaryColor", errors);
-
-    await ValidateMediaAssetReferenceAsync(request.LogoMediaAssetId, "logoMediaAssetId", errors, cancellationToken);
-    await ValidateMediaAssetReferenceAsync(request.AppIconMediaAssetId, "appIconMediaAssetId", errors, cancellationToken);
     ThrowIfAnyValidationErrors(errors);
 
-    var now = _timeProvider.GetUtcNow().UtcDateTime;
-    var branding = await _dbContext.AppBrandingSettings
-        .OrderByDescending(settings => settings.UpdatedAt ?? DateTime.MinValue)
-        .FirstOrDefaultAsync(cancellationToken);
-
-    if (branding is null)
+    // BUG-093: same rule and same lock as banners (see CreateBannerAsync).
+    var branding = await MediaAssetReferences.InTransactionAsync(_dbContext, async () =>
     {
-      branding = new AppBrandingSettings(request.AppName, request.PrimaryColor, request.SecondaryColor, now);
-      _dbContext.AppBrandingSettings.Add(branding);
-    }
+      await LockMediaAsync([request.LogoMediaAssetId, request.AppIconMediaAssetId], cancellationToken);
+      await ValidateMediaAssetReferenceAsync(request.LogoMediaAssetId, MediaAssetPurpose.Logo, "logoMediaAssetId", errors, cancellationToken);
+      await ValidateMediaAssetReferenceAsync(request.AppIconMediaAssetId, MediaAssetPurpose.AppIcon, "appIconMediaAssetId", errors, cancellationToken);
+      ThrowIfAnyValidationErrors(errors);
 
-    branding.Update(
-        request.AppName,
-        request.PrimaryColor,
-        request.SecondaryColor,
-        request.LogoMediaAssetId,
-        request.AppIconMediaAssetId,
-        now);
+      var now = _timeProvider.GetUtcNow().UtcDateTime;
+      var settings = await _dbContext.AppBrandingSettings
+          .OrderByDescending(candidate => candidate.UpdatedAt ?? DateTime.MinValue)
+          .FirstOrDefaultAsync(cancellationToken);
 
-    await _dbContext.SaveChangesAsync(cancellationToken);
+      if (settings is null)
+      {
+        settings = new AppBrandingSettings(request.AppName, request.PrimaryColor, request.SecondaryColor, now);
+        _dbContext.AppBrandingSettings.Add(settings);
+      }
+
+      settings.Update(
+          request.AppName,
+          request.PrimaryColor,
+          request.SecondaryColor,
+          request.LogoMediaAssetId,
+          request.AppIconMediaAssetId,
+          now);
+
+      await _dbContext.SaveChangesAsync(cancellationToken);
+      return settings;
+    }, cancellationToken);
 
     var mediaUrls = await LoadMediaUrlsAsync([branding.LogoMediaAssetId, branding.AppIconMediaAssetId], cancellationToken);
     return MapBranding(branding, mediaUrls);
@@ -426,8 +460,63 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
         .ToDictionaryAsync(media => media.Id, media => media.PublicUrl, cancellationToken);
   }
 
+  /// <summary>
+  /// Public endpoints only show a file that is still a ready image of the slot's kind (BUG-093): links saved before
+  /// the rule (a customer's attachment, a PDF, an archived file) stop being published without touching the data; the
+  /// admin endpoints still show them so they can be replaced.
+  /// </summary>
+  private async Task<Dictionary<Guid, string?>> LoadPublishableMediaUrlsAsync(
+      IEnumerable<(Guid? MediaAssetId, MediaAssetPurpose Purpose)> slots,
+      CancellationToken cancellationToken)
+  {
+    var requested = slots
+        .Where(slot => slot.MediaAssetId.HasValue && slot.MediaAssetId.Value != Guid.Empty)
+        .Select(slot => (Id: slot.MediaAssetId!.Value, slot.Purpose))
+        .ToHashSet();
+
+    if (requested.Count == 0)
+    {
+      return [];
+    }
+
+    var ids = requested.Select(slot => slot.Id).Distinct().ToArray();
+    var assets = await _dbContext.MediaAssets
+        .AsNoTracking()
+        .Where(media => ids.Contains(media.Id))
+        .Select(media => new { media.Id, media.Purpose, media.Status, media.ContentType, media.PublicUrl })
+        .ToListAsync(cancellationToken);
+
+    return assets
+        .Where(asset => requested.Contains((asset.Id, asset.Purpose)) && IsPublishable(asset.Status, asset.ContentType))
+        .ToDictionary(asset => asset.Id, asset => asset.PublicUrl);
+  }
+
+  /// <summary>The raster formats the upload pipeline stores for images; never SVG (BUG-078) nor documents.</summary>
+  private static readonly HashSet<string> PublishableImageContentTypes = new(StringComparer.OrdinalIgnoreCase)
+  {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif"
+  };
+
+  private static bool IsPublishable(MediaAssetStatus status, string contentType)
+      => status == MediaAssetStatus.Ready && PublishableImageContentTypes.Contains(contentType);
+
+  private Task LockMediaAsync(IEnumerable<Guid?> mediaAssetIds, CancellationToken cancellationToken)
+      => MediaAssetReferences.LockAsync(
+          _dbContext,
+          mediaAssetIds.Where(id => id.HasValue && id.Value != Guid.Empty).Select(id => id!.Value).ToArray(),
+          cancellationToken);
+
+  /// <summary>
+  /// A brand or banner slot may only point to a ready image uploaded for that slot (BUG-093): never a customer's
+  /// private attachment, a document, a file of another kind or an archived one. Runs under the asset's row lock.
+  /// Resending the file the slot already has follows the same rule, so a link saved before it must be replaced.
+  /// </summary>
   private async Task ValidateMediaAssetReferenceAsync(
       Guid? mediaAssetId,
+      MediaAssetPurpose slotPurpose,
       string fieldName,
       Dictionary<string, string[]> errors,
       CancellationToken cancellationToken)
@@ -443,15 +532,31 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
       return;
     }
 
-    var exists = await _dbContext.MediaAssets
+    var asset = await _dbContext.MediaAssets
         .AsNoTracking()
-        .AnyAsync(media => media.Id == mediaAssetId.Value, cancellationToken);
+        .Where(media => media.Id == mediaAssetId.Value)
+        .Select(media => new { media.Purpose, media.Status, media.ContentType })
+        .SingleOrDefaultAsync(cancellationToken);
 
-    if (!exists)
+    if (asset is null)
     {
       errors[fieldName] = ["The referenced media asset was not found."];
+      return;
+    }
+
+    if (asset.Purpose != slotPurpose || !IsPublishable(asset.Status, asset.ContentType))
+    {
+      errors[fieldName] = [$"Este archivo no se puede usar aquí. Elige una imagen disponible subida en Medios como «{SlotLabel(slotPurpose)}»."];
     }
   }
+
+  private static string SlotLabel(MediaAssetPurpose purpose) => purpose switch
+  {
+    MediaAssetPurpose.Logo => "Logo",
+    MediaAssetPurpose.AppIcon => "Ícono de la app",
+    MediaAssetPurpose.Banner => "Banner",
+    _ => purpose.ToString()
+  };
 
   private static void ValidateBannerRequest(
       string title,
@@ -530,7 +635,7 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
           content.Address,
           content.UpdatedAt);
 
-  private static BannerResponse MapBanner(Banner banner, IReadOnlyDictionary<Guid, string?> mediaUrls)
+  private static BannerResponse MapBanner(Banner banner, IReadOnlyDictionary<Guid, string?> mediaUrls, bool hideUnpublishable = false)
   {
     var imageUrl = ResolveMediaUrl(banner.ImageMediaAssetId, mediaUrls);
 
@@ -538,7 +643,7 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
         banner.Id,
         banner.Title,
         banner.Subtitle,
-        banner.ImageMediaAssetId,
+        PublishedId(banner.ImageMediaAssetId, mediaUrls, hideUnpublishable),
         imageUrl,
         banner.LinkUrl,
         banner.SortOrder,
@@ -558,16 +663,20 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
           item.CreatedAt,
           item.UpdatedAt);
 
-  private static BrandingSettingsResponse MapBranding(AppBrandingSettings branding, IReadOnlyDictionary<Guid, string?> mediaUrls)
+  private static BrandingSettingsResponse MapBranding(AppBrandingSettings branding, IReadOnlyDictionary<Guid, string?> mediaUrls, bool hideUnpublishable = false)
       => new(
           branding.AppName,
           branding.PrimaryColor,
           branding.SecondaryColor,
-          branding.LogoMediaAssetId,
-          branding.AppIconMediaAssetId,
+          PublishedId(branding.LogoMediaAssetId, mediaUrls, hideUnpublishable),
+          PublishedId(branding.AppIconMediaAssetId, mediaUrls, hideUnpublishable),
           ResolveMediaUrl(branding.LogoMediaAssetId, mediaUrls),
           ResolveMediaUrl(branding.AppIconMediaAssetId, mediaUrls),
           branding.UpdatedAt);
+
+  /// <summary>On public endpoints a file that is not published is not named either.</summary>
+  private static Guid? PublishedId(Guid? mediaAssetId, IReadOnlyDictionary<Guid, string?> mediaUrls, bool hideUnpublishable)
+      => hideUnpublishable && mediaAssetId is { } id && !mediaUrls.ContainsKey(id) ? null : mediaAssetId;
 
   private static string? ResolveMediaUrl(Guid? mediaAssetId, IReadOnlyDictionary<Guid, string?> mediaUrls)
   {

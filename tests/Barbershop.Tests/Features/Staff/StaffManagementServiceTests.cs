@@ -162,6 +162,92 @@ public sealed class StaffManagementServiceTests : IDisposable
     Assert.False(staffProfile.IsActive);
   }
 
+  // ── BUG-076: deactivating a professional who is also the last active Admin, or oneself ──
+
+  [Fact]
+  public async Task DeactivatingTheProfessionalWhoIsTheLastActiveAdmin_IsRejected_ByStatusAndByEdit()
+  {
+    var created = await _adminStaffService.CreateAsync(CreateRequest("owner@example.com", "Owner Barber", "Owner"));
+    await MakeOnlyActiveAdminAsync(created.UserId);
+    var service = ServiceActingAs(Guid.NewGuid());
+
+    var byStatus = await Assert.ThrowsAsync<ConflictException>(
+        () => service.UpdateStatusAsync(created.StaffProfileId, new StaffStatusUpdateRequest(false)));
+    _dbContext.ChangeTracker.Clear(); // a new request: the rejected change is not kept in memory
+    var byEdit = await Assert.ThrowsAsync<ConflictException>(
+        () => service.UpdateAsync(created.StaffProfileId, new AdminStaffUpdateRequest(
+            "Owner Barber", "owner@example.com", "Owner", null, null, 30, null, null, false)));
+
+    Assert.Contains("último administrador activo", byStatus.Message);
+    Assert.Contains("último administrador activo", byEdit.Message);
+    Assert.True((await _dbContext.Users.AsNoTracking().SingleAsync(user => user.Id == created.UserId)).IsActive);
+  }
+
+  [Fact]
+  public async Task DeactivatingOwnProfessionalProfile_IsRejected_EvenWithAnotherAdmin()
+  {
+    var created = await _adminStaffService.CreateAsync(CreateRequest("admin-barber@example.com", "Admin Barber", "Admin"));
+    var other = await _adminStaffService.CreateAsync(CreateRequest("other-admin@example.com", "Other Admin", "Other"));
+    await MakeOnlyActiveAdminAsync(created.UserId);
+    await AddAdminRoleAsync(other.UserId);
+
+    var exception = await Assert.ThrowsAsync<ConflictException>(
+        () => ServiceActingAs(created.UserId).UpdateStatusAsync(created.StaffProfileId, new StaffStatusUpdateRequest(false)));
+
+    Assert.Contains("tu propia cuenta", exception.Message);
+  }
+
+  [Fact]
+  public async Task DeactivatingAnAdminProfessional_WhenAnotherAdminRemains_IsAllowed()
+  {
+    var created = await _adminStaffService.CreateAsync(CreateRequest("admin-barber@example.com", "Admin Barber", "Admin"));
+    var other = await _adminStaffService.CreateAsync(CreateRequest("other-admin@example.com", "Other Admin", "Other"));
+    await MakeOnlyActiveAdminAsync(created.UserId);
+    await AddAdminRoleAsync(other.UserId);
+
+    var updated = await ServiceActingAs(other.UserId).UpdateStatusAsync(created.StaffProfileId, new StaffStatusUpdateRequest(false));
+
+    Assert.False(updated.IsActive);
+  }
+
+  private StaffManagementService ServiceActingAs(Guid userId)
+      => new(
+          _dbContext,
+          _seedService,
+          new PasswordHasher<object>(),
+          TimeProvider.System,
+          new FakeMediaAssetsService(_dbContext),
+          new FakeFileStorageService(),
+          new FixedCurrentUser(userId));
+
+  /// <summary>Gives the account the Admin role and deactivates every other administrator (e.g. a seeded one).</summary>
+  private async Task MakeOnlyActiveAdminAsync(Guid userId)
+  {
+    await AddAdminRoleAsync(userId);
+    var otherAdmins = await _dbContext.Users
+        .Where(user => user.Id != userId && user.IsActive && user.UserRoles.Any(userRole => userRole.Role.NormalizedName == "ADMIN"))
+        .ToListAsync();
+    foreach (var admin in otherAdmins)
+    {
+      admin.Deactivate(DateTime.UtcNow);
+    }
+
+    await _dbContext.SaveChangesAsync();
+  }
+
+  private async Task AddAdminRoleAsync(Guid userId)
+  {
+    await _seedService.EnsureSeededAsync();
+    var adminRole = await _dbContext.Roles.SingleAsync(role => role.NormalizedName == "ADMIN");
+    _dbContext.UserRoles.Add(new UserRole(userId, adminRole.Id, DateTime.UtcNow));
+    await _dbContext.SaveChangesAsync();
+  }
+
+  private sealed class FixedCurrentUser(Guid userId) : Barbershop.Application.Auth.ICurrentUserAccessor
+  {
+    public Guid? UserId { get; } = userId;
+  }
+
   [Fact]
   public async Task GetCurrentAsync_ReturnsOwnStaffProfile()
   {

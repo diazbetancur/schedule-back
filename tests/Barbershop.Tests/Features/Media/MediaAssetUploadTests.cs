@@ -199,6 +199,39 @@ public sealed class MediaAssetUploadTests : IDisposable
     Assert.Contains("contentType", exception.Errors.Keys);
   }
 
+  /// <summary>
+  /// BUG-078: product images and media uploads (purpose Other) accepted SVG because the transcoder rasterised it. With
+  /// the real transcoder an SVG is now rejected for every purpose and nothing reaches storage.
+  /// </summary>
+  [Theory]
+  [InlineData(MediaAssetPurpose.ProductImage)]
+  [InlineData(MediaAssetPurpose.Other)]
+  [InlineData(MediaAssetPurpose.Banner)]
+  [InlineData(MediaAssetPurpose.Logo)]
+  [InlineData(MediaAssetPurpose.AppIcon)]
+  [InlineData(MediaAssetPurpose.StaffPhoto)]
+  public async Task UploadAsync_WithTheRealTranscoder_RejectsSvg(MediaAssetPurpose purpose)
+  {
+    var service = new MediaAssetManagementService(
+        _dbContext,
+        _fileStorageService,
+        TimeProvider.System,
+        Options.Create(new FileStorageOptions()),
+        new MagickImageTranscoder(NullLogger<MagickImageTranscoder>.Instance),
+        NullLogger<MediaAssetManagementService>.Instance);
+    using var svg = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(
+        "<svg xmlns='http://www.w3.org/2000/svg' width='4' height='4'><script>alert(1)</script></svg>"));
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        service.UploadAsync(
+            _currentUserId,
+            [RoleNames.Admin],
+            new MediaAssetUploadRequest("x.svg", "image/svg+xml", svg.Length, purpose, svg)));
+
+    Assert.Contains("contentType", exception.Errors.Keys);
+    Assert.Empty(await _dbContext.MediaAssets.ToListAsync());
+  }
+
   [Fact]
   public async Task DeleteAsync_ArchivesReadyAssetAndDeletesObject()
   {

@@ -382,6 +382,24 @@ public sealed class MembershipSalesServiceTests : IDisposable
     Assert.Equal(500000, Assert.Single(candidates).LinkedMembershipsTotal);
   }
 
+  /// <summary>BUG-080: the memberships linked to an income are added up as bigint, like every money total.</summary>
+  [Fact]
+  public async Task LinkIncome_WhenTheLinkedMembershipsAddUpToMoreThanInt32_KeepsTheExactTotal()
+  {
+    var customer = await CreateCustomerAsync();
+    var plan = await CreatePoolPlanAsync(price: 1_500_000_000);
+    var first = await _service.SellAsync(_adminId, customer.Id, new MembershipSaleRequest(plan.Id, _today));
+    var second = await _service.SellAsync(_adminId, customer.Id, new MembershipSaleRequest(plan.Id, _today));
+    var income = await AddMembershipSaleIncomeAsync(2_000_000_000);
+
+    var linked = await _service.LinkIncomeAsync(
+        _adminId, first.Id, new MembershipIncomeLinkRequest(income.Id, [second.Id], "Pago parcial acordado con el cliente"));
+
+    Assert.Equal(3_000_000_000L, linked.Income!.LinkedMembershipsTotal);
+    Assert.True(linked.Income.HasDiscrepancy);
+    Assert.Equal(3_000_000_000L, Assert.Single(await _service.GetIncomeCandidatesAsync(_today)).LinkedMembershipsTotal);
+  }
+
   [Fact]
   public async Task LinkIncome_RequiresAJustification_WhenTheAmountDoesNotMatch_AndKeepsIt()
   {
@@ -632,9 +650,10 @@ public sealed class MembershipSalesServiceTests : IDisposable
   private async Task<MembershipPlanView> CreatePoolPlanAsync(
       string name = "Oro",
       int durationDays = 90,
-      IReadOnlyList<MembershipPlanGiftRuleRequest>? gifts = null)
+      IReadOnlyList<MembershipPlanGiftRuleRequest>? gifts = null,
+      int price = 250000)
       => await _plans.CreateAsync(new MembershipPlanUpsertRequest(
-          name, "Diez servicios", 250000, "Pool", 10, durationDays, Terms, "Solo de lunes a jueves",
+          name, "Diez servicios", price, "Pool", 10, durationDays, Terms, "Solo de lunes a jueves",
           [new(_haircut.Id, null), new(_beard.Id, null)], gifts ?? []));
 
   private async Task<IncomeEntry> AddMembershipSaleIncomeAsync(int amount)

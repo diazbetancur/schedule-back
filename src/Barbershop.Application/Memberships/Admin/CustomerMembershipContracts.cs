@@ -129,7 +129,7 @@ public sealed record MembershipIncomeView(
     int Amount,
     DateOnly OccurredOn,
     bool IsDeleted,
-    int LinkedMembershipsTotal,
+    long LinkedMembershipsTotal,
     bool HasDiscrepancy,
     IReadOnlyList<MembershipLinkedPeerView> LinkedMemberships);
 
@@ -211,5 +211,5 @@ public sealed record MembershipIncomeCandidateView(
     Guid IncomeEntryId,
     int Amount,
     DateOnly OccurredOn,
-    int LinkedMembershipsTotal,
+    long LinkedMembershipsTotal,
     IReadOnlyList<MembershipLinkedPeerView> LinkedMemberships);

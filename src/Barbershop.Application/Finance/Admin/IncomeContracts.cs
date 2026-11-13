@@ -68,5 +68,5 @@ public sealed record IncomeEntriesPage(
     int TotalCount,
     DateOnly From,
     DateOnly To,
-    int TotalAmount)
+    long TotalAmount)
     : Barbershop.Application.Common.Paging.PagedResult<IncomeEntryView>(Items, Page, PageSize, TotalCount);

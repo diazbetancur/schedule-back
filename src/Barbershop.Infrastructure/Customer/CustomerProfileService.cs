@@ -71,7 +71,8 @@ internal sealed class CustomerProfileService : ICustomerProfileService
                 request.ContentType,
                 request.SizeBytes,
                 MediaAssetPurpose.CustomerReference,
-                request.Content),
+                request.Content,
+                ImagesOnly: true),
             cancellationToken);
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;

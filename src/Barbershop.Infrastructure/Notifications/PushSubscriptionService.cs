@@ -113,6 +113,11 @@ internal sealed class PushSubscriptionService : IPushSubscriptionService
     {
       errors["endpoint"] = ["Endpoint must be an absolute HTTPS URL."];
     }
+    else if (!PushEndpointPolicy.IsAllowed(request.Endpoint))
+    {
+      // BUG-106: the server calls this URL on every notification; only browser push services are accepted.
+      errors["endpoint"] = ["La dirección de notificaciones no pertenece a un servicio push conocido (Google, Mozilla, Microsoft o Apple)."];
+    }
 
     if (string.IsNullOrWhiteSpace(request.P256dhKey))
     {

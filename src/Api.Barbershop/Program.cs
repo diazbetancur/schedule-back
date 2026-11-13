@@ -145,7 +145,9 @@ app.MapGet("/", (HttpContext httpContext) => Results.Ok(new
 }))
 .WithName("GetRoot");
 
+// MapHealthChecks answers every method; like /ping and /, the probe accepts GET and HEAD only (SONDA BUG-054).
 app.MapHealthChecks("/health")
+   .WithMetadata(new HttpMethodMetadata(["GET", "HEAD"]))
    .WithName("GetHealth");
 
 // GET + HEAD: monitores de uptime (UptimeRobot, etc.) suelen pingear con HEAD.

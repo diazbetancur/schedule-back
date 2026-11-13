@@ -1,3 +1,4 @@
+using Barbershop.Application.Auth;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Users.Admin;
 using Barbershop.Domain.Users;
@@ -10,11 +11,13 @@ internal sealed class AdminUsersService : IAdminUsersService
 {
     private readonly AppDbContext _dbContext;
     private readonly TimeProvider _timeProvider;
+    private readonly ICurrentUserAccessor? _currentUser;
 
-    public AdminUsersService(AppDbContext dbContext, TimeProvider timeProvider)
+    public AdminUsersService(AppDbContext dbContext, TimeProvider timeProvider, ICurrentUserAccessor? currentUser = null)
     {
         _dbContext = dbContext;
         _timeProvider = timeProvider;
+        _currentUser = currentUser;
     }
 
     public async Task<IReadOnlyList<AdminUserListItem>> GetAllActiveAsync(CancellationToken cancellationToken = default)
@@ -71,8 +74,12 @@ internal sealed class AdminUsersService : IAdminUsersService
             .SingleOrDefaultAsync(cancellationToken)
             ?? throw new NotFoundException($"User {userId} not found.");
 
-        user.Deactivate(_timeProvider.GetUtcNow().UtcDateTime);
-        await _dbContext.SaveChangesAsync(cancellationToken);
+        // BUG-076: never the administrator's own account nor the last active Admin.
+        await AdminAccountGuard.DeactivateAsync(_dbContext, user.Id, _currentUser?.UserId, async () =>
+        {
+            user.Deactivate(_timeProvider.GetUtcNow().UtcDateTime);
+            return await _dbContext.SaveChangesAsync(cancellationToken);
+        }, cancellationToken);
     }
 
     public async Task<AdminUserListItem> UpdateCustomRolesAsync(Guid userId, AdminUserRolesUpdateRequest request, CancellationToken cancellationToken = default)

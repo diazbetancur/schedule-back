@@ -19,10 +19,11 @@ internal static class MultipartFileReader
   {
     if (!request.HasFormContentType)
     {
+      UploadRequestBody.EnsureWithinLimit(request, maxBytes);
       return ReadRawBodyFile(request, fieldName, fallbackFileNameBase, maxBytes, logger);
     }
 
-    var form = await request.ReadFormAsync(cancellationToken);
+    var form = await UploadRequestBody.ReadFormAsync(request, maxBytes, cancellationToken);
     var file = form.Files.GetFile(fieldName);
 
     if ((file is null || file.Length == 0)

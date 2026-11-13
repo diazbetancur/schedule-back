@@ -304,7 +304,7 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
         return incomes.Select(entry =>
             {
                 var linked = peers.GetValueOrDefault(entry.Id) ?? [];
-                return new MembershipIncomeCandidateView(entry.Id, entry.Amount, entry.OccurredOn, linked.Sum(peer => peer.Price), linked);
+                return new MembershipIncomeCandidateView(entry.Id, entry.Amount, entry.OccurredOn, linked.Sum(peer => (long)peer.Price), linked);
             })
             .ToArray();
     }
@@ -360,9 +360,9 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
 
         var alreadyLinkedTotal = await _dbContext.CustomerMemberships
             .Where(other => other.IncomeEntryId == income.Id)
-            .SumAsync(other => other.Price, cancellationToken);
+            .SumAsync(other => (long)other.Price, cancellationToken);
         var justification = RequireJustificationIfMismatch(
-            income.Amount, alreadyLinkedTotal + toLink.Sum(candidate => candidate.Price), request.DiscrepancyJustification);
+            income.Amount, alreadyLinkedTotal + toLink.Sum(candidate => (long)candidate.Price), request.DiscrepancyJustification);
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         var programEnabled = await _wallet.IsProgramEnabledAsync(cancellationToken);
@@ -409,7 +409,7 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
 
         // The memberships left on the income must still add up to it, or the difference is explained.
         var justification = remaining.Count > 0 && !income.IsDeleted
-            ? RequireJustificationIfMismatch(income.Amount, remaining.Sum(), request.DiscrepancyJustification)
+            ? RequireJustificationIfMismatch(income.Amount, remaining.Sum(price => (long)price), request.DiscrepancyJustification)
             : NormalizeOptionalReason(request.DiscrepancyJustification);
 
         // Unlinking only drops the reference: balances, gifts and history stay as they are.
@@ -507,7 +507,7 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
         return trimmed;
     }
 
-    private static string? RequireJustificationIfMismatch(int incomeAmount, int membershipsTotal, string? justification)
+    private static string? RequireJustificationIfMismatch(int incomeAmount, long membershipsTotal, string? justification)
     {
         var normalized = NormalizeOptionalReason(justification);
         if (incomeAmount == membershipsTotal)
@@ -721,7 +721,7 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
         {
             var entry = await _dbContext.IncomeEntries.SingleAsync(candidate => candidate.Id == incomeEntryId, cancellationToken);
             var peers = (await LoadLinkedPeersAsync([incomeEntryId], cancellationToken)).GetValueOrDefault(incomeEntryId) ?? [];
-            var total = peers.Sum(peer => peer.Price);
+            var total = peers.Sum(peer => (long)peer.Price);
             income = new MembershipIncomeView(entry.Id, entry.Amount, entry.OccurredOn, entry.IsDeleted, total, total != entry.Amount, peers);
         }
 

@@ -68,6 +68,78 @@ public sealed class AdminUsersServiceTests : IDisposable
     Assert.Equal("999888777", updated.PhoneNumber);
   }
 
+  // ── BUG-076: the platform always keeps an active administrator ──
+
+  [Fact]
+  public async Task DeactivateAsync_OwnAccount_IsRejected()
+  {
+    var admin = await CreateAdminAsync("admin-1@example.com");
+    await CreateAdminAsync("admin-2@example.com");
+    var service = ServiceActingAs(admin.Id);
+
+    var exception = await Assert.ThrowsAsync<ConflictException>(() => service.DeactivateAsync(admin.Id));
+
+    Assert.Contains("tu propia cuenta", exception.Message);
+    Assert.True((await _dbContext.Users.AsNoTracking().SingleAsync(u => u.Id == admin.Id)).IsActive);
+  }
+
+  [Fact]
+  public async Task DeactivateAsync_TheLastActiveAdmin_IsRejected_EvenWithInactiveAdminsAround()
+  {
+    var lastAdmin = await CreateAdminAsync("last@example.com");
+    var formerAdmin = await CreateAdminAsync("former@example.com");
+    formerAdmin.Deactivate(DateTime.UtcNow);
+    await _dbContext.SaveChangesAsync();
+    var actingUser = await CreateUserAsync("operator@example.com");
+
+    var exception = await Assert.ThrowsAsync<ConflictException>(
+        () => ServiceActingAs(actingUser.Id).DeactivateAsync(lastAdmin.Id));
+
+    Assert.Contains("último administrador activo", exception.Message);
+    Assert.True((await _dbContext.Users.AsNoTracking().SingleAsync(u => u.Id == lastAdmin.Id)).IsActive);
+  }
+
+  [Fact]
+  public async Task DeactivateAsync_AnotherAdmin_WhenOneRemainsActive_IsAllowed()
+  {
+    var actingAdmin = await CreateAdminAsync("admin-1@example.com");
+    var otherAdmin = await CreateAdminAsync("admin-2@example.com");
+
+    await ServiceActingAs(actingAdmin.Id).DeactivateAsync(otherAdmin.Id);
+
+    Assert.False((await _dbContext.Users.AsNoTracking().SingleAsync(u => u.Id == otherAdmin.Id)).IsActive);
+  }
+
+  [Fact]
+  public async Task DeactivateAsync_ANonAdmin_IsAllowed_WhileASingleAdminExists()
+  {
+    var admin = await CreateAdminAsync("admin@example.com");
+    var customer = await CreateUserAsync("customer@example.com");
+
+    await ServiceActingAs(admin.Id).DeactivateAsync(customer.Id);
+
+    Assert.False((await _dbContext.Users.AsNoTracking().SingleAsync(u => u.Id == customer.Id)).IsActive);
+  }
+
+  private IAdminUsersService ServiceActingAs(Guid userId)
+      => new AdminUsersService(_dbContext, TimeProvider.System, new FixedCurrentUser(userId));
+
+  private async Task<User> CreateAdminAsync(string email)
+  {
+    var adminRole = await _dbContext.Roles.SingleOrDefaultAsync(r => r.NormalizedName == "ADMIN")
+        ?? _dbContext.Roles.Add(new Role(RoleNames.Admin, isSystemRole: true)).Entity;
+    var user = new User("Admin", email, "hash", DateTime.UtcNow);
+    user.UserRoles.Add(new UserRole(user.Id, adminRole.Id, DateTime.UtcNow));
+    _dbContext.Users.Add(user);
+    await _dbContext.SaveChangesAsync();
+    return user;
+  }
+
+  private sealed class FixedCurrentUser(Guid userId) : Barbershop.Application.Auth.ICurrentUserAccessor
+  {
+    public Guid? UserId { get; } = userId;
+  }
+
   [Fact]
   public async Task DeactivateAsync_MarksUserInactive()
   {

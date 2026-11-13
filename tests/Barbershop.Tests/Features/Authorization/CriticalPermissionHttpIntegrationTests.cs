@@ -113,6 +113,26 @@ public sealed class CriticalPermissionHttpIntegrationTests
     Assert.Equal(HttpStatusCode.Unauthorized, await ProbeAsync(context.Client, deliverer.AccessToken, PermissionCodes.LoyaltyRedemptionsDeliver));
   }
 
+  /// <summary>BUG-076: an administrator cannot deactivate their own account; their session keeps working.</summary>
+  [Fact]
+  public async Task AnAdministrator_CannotDeactivateTheirOwnAccount()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null) return;
+
+    var admin = await RegisterAdminAsync(context, "self-deactivation");
+
+    AuthenticateAs(context.Client, admin.AccessToken);
+    using (var deactivate = await context.Client.DeleteAsync($"/api/v1/admin/users/{admin.User.Id}"))
+    {
+      Assert.Equal(HttpStatusCode.Conflict, deactivate.StatusCode);
+      Assert.Contains("tu propia cuenta", await deactivate.Content.ReadAsStringAsync());
+    }
+
+    using var stillAdmin = await context.Client.GetAsync("/api/v1/admin/users");
+    Assert.Equal(HttpStatusCode.OK, stillAdmin.StatusCode);
+  }
+
   [Fact]
   public async Task SeededRoles_PassExactlyTheirPolicies_AndAnonymousCallsAreUnauthorized()
   {

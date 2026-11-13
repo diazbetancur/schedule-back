@@ -7,6 +7,7 @@ using Barbershop.Domain.Media;
 using Barbershop.Domain.Products;
 using Barbershop.Domain.Services;
 using Barbershop.Domain.Users;
+using Barbershop.Infrastructure.Media;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -240,8 +241,17 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         await _dbContext.LockProductAsync(productId, cancellationToken);
         var product = await LoadProductAsync(productId, cancellationToken);
+        var imageId = product.ImageMediaAssetId;
         product.MarkDeleted(UtcNow());
         await _dbContext.SaveProductCatalogAndCommitAsync(transaction, cancellationToken);
+
+        // BUG-099: the image of a deleted product is released (no longer a reference) and archived, like a replaced one,
+        // unless something else still uses it.
+        if (imageId is { } releasedImage
+            && !await MediaAssetReferences.IsReferencedAsync(_dbContext, releasedImage, cancellationToken))
+        {
+            await TryArchiveMediaAssetAsync(releasedImage, "Product deleted", cancellationToken);
+        }
     }
 
     // ── Product image ─────────────────────────────────────────────────────────

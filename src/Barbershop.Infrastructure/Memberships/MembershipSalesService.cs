@@ -142,6 +142,23 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
         {
             errors["planId"] = ["El tipo de membresía está inactivo y no se puede vender."];
         }
+        else
+        {
+            // BUG-103: a rate deleted after the plan was set up cannot be sold again; memberships already sold keep
+            // using it until they are used up.
+            var planServiceIds = plan.Services.Select(item => item.ServiceId).ToArray();
+            var deletedRate = await _dbContext.Services.AsNoTracking()
+                .Where(rate => planServiceIds.Contains(rate.Id) && rate.IsDeleted)
+                .Select(rate => rate.Name)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (deletedRate is not null)
+            {
+                errors["planId"] =
+                [
+                    $"El tipo de membresía incluye la tarifa «{deletedRate}», que fue eliminada. Edita el tipo de membresía antes de venderlo."
+                ];
+            }
+        }
 
         var soldOn = request.SoldOn ?? today;
         if (soldOn > today)

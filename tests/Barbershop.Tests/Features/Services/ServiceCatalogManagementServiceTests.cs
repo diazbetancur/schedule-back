@@ -230,6 +230,23 @@ public sealed class ServiceCatalogManagementServiceTests : IDisposable
     Assert.NotEqual(beard.PublicCode, again.PublicCode);
   }
 
+  /// <summary>BUG-079: deleting a general service withdraws it from the professionals that offered it.</summary>
+  [Fact]
+  public async Task DeletingAGeneralService_RemovesItsOfferings()
+  {
+    var beard = await _catalog.CreateGeneralServiceAsync(new GeneralServiceCreateRequest(Barberia, "Barba"));
+    var user = new Barbershop.Domain.Users.User("Barbero", "barbero-offer@example.com", "hash", DateTime.UtcNow);
+    var staff = new Barbershop.Domain.Staff.StaffProfile(user.Id, "Barbero", 30, DateTime.UtcNow);
+    _dbContext.Users.Add(user);
+    _dbContext.StaffProfiles.Add(staff);
+    _dbContext.StaffServiceOfferings.Add(new Barbershop.Domain.Staff.StaffServiceOffering(staff.Id, beard.Id, 20, true, DateTime.UtcNow));
+    await _dbContext.SaveChangesAsync();
+
+    await _catalog.DeleteGeneralServiceAsync(beard.Id);
+
+    Assert.False(await _dbContext.StaffServiceOfferings.AnyAsync(offering => offering.GeneralServiceId == beard.Id));
+  }
+
   [Fact]
   public async Task ARate_NeedsAnExistingActiveGeneralService()
   {

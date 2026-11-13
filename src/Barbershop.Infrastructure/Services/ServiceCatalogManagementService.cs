@@ -226,6 +226,15 @@ internal sealed class ServiceCatalogManagementService : IAdminServiceCatalogServ
         }
 
         service.MarkDeleted(UtcNow());
+
+        // BUG-079: the professionals stop offering it. Appointments keep their own copy of the service and duration
+        // (ADR-0016 D11), so nothing references an offering. Blocking the deletion while there are offerings or future
+        // appointments is a pending business decision; it is not enforced here.
+        var offerings = await _dbContext.StaffServiceOfferings
+            .Where(offering => offering.GeneralServiceId == generalServiceId)
+            .ToListAsync(cancellationToken);
+        _dbContext.StaffServiceOfferings.RemoveRange(offerings);
+
         await _dbContext.SaveAndCommitAsync(transaction, cancellationToken);
     }
 

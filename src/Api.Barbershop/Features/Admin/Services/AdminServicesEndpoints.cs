@@ -60,6 +60,14 @@ public static class AdminServicesEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
+        // BUG-103: what still uses the rate, to warn before deleting it.
+        adminServices.MapGet("/{serviceId:guid}/usage", GetUsageAsync)
+            .WithName("GetAdminServiceUsage")
+            .Produces<ServiceUsageView>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden);
+
         adminServices.MapDelete("/{serviceId:guid}", SoftDeleteAsync)
             .WithName("DeleteAdminService")
             .Produces(StatusCodes.Status204NoContent)
@@ -76,6 +84,9 @@ public static class AdminServicesEndpoints
     private static Task<PagedResult<ServiceView>> ListAsync(
         [AsParameters] ServiceListQuery query, IAdminServicesService service, CancellationToken cancellationToken)
         => service.ListAsync(query, cancellationToken);
+
+    private static Task<ServiceUsageView> GetUsageAsync(Guid serviceId, IAdminServicesService service, CancellationToken cancellationToken)
+        => service.GetUsageAsync(serviceId, cancellationToken);
 
     private static Task<ServiceView> GetByIdAsync(Guid serviceId, IAdminServicesService service, CancellationToken cancellationToken)
         => service.GetByIdAsync(serviceId, cancellationToken);

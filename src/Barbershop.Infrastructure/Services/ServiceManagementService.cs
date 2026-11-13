@@ -200,6 +200,24 @@ internal sealed class ServiceManagementService : IAdminServicesService
         throw new ConflictException("La tarifa cambió mientras se procesaba. Recarga e inténtalo de nuevo.");
     }
 
+    public async Task<ServiceUsageView> GetUsageAsync(Guid serviceId, CancellationToken cancellationToken = default)
+    {
+        _ = await LoadAsync(serviceId, cancellationToken);
+
+        var plans = await _dbContext.MembershipPlans.AsNoTracking()
+            .Where(plan => !plan.IsDeleted && plan.IsActive && plan.Services.Any(included => included.ServiceId == serviceId))
+            .OrderBy(plan => plan.Name)
+            .Select(plan => plan.Name)
+            .ToListAsync(cancellationToken);
+        var rewards = await _dbContext.LoyaltyRewards.AsNoTracking()
+            .Where(reward => reward.IsActive && reward.ServiceId == serviceId)
+            .OrderBy(reward => reward.Name)
+            .Select(reward => reward.Name)
+            .ToListAsync(cancellationToken);
+
+        return new ServiceUsageView(plans, rewards);
+    }
+
     public async Task SoftDeleteAsync(Guid serviceId, CancellationToken cancellationToken = default)
     {
         var service = await LoadAsync(serviceId, cancellationToken);

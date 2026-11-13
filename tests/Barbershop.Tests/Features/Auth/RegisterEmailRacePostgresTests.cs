@@ -55,7 +55,7 @@ public sealed class RegisterEmailRacePostgresTests
 
     Assert.True(interceptor.Fired);
     // Same message as the regular duplicate check, whatever the state of the account that won.
-    Assert.Equal("A user with this email already exists.", exception.Message);
+    Assert.Equal("Ya existe una cuenta con ese correo.", exception.Message);
 
     await using var verify = CreateContext();
     var users = await verify.Users.AsNoTracking().Where(user => user.NormalizedEmail == "RACE@EXAMPLE.COM").ToListAsync();

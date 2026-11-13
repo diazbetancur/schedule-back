@@ -57,7 +57,7 @@ internal sealed class UserNotificationsService : IUserNotificationsService
         .SingleOrDefaultAsync(
             candidate => candidate.Id == notificationId && candidate.UserId == currentUserId,
             cancellationToken)
-        ?? throw new KeyNotFoundException("The notification was not found.");
+        ?? throw new KeyNotFoundException("No encontramos la notificación.");
 
     if (notification.ReadAt is not null)
     {

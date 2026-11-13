@@ -38,7 +38,7 @@ internal sealed class AdminUsersService : IAdminUsersService
             .Include(u => u.UserRoles)
             .ThenInclude(ur => ur.Role)
             .SingleOrDefaultAsync(cancellationToken)
-            ?? throw new NotFoundException($"User {userId} not found.");
+            ?? throw new NotFoundException($"No encontramos el usuario.");
 
         return ToListItem(user);
     }
@@ -58,7 +58,7 @@ internal sealed class AdminUsersService : IAdminUsersService
             .Include(u => u.UserRoles)
             .ThenInclude(ur => ur.Role)
             .SingleOrDefaultAsync(cancellationToken)
-            ?? throw new NotFoundException($"User {userId} not found.");
+            ?? throw new NotFoundException($"No encontramos el usuario.");
 
         var updatedAt = _timeProvider.GetUtcNow().UtcDateTime;
         // BUG-075: the admin edits name and phone only; the birth date the customer entered is kept, not reset to null.
@@ -73,7 +73,7 @@ internal sealed class AdminUsersService : IAdminUsersService
         var user = await _dbContext.Users
             .Where(u => u.Id == userId && u.IsActive)
             .SingleOrDefaultAsync(cancellationToken)
-            ?? throw new NotFoundException($"User {userId} not found.");
+            ?? throw new NotFoundException($"No encontramos el usuario.");
 
         // BUG-076: never the administrator's own account nor the last active Admin.
         await AdminAccountGuard.DeactivateAsync(_dbContext, user.Id, _currentUser?.UserId, async () =>
@@ -90,7 +90,7 @@ internal sealed class AdminUsersService : IAdminUsersService
             .Include(u => u.UserRoles)
             .ThenInclude(ur => ur.Role)
             .SingleOrDefaultAsync(cancellationToken)
-            ?? throw new NotFoundException($"User {userId} not found.");
+            ?? throw new NotFoundException($"No encontramos el usuario.");
 
         var uniqueRoleIds = (request.RoleIds ?? []).Distinct().ToArray();
         var targetRoles = uniqueRoleIds.Length == 0
@@ -99,12 +99,12 @@ internal sealed class AdminUsersService : IAdminUsersService
 
         if (targetRoles.Count != uniqueRoleIds.Length)
         {
-            throw new ArgumentException("One or more role ids do not exist.");
+            throw new ArgumentException("Alguno de los roles elegidos no existe.");
         }
 
         if (targetRoles.Any(r => r.IsSystemRole))
         {
-            throw new ArgumentException("System roles cannot be assigned through this endpoint.");
+            throw new ArgumentException("Los roles del sistema no se asignan desde aquí.");
         }
 
         var targetRoleIds = targetRoles.Select(r => r.Id).ToHashSet();

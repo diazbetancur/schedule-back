@@ -89,7 +89,7 @@ public sealed class AuthServiceTests : IDisposable
         var exception = await Assert.ThrowsAsync<Barbershop.Application.Common.Exceptions.ConflictException>(() =>
             _authService.RegisterAsync(new RegisterRequest("Second User", "DUPLICATE@example.com", "Secret123!", null)));
 
-        Assert.Equal("A user with this email already exists.", exception.Message);
+        Assert.Equal("Ya existe una cuenta con ese correo.", exception.Message);
     }
 
     [Fact]
@@ -232,7 +232,7 @@ public sealed class AuthServiceTests : IDisposable
             _authService.RegisterAsync(new RegisterRequest("Someone Else", "INACTIVE@example.com", "Other123!", null)));
 
         // Same message as for an active account, so the response does not reveal that the account is inactive.
-        Assert.Equal("A user with this email already exists.", exception.Message);
+        Assert.Equal("Ya existe una cuenta con ese correo.", exception.Message);
         Assert.Equal(1, await _dbContext.Users.CountAsync());
     }
 

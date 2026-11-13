@@ -113,7 +113,7 @@ public sealed partial class GlobalExceptionHandler : IExceptionHandler
       BadHttpRequestException when httpContext.Request.HasFormContentType => UploadRequestBody.UnreadableMessage,
       BadHttpRequestException => UnreadableBodyMessage,
       ArgumentException => InvalidDataMessage,
-      _ when status >= 500 && !_environment.IsDevelopment() => "An unexpected error occurred while processing the request.",
+      _ when status >= 500 && !_environment.IsDevelopment() => "Ocurrió un error inesperado. Inténtalo de nuevo en unos minutos.",
       _ => exception.Message
     };
 

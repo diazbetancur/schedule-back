@@ -204,7 +204,7 @@ internal sealed class AvailabilityManagementService : IStaffAvailabilityService,
         .SingleOrDefaultAsync(
             period => period.StaffProfileId == staffProfileId && period.Id == unavailablePeriodId,
             cancellationToken)
-        ?? throw new KeyNotFoundException("The unavailable period was not found.");
+        ?? throw new KeyNotFoundException("No encontramos el ausentismo.");
 
     unavailablePeriod.Update(request.StartsAtUtc, request.EndsAtUtc, request.Reason);
     await _dbContext.SaveChangesAsync(cancellationToken);
@@ -218,7 +218,7 @@ internal sealed class AvailabilityManagementService : IStaffAvailabilityService,
         .SingleOrDefaultAsync(
             period => period.StaffProfileId == staffProfileId && period.Id == unavailablePeriodId,
             cancellationToken)
-        ?? throw new KeyNotFoundException("The unavailable period was not found.");
+        ?? throw new KeyNotFoundException("No encontramos el ausentismo.");
 
     _dbContext.StaffUnavailablePeriods.Remove(unavailablePeriod);
     await _dbContext.SaveChangesAsync(cancellationToken);
@@ -228,14 +228,14 @@ internal sealed class AvailabilityManagementService : IStaffAvailabilityService,
   {
     return await _dbContext.StaffProfiles
         .SingleOrDefaultAsync(staffProfile => staffProfile.Id == staffProfileId, cancellationToken)
-        ?? throw new KeyNotFoundException("The staff profile was not found.");
+        ?? throw new KeyNotFoundException("No encontramos este profesional.");
   }
 
   private async Task<StaffProfile> LoadStaffProfileByUserIdAsync(Guid userId, CancellationToken cancellationToken)
   {
     return await _dbContext.StaffProfiles
         .SingleOrDefaultAsync(staffProfile => staffProfile.UserId == userId, cancellationToken)
-        ?? throw new KeyNotFoundException("The staff profile was not found for the current user.");
+        ?? throw new KeyNotFoundException("Tu usuario no tiene un perfil de profesional activo.");
   }
 
   private async Task EnsureStaffProfileExistsAsync(Guid staffProfileId, CancellationToken cancellationToken)
@@ -266,12 +266,12 @@ internal sealed class AvailabilityManagementService : IStaffAvailabilityService,
 
       if (!Enum.IsDefined(dayOfWeek))
       {
-        errors[$"rules[{index}].dayOfWeek"] = ["DayOfWeek must be between 0 and 6."];
+        errors[$"rules[{index}].dayOfWeek"] = ["El día de la semana no es válido."];
       }
 
       if (rule.EndTime <= rule.StartTime)
       {
-        errors[$"rules[{index}].endTime"] = ["EndTime must be after StartTime."];
+        errors[$"rules[{index}].endTime"] = ["La hora de fin debe ser posterior a la de inicio."];
       }
 
       if (rule.IsActive && Enum.IsDefined(dayOfWeek) && rule.EndTime > rule.StartTime)
@@ -289,7 +289,7 @@ internal sealed class AvailabilityManagementService : IStaffAvailabilityService,
 
     if (overlapsExist)
     {
-      errors["rules"] = ["Active availability rules cannot overlap on the same day."];
+      errors["rules"] = ["Los horarios activos de un mismo día no se pueden cruzar."];
     }
 
     ThrowIfAnyErrors(errors);
@@ -301,22 +301,22 @@ internal sealed class AvailabilityManagementService : IStaffAvailabilityService,
 
     if (startsAtUtc.Kind != DateTimeKind.Utc)
     {
-      errors["startsAtUtc"] = ["StartsAtUtc must be provided in UTC."];
+      errors["startsAtUtc"] = ["La fecha y la hora de la cita no tienen el formato esperado."];
     }
 
     if (endsAtUtc.Kind != DateTimeKind.Utc)
     {
-      errors["endsAtUtc"] = ["EndsAtUtc must be provided in UTC."];
+      errors["endsAtUtc"] = ["La fecha de fin no tiene el formato esperado."];
     }
 
     if (endsAtUtc <= startsAtUtc)
     {
-      errors["endsAtUtc"] = ["EndsAtUtc must be after StartsAtUtc."];
+      errors["endsAtUtc"] = ["El fin debe ser posterior al inicio."];
     }
 
     if (!string.IsNullOrWhiteSpace(reason) && reason.Trim().Length > 500)
     {
-      errors["reason"] = ["Reason must be 500 characters or fewer."];
+      errors["reason"] = ["El motivo no puede superar 500 caracteres."];
     }
 
     ThrowIfAnyErrors(errors);

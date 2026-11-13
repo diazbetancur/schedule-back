@@ -144,7 +144,7 @@ public static class ApiFoundationServiceCollectionExtensions
             var policyName = context.HttpContext.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName;
             var detail = policyName is RateLimitPolicyNames.NotificationTest or RateLimitPolicyNames.NotificationBroadcast
                 ? $"Enviaste demasiadas notificaciones seguidas. Espera {retryAfterSeconds} segundos y vuelve a intentarlo."
-                : "You have made too many requests. Please wait a moment and try again.";
+                : "Hiciste demasiadas solicitudes seguidas. Espera un momento y vuelve a intentarlo.";
             return new ValueTask(Results.Problem(
                 statusCode: StatusCodes.Status429TooManyRequests,
                 title: "Too many requests",

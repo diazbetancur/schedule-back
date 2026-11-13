@@ -132,7 +132,7 @@ internal sealed class CustomerProfileService : ICustomerProfileService
             {
                 throw new ValidationProblemException(new Dictionary<string, string[]>
                 {
-                    ["currentPassword"] = ["The current password is incorrect."]
+                    ["currentPassword"] = ["La contraseña actual no es correcta."]
                 });
             }
 
@@ -149,7 +149,7 @@ internal sealed class CustomerProfileService : ICustomerProfileService
     {
         return await _dbContext.Users
             .SingleOrDefaultAsync(user => user.Id == userId && user.IsActive, cancellationToken)
-            ?? throw new KeyNotFoundException("The current user was not found.");
+            ?? throw new KeyNotFoundException("No encontramos tu usuario. Inicia sesión de nuevo.");
     }
 
     private async Task<CustomerProfileView> MapAsync(User user, CancellationToken cancellationToken)
@@ -199,16 +199,16 @@ internal sealed class CustomerProfileService : ICustomerProfileService
 
         if (string.IsNullOrWhiteSpace(request.FullName))
         {
-            errors["fullName"] = ["Full name is required."];
+            errors["fullName"] = ["El nombre es obligatorio."];
         }
         else if (request.FullName.Length > 120)
         {
-            errors["fullName"] = ["Full name must be 120 characters or fewer."];
+            errors["fullName"] = ["El nombre no puede superar 120 caracteres."];
         }
 
         if (request.PhoneNumber is not null && request.PhoneNumber.Length > 40)
         {
-            errors["phoneNumber"] = ["Phone number must be 40 characters or fewer."];
+            errors["phoneNumber"] = ["El teléfono no puede superar 40 caracteres."];
         }
 
         // BUG-059: between 1900-01-01 and today (Bogotá). No minimum age: the legal pages allow profiles of minors
@@ -227,12 +227,12 @@ internal sealed class CustomerProfileService : ICustomerProfileService
 
         if (string.IsNullOrWhiteSpace(request.CurrentPassword))
         {
-            errors["currentPassword"] = ["Current password is required."];
+            errors["currentPassword"] = ["Escribe tu contraseña actual."];
         }
 
         if (string.IsNullOrWhiteSpace(request.NewPassword))
         {
-            errors["newPassword"] = ["New password is required."];
+            errors["newPassword"] = ["Escribe la nueva contraseña."];
         }
         // BUG-018: the policy of registration and reset (8–128), and never the current password again.
         else if (request.NewPassword.Length is < 8 or > 128)

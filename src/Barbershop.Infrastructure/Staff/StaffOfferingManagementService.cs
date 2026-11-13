@@ -164,7 +164,7 @@ internal sealed class StaffOfferingManagementService : IAdminStaffOfferingsServi
     private async Task<StaffProfile> LoadStaffAsync(Guid staffProfileId, CancellationToken cancellationToken)
         => await _dbContext.StaffProfiles.AsNoTracking()
                .SingleOrDefaultAsync(profile => profile.Id == staffProfileId, cancellationToken)
-           ?? throw new KeyNotFoundException("The staff profile was not found.");
+           ?? throw new KeyNotFoundException("No encontramos este profesional.");
 
     private async Task<StaffServiceOfferingsView> MapAsync(StaffProfile staff, CancellationToken cancellationToken)
     {

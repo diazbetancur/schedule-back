@@ -29,7 +29,7 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
 
     var sentByUser = await _dbContext.Users
         .SingleOrDefaultAsync(user => user.Id == currentUserId && user.IsActive, cancellationToken)
-        ?? throw new KeyNotFoundException("The current user was not found.");
+        ?? throw new KeyNotFoundException("No encontramos tu usuario. Inicia sesión de nuevo.");
 
     var (recipientUserIds, targetSummary) = await ResolveRecipientsAsync(request, targetType, cancellationToken);
 
@@ -37,7 +37,7 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["targetType"] = ["No matching customers were found for the selected target."]
+        ["targetType"] = ["Ningún cliente activo coincide con estos destinatarios."]
       });
     }
 
@@ -213,7 +213,7 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
       case NotificationTargetTypes.Filter:
         var staffProfile = await _dbContext.StaffProfiles
             .SingleOrDefaultAsync(profile => profile.Id == request.StaffProfileId!.Value, cancellationToken)
-            ?? throw new KeyNotFoundException("The staff profile was not found.");
+            ?? throw new KeyNotFoundException("No encontramos este profesional.");
 
         // BUG-113: the same customers as the other targets (active accounts with the Customer role) that have at least
         // one appointment with the professional that was not cancelled.
@@ -234,7 +234,7 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
       default:
         throw new ValidationProblemException(new Dictionary<string, string[]>
         {
-          ["targetType"] = ["TargetType must be 'all', 'selected', or 'filter'."]
+          ["targetType"] = ["Elige a quién enviar la notificación."]
         });
     }
   }
@@ -248,33 +248,33 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
 
     if (string.IsNullOrWhiteSpace(request.Title))
     {
-      errors["title"] = ["Title is required."];
+      errors["title"] = ["El título es obligatorio."];
     }
     else if (request.Title.Length > 160)
     {
-      errors["title"] = ["Title must be at most 160 characters."];
+      errors["title"] = ["El título no puede superar 160 caracteres."];
     }
 
     if (string.IsNullOrWhiteSpace(request.Body))
     {
-      errors["body"] = ["Body is required."];
+      errors["body"] = ["El mensaje es obligatorio."];
     }
     else if (request.Body.Length > 1000)
     {
-      errors["body"] = ["Body must be at most 1000 characters."];
+      errors["body"] = ["El mensaje no puede superar 1000 caracteres."];
     }
 
     if (targetType is not (NotificationTargetTypes.All or NotificationTargetTypes.Selected or NotificationTargetTypes.Filter))
     {
-      errors["targetType"] = ["TargetType must be 'all', 'selected', or 'filter'."];
+      errors["targetType"] = ["Elige a quién enviar la notificación."];
     }
     else if (targetType == NotificationTargetTypes.Selected && (request.CustomerUserIds is null || request.CustomerUserIds.Count == 0))
     {
-      errors["customerUserIds"] = ["CustomerUserIds is required when TargetType is 'selected'."];
+      errors["customerUserIds"] = ["Selecciona al menos un cliente."];
     }
     else if (targetType == NotificationTargetTypes.Filter && request.StaffProfileId is null)
     {
-      errors["staffProfileId"] = ["StaffProfileId is required when TargetType is 'filter'."];
+      errors["staffProfileId"] = ["Elige un profesional."];
     }
 
     if (errors.Count > 0)

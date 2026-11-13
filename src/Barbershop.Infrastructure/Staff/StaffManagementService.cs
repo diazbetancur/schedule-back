@@ -86,7 +86,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         var duplicateEmailExists = await _dbContext.Users.AnyAsync(user => user.NormalizedEmail == normalizedEmail, cancellationToken);
         if (duplicateEmailExists)
         {
-            throw new ConflictException("A user with this email already exists.");
+            throw new ConflictException("Ya existe una cuenta con ese correo.");
         }
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
@@ -157,7 +157,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
 
         if (duplicateEmailExists)
         {
-            throw new ConflictException("A user with this email already exists.");
+            throw new ConflictException("Ya existe una cuenta con ese correo.");
         }
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
@@ -260,11 +260,11 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
             .ThenInclude(userRole => userRole.Role)
             .Include(candidate => candidate.StaffProfile)
             .SingleOrDefaultAsync(candidate => candidate.Id == currentUserId, cancellationToken)
-            ?? throw new KeyNotFoundException("The current user was not found.");
+            ?? throw new KeyNotFoundException("No encontramos tu usuario. Inicia sesión de nuevo.");
 
         if (user.StaffProfile is not null)
         {
-            throw new ConflictException("The professional profile is already active.");
+            throw new ConflictException("El profesional ya está activo.");
         }
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
@@ -533,7 +533,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         return await _dbContext.StaffProfiles
             .Include(staffProfile => staffProfile.User)
             .SingleOrDefaultAsync(staffProfile => staffProfile.Id == staffProfileId, cancellationToken)
-            ?? throw new KeyNotFoundException("The staff profile was not found.");
+            ?? throw new KeyNotFoundException("No encontramos este profesional.");
     }
 
     private async Task<StaffProfile> LoadStaffProfileByUserIdAsync(Guid userId, CancellationToken cancellationToken)
@@ -541,7 +541,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         return await _dbContext.StaffProfiles
             .Include(staffProfile => staffProfile.User)
             .SingleOrDefaultAsync(staffProfile => staffProfile.UserId == userId, cancellationToken)
-            ?? throw new KeyNotFoundException("The staff profile was not found for the current user.");
+            ?? throw new KeyNotFoundException("Tu usuario no tiene un perfil de profesional activo.");
     }
 
     private async Task<IReadOnlyList<StaffManagementView>> MapManyAsync(IReadOnlyCollection<StaffProfile> staffProfiles, CancellationToken cancellationToken)
@@ -644,12 +644,12 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
 
         if (!await IsAssignableAsync(photoMediaAssetId, staffProfile?.PhotoMediaAssetId, MediaAssetPurpose.StaffPhoto, staffProfile, selfServiceUserId, cancellationToken))
         {
-            errors["photoMediaAssetId"] = ["The selected photo is not available for this profile. Upload it from the profile instead."];
+            errors["photoMediaAssetId"] = ["La foto elegida no está disponible para este perfil. Súbela desde el perfil."];
         }
 
         if (!await IsAssignableAsync(tipsQrMediaAssetId, staffProfile?.TipsQrMediaAssetId, MediaAssetPurpose.TipsQr, staffProfile, selfServiceUserId, cancellationToken))
         {
-            errors["tipsQrMediaAssetId"] = ["The selected tips QR is not available for this profile. Upload it from the profile instead."];
+            errors["tipsQrMediaAssetId"] = ["El QR de propinas elegido no está disponible para este perfil. Súbelo desde el perfil."];
         }
 
         ThrowIfAnyErrors(errors);
@@ -694,7 +694,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         // BUG-004 / BUG-017: a new account gets the strict rule (the email becomes its login).
         AddErrorIf(errors, "email", !EmailRules.IsValid(request.Email), EmailRules.InvalidMessage);
         AddErrorIf(errors, "initialPassword", string.IsNullOrWhiteSpace(request.InitialPassword) || request.InitialPassword.Length is < 8 or > 128,
-            "InitialPassword must be between 8 and 128 characters.");
+            "La contraseña inicial debe tener entre 8 y 128 caracteres.");
         ThrowIfAnyErrors(errors);
     }
 
@@ -710,25 +710,25 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 
         AddErrorIf(errors, "displayName", string.IsNullOrWhiteSpace(request.DisplayName) || request.DisplayName.Trim().Length is < 2 or > 120,
-            "DisplayName must be between 2 and 120 characters.");
+            "El nombre visible debe tener entre 2 y 120 caracteres.");
         AddErrorIf(errors, "phoneNumber", !string.IsNullOrWhiteSpace(request.PhoneNumber) && request.PhoneNumber.Trim().Length > 40,
-            "PhoneNumber must be 40 characters or fewer.");
+            "El teléfono no puede superar 40 caracteres.");
         AddErrorIf(errors, "bio", !string.IsNullOrWhiteSpace(request.Bio) && request.Bio.Trim().Length > 2000,
-            "Bio must be 2000 characters or fewer.");
+            "La biografía no puede superar 2000 caracteres.");
         AddErrorIf(errors, "defaultAppointmentDurationMinutes",
             request.DefaultAppointmentDurationMinutes is not null and not 0 &&
             (request.DefaultAppointmentDurationMinutes < MinimumAppointmentDurationMinutes || request.DefaultAppointmentDurationMinutes > MaximumAppointmentDurationMinutes),
             $"La duración de la cita debe estar entre {MinimumAppointmentDurationMinutes} y {MaximumAppointmentDurationMinutes} minutos.");
         AddErrorIf(errors, "instagramUrl", !string.IsNullOrWhiteSpace(request.InstagramUrl) && request.InstagramUrl.Trim().Length > 2048,
-            "InstagramUrl must be 2048 characters or fewer.");
+            "El enlace de Instagram no puede superar 2048 caracteres.");
         AddErrorIf(errors, "facebookUrl", !string.IsNullOrWhiteSpace(request.FacebookUrl) && request.FacebookUrl.Trim().Length > 2048,
-            "FacebookUrl must be 2048 characters or fewer.");
+            "El enlace de Facebook no puede superar 2048 caracteres.");
         AddErrorIf(errors, "tikTokUrl", !string.IsNullOrWhiteSpace(request.TikTokUrl) && request.TikTokUrl.Trim().Length > 2048,
-            "TikTokUrl must be 2048 characters or fewer.");
+            "El enlace de TikTok no puede superar 2048 caracteres.");
         AddErrorIf(errors, "youtubeUrl", !string.IsNullOrWhiteSpace(request.YoutubeUrl) && request.YoutubeUrl.Trim().Length > 2048,
-            "YoutubeUrl must be 2048 characters or fewer.");
+            "El enlace de YouTube no puede superar 2048 caracteres.");
         AddErrorIf(errors, "xUrl", !string.IsNullOrWhiteSpace(request.XUrl) && request.XUrl.Trim().Length > 2048,
-            "XUrl must be 2048 characters or fewer.");
+            "El enlace de X no puede superar 2048 caracteres.");
 
         // BUG-047: the public profile publishes these links to anyone; only absolute http/https addresses.
         AddSocialUrlError(errors, "instagramUrl", "Instagram", request.InstagramUrl, "https://instagram.com/tu_usuario");
@@ -758,7 +758,7 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
 
         AddErrorIf(errors, "displayName",
             string.IsNullOrWhiteSpace(request.DisplayName) || request.DisplayName.Trim().Length is < 2 or > 120,
-            "DisplayName must be between 2 and 120 characters.");
+            "El nombre visible debe tener entre 2 y 120 caracteres.");
         AddErrorIf(errors, "defaultAppointmentDurationMinutes",
             request.DefaultAppointmentDurationMinutes is not null and not 0 &&
             (request.DefaultAppointmentDurationMinutes < MinimumAppointmentDurationMinutes || request.DefaultAppointmentDurationMinutes > MaximumAppointmentDurationMinutes),
@@ -777,14 +777,14 @@ internal sealed class StaffManagementService : IAdminStaffService, IStaffProfile
         int? defaultAppointmentDurationMinutes)
     {
         AddErrorIf(errors, "fullName", string.IsNullOrWhiteSpace(fullName) || fullName.Trim().Length is < 2 or > 120,
-            "FullName must be between 2 and 120 characters.");
+            "El nombre debe tener entre 2 y 120 caracteres.");
         AddErrorIf(errors, "email", !IsValidEmail(email) || email.Trim().Length > 256, "Escribe un correo válido (máximo 256 caracteres).");
         AddErrorIf(errors, "displayName", string.IsNullOrWhiteSpace(displayName) || displayName.Trim().Length is < 2 or > 120,
-            "DisplayName must be between 2 and 120 characters.");
+            "El nombre visible debe tener entre 2 y 120 caracteres.");
         AddErrorIf(errors, "phoneNumber", !string.IsNullOrWhiteSpace(phoneNumber) && phoneNumber.Trim().Length > 40,
-            "PhoneNumber must be 40 characters or fewer.");
+            "El teléfono no puede superar 40 caracteres.");
         AddErrorIf(errors, "bio", !string.IsNullOrWhiteSpace(bio) && bio.Trim().Length > 2000,
-            "Bio must be 2000 characters or fewer.");
+            "La biografía no puede superar 2000 caracteres.");
         AddErrorIf(errors, "defaultAppointmentDurationMinutes",
             defaultAppointmentDurationMinutes is not null and not 0 &&
             (defaultAppointmentDurationMinutes < MinimumAppointmentDurationMinutes || defaultAppointmentDurationMinutes > MaximumAppointmentDurationMinutes),

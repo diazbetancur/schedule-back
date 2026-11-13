@@ -184,7 +184,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
                 .Where(rate => rate.Id == serviceId && !rate.IsDeleted)
                 .Select(rate => (Guid?)rate.GeneralServiceId)
                 .SingleOrDefaultAsync(cancellationToken)
-                ?? throw new KeyNotFoundException("The service was not found.");
+                ?? throw new KeyNotFoundException("No encontramos la tarifa.");
 
             await _dbContext.ShareGeneralServiceAsync(generalServiceId, cancellationToken);
             await _dbContext.LockRateAsync(serviceId, cancellationToken);
@@ -242,7 +242,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
     {
         return await _dbContext.Services
             .SingleOrDefaultAsync(service => service.Id == serviceId && !service.IsDeleted, cancellationToken)
-            ?? throw new KeyNotFoundException("The service was not found.");
+            ?? throw new KeyNotFoundException("No encontramos la tarifa.");
     }
 
     private async Task EnsureNameIsUniqueAsync(string name, Guid? excludeId, CancellationToken cancellationToken)
@@ -256,7 +256,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
 
         if (duplicateExists)
         {
-            throw new ConflictException("A service with this name already exists.");
+            throw new ConflictException("Ya existe una tarifa con ese nombre.");
         }
     }
 
@@ -291,17 +291,17 @@ internal sealed class ServiceManagementService : IAdminServicesService
 
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length is < NameMinLength or > NameMaxLength)
         {
-            errors["name"] = [$"Name must be between {NameMinLength} and {NameMaxLength} characters."];
+            errors["name"] = [$"El nombre debe tener entre {NameMinLength} y {NameMaxLength} caracteres."];
         }
 
         if (basePrice < 0)
         {
-            errors["basePrice"] = ["BasePrice must be zero or greater."];
+            errors["basePrice"] = ["El precio debe ser cero o mayor."];
         }
 
         if (businessPercentage is < 0 or > 100)
         {
-            errors["businessPercentage"] = ["BusinessPercentage must be between 0 and 100."];
+            errors["businessPercentage"] = ["El porcentaje de la barbería debe estar entre 0 y 100."];
         }
 
         LoyaltyCatalogPoints.Validate(loyaltyPoints, errors);

@@ -89,7 +89,7 @@ internal sealed class FixedExpenseManagementService : IAdminFixedExpensesService
     {
         return await _dbContext.FixedExpenses
             .SingleOrDefaultAsync(item => item.Id == fixedExpenseId && !item.IsDeleted, cancellationToken)
-            ?? throw new KeyNotFoundException("The fixed expense was not found.");
+            ?? throw new KeyNotFoundException("No encontramos el gasto fijo.");
     }
 
     private async Task EnsureNameIsUniqueAsync(string name, Guid? excludeId, CancellationToken cancellationToken)
@@ -103,7 +103,7 @@ internal sealed class FixedExpenseManagementService : IAdminFixedExpensesService
 
         if (duplicateExists)
         {
-            throw new ConflictException("A fixed expense with this name already exists.");
+            throw new ConflictException("Ya existe un gasto fijo con ese nombre.");
         }
     }
 
@@ -113,12 +113,12 @@ internal sealed class FixedExpenseManagementService : IAdminFixedExpensesService
 
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length is < NameMinLength or > NameMaxLength)
         {
-            errors["name"] = [$"Name must be between {NameMinLength} and {NameMaxLength} characters."];
+            errors["name"] = [$"El nombre debe tener entre {NameMinLength} y {NameMaxLength} caracteres."];
         }
 
         if (defaultAmount is < 0)
         {
-            errors["defaultAmount"] = ["DefaultAmount must be zero or greater."];
+            errors["defaultAmount"] = ["El valor por defecto debe ser cero o mayor."];
         }
 
         if (errors.Count > 0)

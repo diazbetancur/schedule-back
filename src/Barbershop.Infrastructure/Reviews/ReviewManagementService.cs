@@ -53,7 +53,7 @@ internal sealed class ReviewManagementService : ICustomerReviewsService, IPublic
         .SingleOrDefaultAsync(
             candidate => candidate.Id == appointmentId && candidate.CustomerUserId == currentUserId,
             cancellationToken)
-        ?? throw new KeyNotFoundException("The appointment was not found.");
+        ?? throw new KeyNotFoundException("No encontramos la cita.");
 
     var nowUtc = _timeProvider.GetUtcNow().UtcDateTime;
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
@@ -63,7 +63,7 @@ internal sealed class ReviewManagementService : ICustomerReviewsService, IPublic
 
     if (isTerminalNonReviewable || (!isPastEndTime && appointment.Status is not AppointmentStatus.Completed))
     {
-      errors["appointmentId"] = ["Only completed appointments can be reviewed."];
+      errors["appointmentId"] = ["Solo puedes calificar citas completadas."];
     }
 
     var hasExistingReview = await _dbContext.Reviews
@@ -71,7 +71,7 @@ internal sealed class ReviewManagementService : ICustomerReviewsService, IPublic
 
     if (hasExistingReview)
     {
-      errors["appointmentId"] = ["The appointment already has a review."];
+      errors["appointmentId"] = ["Ya calificaste esta cita."];
     }
 
     ThrowIfAnyErrors(errors);
@@ -104,7 +104,7 @@ internal sealed class ReviewManagementService : ICustomerReviewsService, IPublic
       {
         throw new ValidationProblemException(new Dictionary<string, string[]>
         {
-          ["appointmentId"] = ["The appointment already has a review."]
+          ["appointmentId"] = ["Ya calificaste esta cita."]
         });
       }
 
@@ -162,7 +162,7 @@ internal sealed class ReviewManagementService : ICustomerReviewsService, IPublic
     return await _dbContext.Users
         .AsNoTracking()
         .SingleOrDefaultAsync(user => user.Id == userId && user.IsActive, cancellationToken)
-        ?? throw new KeyNotFoundException("The current user was not found.");
+        ?? throw new KeyNotFoundException("No encontramos tu usuario. Inicia sesión de nuevo.");
   }
 
   private async Task<StaffProfile> LoadActiveStaffProfileAsync(Guid staffProfileId, CancellationToken cancellationToken)
@@ -171,11 +171,11 @@ internal sealed class ReviewManagementService : ICustomerReviewsService, IPublic
         .Include(profile => profile.User)
         .AsNoTracking()
         .SingleOrDefaultAsync(profile => profile.Id == staffProfileId, cancellationToken)
-        ?? throw new KeyNotFoundException("The staff profile was not found.");
+        ?? throw new KeyNotFoundException("No encontramos este profesional.");
 
     if (!staffProfile.IsActive || !staffProfile.User.IsActive)
     {
-      throw new KeyNotFoundException("The staff profile was not found.");
+      throw new KeyNotFoundException("No encontramos este profesional.");
     }
 
     return staffProfile;
@@ -196,17 +196,17 @@ internal sealed class ReviewManagementService : ICustomerReviewsService, IPublic
 
     if (appointmentId == Guid.Empty)
     {
-      errors["appointmentId"] = ["AppointmentId is required."];
+      errors["appointmentId"] = ["Falta la cita."];
     }
 
     if (request.Stars is < 1 or > 5)
     {
-      errors["stars"] = ["Stars must be between 1 and 5."];
+      errors["stars"] = ["La calificación debe ser de 1 a 5 estrellas."];
     }
 
     if (request.Comment is not null && request.Comment.Length > 2000)
     {
-      errors["comment"] = ["Comment must be 2000 characters or fewer."];
+      errors["comment"] = ["El comentario no puede superar 2000 caracteres."];
     }
 
     ThrowIfAnyErrors(errors);

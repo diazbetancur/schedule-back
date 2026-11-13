@@ -250,7 +250,7 @@ internal sealed class ServiceCatalogManagementService : IAdminServiceCatalogServ
                 .Where(service => service.Id == generalServiceId && !service.IsDeleted)
                 .Select(service => (Guid?)service.CategoryId)
                 .SingleOrDefaultAsync(cancellationToken)
-                ?? throw new KeyNotFoundException("The general service was not found.");
+                ?? throw new KeyNotFoundException("No encontramos el servicio general.");
 
             await _dbContext.ShareCategoryAsync(categoryId, cancellationToken);
             await _dbContext.LockGeneralServiceAsync(generalServiceId, cancellationToken);
@@ -270,12 +270,12 @@ internal sealed class ServiceCatalogManagementService : IAdminServiceCatalogServ
     private async Task<ServiceCategory> LoadCategoryAsync(Guid categoryId, CancellationToken cancellationToken)
         => await _dbContext.ServiceCategories
                .SingleOrDefaultAsync(category => category.Id == categoryId && !category.IsDeleted, cancellationToken)
-           ?? throw new KeyNotFoundException("The service category was not found.");
+           ?? throw new KeyNotFoundException("No encontramos la categoría de servicios.");
 
     private async Task<GeneralService> LoadGeneralServiceAsync(Guid generalServiceId, CancellationToken cancellationToken)
         => await _dbContext.GeneralServices
                .SingleOrDefaultAsync(service => service.Id == generalServiceId && !service.IsDeleted, cancellationToken)
-           ?? throw new KeyNotFoundException("The general service was not found.");
+           ?? throw new KeyNotFoundException("No encontramos el servicio general.");
 
     /// <summary>Read under the caller's lock on the category, so it reflects any committed deactivation or deletion.</summary>
     private async Task EnsureCategoryCanReceiveAsync(Guid categoryId, CancellationToken cancellationToken)

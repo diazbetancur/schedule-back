@@ -23,7 +23,7 @@ namespace Barbershop.Infrastructure.Appointments;
 /// </summary>
 internal sealed class AppointmentManagementService : ICustomerAppointmentsService, IStaffAppointmentsService, IAdminAppointmentsService
 {
-  private const string SlotNotAvailableMessage = "The selected slot is not available.";
+  private const string SlotNotAvailableMessage = "Ese horario ya no está disponible. Elige otro.";
   private const string ServiceNotOfferedMessage = "El profesional no ofrece este servicio en este momento. Elige otro servicio.";
   private const string StaffCannotChangeDurationMessage = "Solo administración puede cambiar la duración de la cita.";
 
@@ -51,7 +51,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["startsAtUtc"] = ["StartsAtUtc must be in the future."]
+        ["startsAtUtc"] = ["La cita debe ser en una fecha y hora futuras."]
       });
     }
 
@@ -146,19 +146,19 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
         .SingleOrDefaultAsync(
             candidate => candidate.Id == appointmentId && candidate.CustomerUserId == currentUserId,
             cancellationToken)
-        ?? throw new KeyNotFoundException("The appointment was not found.");
+        ?? throw new KeyNotFoundException("No encontramos la cita.");
 
     var nowUtc = _timeProvider.GetUtcNow().UtcDateTime;
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 
     if (appointment.Status is not (AppointmentStatus.Pending or AppointmentStatus.Confirmed))
     {
-      errors["appointmentId"] = ["Only pending or confirmed appointments can be cancelled."];
+      errors["appointmentId"] = ["Esta cita ya no se puede cancelar: solo se cancelan citas pendientes o confirmadas."];
     }
 
     if (appointment.StartsAt <= nowUtc)
     {
-      errors["appointmentId"] = ["Appointments can only be cancelled before the start time."];
+      errors["appointmentId"] = ["La cita solo se puede cancelar antes de su hora de inicio."];
     }
 
     ThrowIfAnyErrors(errors);
@@ -183,18 +183,18 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     var requestErrors = new Dictionary<string, string[]>(StringComparer.Ordinal);
     if (request.StartsAtUtc == default)
     {
-      requestErrors["startsAtUtc"] = ["StartsAtUtc is required."];
+      requestErrors["startsAtUtc"] = ["Indica la fecha y la hora de la cita."];
     }
     else if (request.StartsAtUtc.Kind != DateTimeKind.Utc)
     {
-      requestErrors["startsAtUtc"] = ["StartsAtUtc must be provided in UTC."];
+      requestErrors["startsAtUtc"] = ["La fecha y la hora de la cita no tienen el formato esperado."];
     }
 
     var staffProfileId = await _dbContext.Appointments.AsNoTracking()
         .Where(candidate => candidate.Id == appointmentId && candidate.CustomerUserId == currentUserId)
         .Select(candidate => (Guid?)candidate.StaffProfileId)
         .SingleOrDefaultAsync(cancellationToken)
-        ?? throw new KeyNotFoundException("The appointment was not found.");
+        ?? throw new KeyNotFoundException("No encontramos la cita.");
 
     Appointment appointment;
     await using (var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken))
@@ -206,21 +206,21 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
           .SingleOrDefaultAsync(
               candidate => candidate.Id == appointmentId && candidate.CustomerUserId == currentUserId,
               cancellationToken)
-          ?? throw new KeyNotFoundException("The appointment was not found.");
+          ?? throw new KeyNotFoundException("No encontramos la cita.");
 
       var errors = new Dictionary<string, string[]>(requestErrors, StringComparer.Ordinal);
       if (appointment.Status is not (AppointmentStatus.Pending or AppointmentStatus.Confirmed))
       {
-        errors["appointmentId"] = ["Only pending or confirmed appointments can be rescheduled."];
+        errors["appointmentId"] = ["Esta cita ya no se puede reprogramar: fue cancelada, completada o marcada como no asistida."];
       }
       else if (appointment.StartsAt <= nowUtc)
       {
-        errors["appointmentId"] = ["Appointments can only be rescheduled before the start time."];
+        errors["appointmentId"] = ["La cita solo se puede reprogramar antes de su hora de inicio."];
       }
 
       if (!errors.ContainsKey("startsAtUtc") && request.StartsAtUtc <= nowUtc)
       {
-        errors["startsAtUtc"] = ["StartsAtUtc must be in the future."];
+        errors["startsAtUtc"] = ["La cita debe ser en una fecha y hora futuras."];
       }
 
       ThrowIfAnyErrors(errors);
@@ -300,7 +300,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["startsAtUtc"] = ["StartsAtUtc must be in the future."]
+        ["startsAtUtc"] = ["La cita debe ser en una fecha y hora futuras."]
       });
     }
 
@@ -342,7 +342,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
         .SingleOrDefaultAsync(
             candidate => candidate.Id == appointmentId && candidate.StaffProfileId == staffProfile.Id,
             cancellationToken)
-        ?? throw new KeyNotFoundException("The appointment was not found.");
+        ?? throw new KeyNotFoundException("No encontramos la cita.");
 
     return await UpdateStatusCoreAsync(appointment, staffProfile, request, cancellationToken);
   }
@@ -362,7 +362,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       // History can be filtered by a professional who is no longer active; only an unknown id is an error.
       if (!await _dbContext.StaffProfiles.AnyAsync(profile => profile.Id == staffProfileId, cancellationToken))
       {
-        throw new KeyNotFoundException("The staff profile was not found.");
+        throw new KeyNotFoundException("No encontramos este profesional.");
       }
 
       appointments = appointments.Where(appointment => appointment.StaffProfileId == staffProfileId);
@@ -404,7 +404,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["staffProfileId"] = ["StaffProfileId is required."]
+        ["staffProfileId"] = ["Elige un profesional."]
       });
     }
 
@@ -430,7 +430,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
         .Where(candidate => candidate.Id == appointmentId)
         .Select(candidate => (Guid?)candidate.StaffProfileId)
         .SingleOrDefaultAsync(cancellationToken)
-        ?? throw new KeyNotFoundException("The appointment was not found.");
+        ?? throw new KeyNotFoundException("No encontramos la cita.");
 
     return await UpdateAppointmentCoreAsync(appointmentId, staffProfileId, request, canChangeDuration: true, cancellationToken);
   }
@@ -442,7 +442,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
   {
     var appointment = await _dbContext.Appointments
         .SingleOrDefaultAsync(candidate => candidate.Id == appointmentId, cancellationToken)
-        ?? throw new KeyNotFoundException("The appointment was not found.");
+        ?? throw new KeyNotFoundException("No encontramos la cita.");
 
     // BUG-114: administration must still be able to cancel or close the appointments of a deactivated professional
     // (the customer is notified as usual), so the profile is loaded whatever its state.
@@ -455,7 +455,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       => await _dbContext.StaffProfiles
           .Include(profile => profile.User)
           .SingleOrDefaultAsync(profile => profile.Id == staffProfileId, cancellationToken)
-          ?? throw new KeyNotFoundException("The staff profile was not found.");
+          ?? throw new KeyNotFoundException("No encontramos este profesional.");
 
   private async Task<AppointmentView> CreateManualAsync(
       Guid staffProfileId,
@@ -602,13 +602,13 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
           .SingleOrDefaultAsync(
               candidate => candidate.Id == appointmentId && candidate.StaffProfileId == staffProfileId,
               cancellationToken)
-          ?? throw new KeyNotFoundException("The appointment was not found.");
+          ?? throw new KeyNotFoundException("No encontramos la cita.");
 
       if (appointment.Status is not (AppointmentStatus.Pending or AppointmentStatus.Confirmed))
       {
         throw new ValidationProblemException(new Dictionary<string, string[]>
         {
-          ["status"] = ["Only pending or confirmed appointments can be edited."]
+          ["status"] = ["Esta cita ya no se puede editar: solo se editan citas pendientes o confirmadas."]
         });
       }
 
@@ -683,7 +683,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["status"] = ["Status must be Confirmed, Completed, Cancelled, or NoShow."]
+        ["status"] = ["El estado debe ser Confirmada, Completada, Cancelada o No asistió."]
       });
     }
 
@@ -696,7 +696,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["status"] = ["A terminal-status appointment cannot be transitioned again."]
+        ["status"] = ["Esta cita ya fue cerrada (completada, cancelada o no asistida) y su estado no se puede cambiar."]
       });
     }
 
@@ -754,7 +754,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
   {
     return await _dbContext.Users
         .SingleOrDefaultAsync(user => user.Id == userId && user.IsActive, cancellationToken)
-        ?? throw new KeyNotFoundException("The current user was not found.");
+        ?? throw new KeyNotFoundException("No encontramos tu usuario. Inicia sesión de nuevo.");
   }
 
   private async Task<StaffProfile> LoadActiveStaffProfileAsync(Guid staffProfileId, CancellationToken cancellationToken)
@@ -762,11 +762,11 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     var staffProfile = await _dbContext.StaffProfiles
         .Include(profile => profile.User)
         .SingleOrDefaultAsync(profile => profile.Id == staffProfileId, cancellationToken)
-        ?? throw new KeyNotFoundException("The staff profile was not found.");
+        ?? throw new KeyNotFoundException("No encontramos este profesional.");
 
     if (!staffProfile.IsActive || !staffProfile.User.IsActive)
     {
-      throw new KeyNotFoundException("The staff profile was not found.");
+      throw new KeyNotFoundException("No encontramos este profesional.");
     }
 
     return staffProfile;
@@ -777,11 +777,11 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     var staffProfile = await _dbContext.StaffProfiles
         .Include(profile => profile.User)
         .SingleOrDefaultAsync(profile => profile.UserId == userId, cancellationToken)
-        ?? throw new KeyNotFoundException("The staff profile was not found for the current user.");
+        ?? throw new KeyNotFoundException("Tu usuario no tiene un perfil de profesional activo.");
 
     if (!staffProfile.IsActive || !staffProfile.User.IsActive)
     {
-      throw new KeyNotFoundException("The staff profile was not found for the current user.");
+      throw new KeyNotFoundException("Tu usuario no tiene un perfil de profesional activo.");
     }
 
     return staffProfile;
@@ -863,11 +863,11 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 
     if (startsAtUtc == default)
     {
-      errors["startsAtUtc"] = ["StartsAtUtc is required."];
+      errors["startsAtUtc"] = ["Indica la fecha y la hora de la cita."];
     }
     else if (startsAtUtc.Kind != DateTimeKind.Utc)
     {
-      errors["startsAtUtc"] = ["StartsAtUtc must be provided in UTC."];
+      errors["startsAtUtc"] = ["La fecha y la hora de la cita no tienen el formato esperado."];
     }
 
     if (generalServiceId == Guid.Empty)
@@ -895,7 +895,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 
     if (request.StaffProfileId == Guid.Empty)
     {
-      errors["staffProfileId"] = ["StaffProfileId is required."];
+      errors["staffProfileId"] = ["Elige un profesional."];
     }
 
     if (request.GeneralServiceId == Guid.Empty)
@@ -905,11 +905,11 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 
     if (request.StartsAtUtc == default)
     {
-      errors["startsAtUtc"] = ["StartsAtUtc is required."];
+      errors["startsAtUtc"] = ["Indica la fecha y la hora de la cita."];
     }
     else if (request.StartsAtUtc.Kind != DateTimeKind.Utc)
     {
-      errors["startsAtUtc"] = ["StartsAtUtc must be provided in UTC."];
+      errors["startsAtUtc"] = ["La fecha y la hora de la cita no tienen el formato esperado."];
     }
 
     AddNotesError(errors, request.Notes);
@@ -923,11 +923,11 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 
     if (request.StartsAtUtc == default)
     {
-      errors["startsAtUtc"] = ["StartsAtUtc is required."];
+      errors["startsAtUtc"] = ["Indica la fecha y la hora de la cita."];
     }
     else if (request.StartsAtUtc.Kind != DateTimeKind.Utc)
     {
-      errors["startsAtUtc"] = ["StartsAtUtc must be provided in UTC."];
+      errors["startsAtUtc"] = ["La fecha y la hora de la cita no tienen el formato esperado."];
     }
 
     if (request.GeneralServiceId == Guid.Empty)

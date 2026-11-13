@@ -115,7 +115,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         {
             throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
-                ["kind"] = ["The income type cannot be changed. Delete the entry and register it again."],
+                ["kind"] = ["El tipo de ingreso no se puede cambiar. Elimina el ingreso y regístralo de nuevo."],
             });
         }
 
@@ -183,7 +183,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
                 var justification = MembershipSalesService.RequireJustificationIfMismatch(
                     request.Amount, linked.Sum(membership => (long)membership.Price), request.DiscrepancyJustification);
                 var changedBy = _currentUser?.UserId
-                    ?? throw new InvalidOperationException("The current user is required to change a linked income.");
+                    ?? throw new InvalidOperationException("Inicia sesión de nuevo para cambiar este ingreso.");
                 var reason = $"Valor del ingreso cambiado de {previousAmount:N0} a {request.Amount:N0}."
                     + (justification is null ? string.Empty : $" {justification}");
                 foreach (var membership in linked)
@@ -213,7 +213,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         // Memberships point to the income that paid for them; deleting it would leave them pointing at nothing.
         if (await _dbContext.CustomerMemberships.AnyAsync(membership => membership.IncomeEntryId == incomeEntryId, cancellationToken))
         {
-            throw new ConflictException("The income is linked to one or more memberships. Unlink them before deleting it.");
+            throw new ConflictException("Este ingreso está vinculado a una o más membresías. Desvincúlalas antes de eliminarlo.");
         }
 
         entry.MarkDeleted(_timeProvider.GetUtcNow().UtcDateTime);
@@ -237,7 +237,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         return name is null
             ? throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
-                ["kind"] = ["Kind must be Service or MembershipSale."],
+                ["kind"] = ["El tipo de ingreso debe ser Servicio o Venta de membresía."],
             })
             : Enum.Parse<IncomeKind>(name);
     }
@@ -249,17 +249,17 @@ internal sealed class IncomeManagementService : IAdminIncomeService
 
         if (serviceId is not null)
         {
-            errors["serviceId"] = ["A membership sale is not tied to a service."];
+            errors["serviceId"] = ["Una venta de membresía no lleva servicio."];
         }
 
         if (staffProfileId is not null)
         {
-            errors["staffProfileId"] = ["A membership sale is not tied to a professional."];
+            errors["staffProfileId"] = ["Una venta de membresía no lleva profesional."];
         }
 
         if (isPromo)
         {
-            errors["isPromo"] = ["A membership sale cannot be marked as promo."];
+            errors["isPromo"] = ["Una venta de membresía no se puede marcar como promoción."];
         }
 
         if (errors.Count > 0)
@@ -274,7 +274,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         {
             throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
-                ["serviceId"] = ["A service is required for service income."],
+                ["serviceId"] = ["Elige el servicio del ingreso."],
             });
         }
 
@@ -285,7 +285,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         {
             throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
-                ["serviceId"] = ["The selected service does not exist."],
+                ["serviceId"] = ["El servicio elegido no existe."],
             });
         }
 
@@ -298,7 +298,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         {
             throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
-                ["staffProfileId"] = ["A professional is required for service income."],
+                ["staffProfileId"] = ["Elige el profesional del ingreso."],
             });
         }
 
@@ -307,7 +307,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         {
             throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
-                ["staffProfileId"] = ["The selected professional does not exist."],
+                ["staffProfileId"] = ["El profesional elegido no existe."],
             });
         }
 
@@ -320,12 +320,12 @@ internal sealed class IncomeManagementService : IAdminIncomeService
 
         if (amount < 0)
         {
-            errors["amount"] = ["Amount must be zero or greater."];
+            errors["amount"] = ["El valor debe ser cero o mayor."];
         }
 
         if (occurredOn > Today())
         {
-            errors["occurredOn"] = ["OccurredOn cannot be in the future."];
+            errors["occurredOn"] = ["La fecha no puede ser futura."];
         }
 
         if (errors.Count > 0)
@@ -351,7 +351,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
     {
         return await _dbContext.IncomeEntries
             .SingleOrDefaultAsync(entry => entry.Id == incomeEntryId && !entry.IsDeleted, cancellationToken)
-            ?? throw new KeyNotFoundException("The income entry was not found.");
+            ?? throw new KeyNotFoundException("No encontramos el ingreso. Es posible que otra persona lo haya eliminado.");
     }
 
     private async Task<IncomeEntryView> MapAsync(IncomeEntry entry, CancellationToken cancellationToken)

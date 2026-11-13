@@ -114,7 +114,7 @@ public sealed class StaffManagementServiceTests : IDisposable
     var exception = await Assert.ThrowsAsync<ConflictException>(() =>
         _adminStaffService.CreateAsync(CreateRequest("DUPLICATE@example.com", "Second Staff", "Second")));
 
-    Assert.Equal("A user with this email already exists.", exception.Message);
+    Assert.Equal("Ya existe una cuenta con ese correo.", exception.Message);
   }
 
   [Fact]
@@ -439,7 +439,7 @@ public sealed class StaffManagementServiceTests : IDisposable
         _adminStaffService.EnableProfessionalForCurrentUserAsync(
             adminUserId, new EnableProfessionalProfileRequest("Dup", null)));
 
-    Assert.Equal("The professional profile is already active.", exception.Message);
+    Assert.Equal("El profesional ya está activo.", exception.Message);
   }
 
   [Fact]

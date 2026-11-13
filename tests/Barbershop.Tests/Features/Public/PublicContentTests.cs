@@ -54,7 +54,7 @@ public sealed class PublicContentTests : IDisposable
   {
     var landing = await _publicContentService.GetPublicLandingAsync();
 
-    Assert.Equal("Reserva tu proximo turno", landing.HeroTitle);
+    Assert.Equal("Reserva tu próximo turno", landing.HeroTitle);
     Assert.Null(landing.HeroSubtitle);
     Assert.Null(landing.AboutTitle);
     Assert.Null(landing.AboutText);

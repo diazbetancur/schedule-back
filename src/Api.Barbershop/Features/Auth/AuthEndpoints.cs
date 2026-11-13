@@ -103,7 +103,7 @@ public static class AuthEndpoints
             var body = await RefreshTokenTransport.ReadBodyAsync(httpContext.Request, cancellationToken);
             if (body.IsMalformed)
             {
-                throw new ArgumentException("The request body must be JSON like {\"refreshToken\": \"...\"}.");
+                throw new ArgumentException("La solicitud debe incluir el token de sesión en el formato esperado.");
             }
 
             refreshToken = body.Token;

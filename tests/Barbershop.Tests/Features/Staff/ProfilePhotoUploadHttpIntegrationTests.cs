@@ -63,7 +63,7 @@ public sealed class ProfilePhotoUploadHttpIntegrationTests
 
     // The point of this test: prove whether ReadSingleFileAsync finds the "photo" field
     // from a real HTTP multipart request. If it does NOT, we get a 422 with
-    // "A file is required." — the exact bug reported. Any other outcome (e.g. 503 because
+    // "Selecciona un archivo." — the exact bug reported. Any other outcome (e.g. 503 because
     // R2 storage isn't configured in the Testing environment) means the field WAS found.
     var isFileRequiredError = response.StatusCode == HttpStatusCode.UnprocessableEntity
         && body.Contains("A file is required", StringComparison.Ordinal);

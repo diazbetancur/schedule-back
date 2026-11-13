@@ -262,7 +262,7 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
         // Fail before storing anything when the product does not exist.
         if (!await _dbContext.Products.AsNoTracking().AnyAsync(product => product.Id == productId && !product.IsDeleted, cancellationToken))
         {
-            throw new KeyNotFoundException("The product was not found.");
+            throw new KeyNotFoundException("No encontramos el producto.");
         }
 
         var media = await _mediaAssetsService.UploadAsync(
@@ -285,13 +285,13 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
         catch (KeyNotFoundException)
         {
             // Deleted while the file was uploading: the new file is not referenced by anything.
-            await TryArchiveMediaAssetAsync(media.Id, "Product deleted while its image was uploading", cancellationToken);
+            await TryArchiveMediaAssetAsync(media.Id, "Producto eliminado mientras se subía su imagen", cancellationToken);
             throw;
         }
 
         if (previousImageId is { } previous && previous != media.Id)
         {
-            await TryArchiveMediaAssetAsync(previous, "Replaced by a new product image", cancellationToken);
+            await TryArchiveMediaAssetAsync(previous, "Reemplazada por una nueva imagen del producto", cancellationToken);
         }
 
         return await MapProductAsync(product, cancellationToken);
@@ -315,7 +315,7 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
             await _dbContext.SaveProductCatalogAndCommitAsync(transaction, cancellationToken);
         }
 
-        await TryArchiveMediaAssetAsync(previousImageId.Value, "Removed by admin from the product", cancellationToken);
+        await TryArchiveMediaAssetAsync(previousImageId.Value, "Quitada del producto por el administrador", cancellationToken);
         return await MapProductAsync(product, cancellationToken);
     }
 
@@ -331,7 +331,7 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
                 .Where(product => product.Id == productId && !product.IsDeleted)
                 .Select(product => (Guid?)product.CategoryId)
                 .SingleOrDefaultAsync(cancellationToken)
-                ?? throw new KeyNotFoundException("The product was not found.");
+                ?? throw new KeyNotFoundException("No encontramos el producto.");
 
             await _dbContext.ShareProductCategoryAsync(categoryId, cancellationToken);
             await _dbContext.LockProductAsync(productId, cancellationToken);
@@ -351,12 +351,12 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
     private async Task<ProductCategory> LoadCategoryAsync(Guid categoryId, CancellationToken cancellationToken)
         => await _dbContext.ProductCategories
                .SingleOrDefaultAsync(category => category.Id == categoryId && !category.IsDeleted, cancellationToken)
-           ?? throw new KeyNotFoundException("The product category was not found.");
+           ?? throw new KeyNotFoundException("No encontramos la categoría de productos.");
 
     private async Task<Product> LoadProductAsync(Guid productId, CancellationToken cancellationToken)
         => await _dbContext.Products
                .SingleOrDefaultAsync(product => product.Id == productId && !product.IsDeleted, cancellationToken)
-           ?? throw new KeyNotFoundException("The product was not found.");
+           ?? throw new KeyNotFoundException("No encontramos el producto.");
 
     /// <summary>Read under the caller's lock on the category, so it reflects any committed deactivation or deletion.</summary>
     private async Task EnsureCategoryCanReceiveAsync(Guid categoryId, CancellationToken cancellationToken)

@@ -48,7 +48,7 @@ public sealed class ServiceManagementServiceTests : IDisposable
     var exception = await Assert.ThrowsAsync<ConflictException>(() =>
         _service.CreateAsync(new ServiceCreateRequest("  corte de cabello  ", 30000, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId)));
 
-    Assert.Equal("A service with this name already exists.", exception.Message);
+    Assert.Equal("Ya existe una tarifa con ese nombre.", exception.Message);
   }
 
   [Fact]
@@ -103,7 +103,7 @@ public sealed class ServiceManagementServiceTests : IDisposable
     var exception = await Assert.ThrowsAsync<ConflictException>(() =>
         _service.UpdateAsync(barba.Id, new ServiceUpdateRequest("corte", 15000)));
 
-    Assert.Equal("A service with this name already exists.", exception.Message);
+    Assert.Equal("Ya existe una tarifa con ese nombre.", exception.Message);
   }
 
   [Fact]

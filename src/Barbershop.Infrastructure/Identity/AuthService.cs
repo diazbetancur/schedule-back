@@ -20,7 +20,7 @@ namespace Barbershop.Infrastructure.Identity;
 
 internal sealed class AuthService : IAuthService
 {
-    private const string DuplicateEmailMessage = "A user with this email already exists.";
+    private const string DuplicateEmailMessage = "Ya existe una cuenta con ese correo.";
 
     // Name of the unique index on users."NormalizedEmail" (created by the InitialDomainModel migration).
     private const string UsersEmailUniqueIndex = "IX_users_NormalizedEmail";
@@ -223,14 +223,14 @@ internal sealed class AuthService : IAuthService
                 return null;
             }, cancellationToken);
 
-            throw new UnauthorizedException("The refresh token is invalid or expired.");
+            throw new UnauthorizedException("Tu sesión expiró. Inicia sesión de nuevo.");
         }
 
         if (existingToken is null
             || !AccountSessions.IsUsable(existingToken, utcNow)
             || !existingToken.User.IsActive)
         {
-            throw new UnauthorizedException("The refresh token is invalid or expired.");
+            throw new UnauthorizedException("Tu sesión expiró. Inicia sesión de nuevo.");
         }
 
         // Single use even under concurrency (BUG-016): the check above ran without a lock, so two requests with the
@@ -245,7 +245,7 @@ internal sealed class AuthService : IAuthService
             var lockedNow = _timeProvider.GetUtcNow().UtcDateTime;
             if (!AccountSessions.IsUsable(existingToken, lockedNow) || !existingToken.User.IsActive)
             {
-                throw new UnauthorizedException("The refresh token is invalid or expired.");
+                throw new UnauthorizedException("Tu sesión expiró. Inicia sesión de nuevo.");
             }
 
             // BUG-094: the successor keeps the session's expiry, so the session ends RefreshTokenDays after the
@@ -307,7 +307,7 @@ internal sealed class AuthService : IAuthService
 
         if (user is null || !user.IsActive)
         {
-            throw new UnauthorizedException("The current user is not available.");
+            throw new UnauthorizedException("Tu cuenta no está disponible. Inicia sesión de nuevo.");
         }
 
         var refreshToken = CreateRefreshToken(user.Id, _timeProvider.GetUtcNow().UtcDateTime);
@@ -329,7 +329,7 @@ internal sealed class AuthService : IAuthService
 
         if (user is null || !user.IsActive)
         {
-            throw new UnauthorizedException("The current user is not available.");
+            throw new UnauthorizedException("Tu cuenta no está disponible. Inicia sesión de nuevo.");
         }
 
         var roles = GetRoleNames(user);
@@ -573,7 +573,7 @@ internal sealed class AuthService : IAuthService
             || !OptionsValidationHelpers.IsConfigured(options.Issuer)
             || !OptionsValidationHelpers.IsConfigured(options.Audience))
         {
-            throw new ServiceUnavailableException("JWT authentication is not fully configured.");
+            throw new ServiceUnavailableException("El inicio de sesión no está disponible en este momento. Inténtalo de nuevo en unos minutos.");
         }
     }
 
@@ -607,8 +607,8 @@ internal sealed class AuthService : IAuthService
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 
-        AddErrorIf(errors, "email", !IsValidEmail(request.Email), "Email must be a valid email address.");
-        AddErrorIf(errors, "password", string.IsNullOrWhiteSpace(request.Password), "Password is required.");
+        AddErrorIf(errors, "email", !IsValidEmail(request.Email), "Escribe un correo válido.");
+        AddErrorIf(errors, "password", string.IsNullOrWhiteSpace(request.Password), "Escribe la contraseña.");
 
         ThrowIfAnyErrors(errors);
     }
@@ -616,7 +616,7 @@ internal sealed class AuthService : IAuthService
     private static void ValidateRefreshRequest(RefreshRequest request)
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-        AddErrorIf(errors, "refreshToken", string.IsNullOrWhiteSpace(request.RefreshToken), "Refresh token is required.");
+        AddErrorIf(errors, "refreshToken", string.IsNullOrWhiteSpace(request.RefreshToken), "Inicia sesión de nuevo.");
         ThrowIfAnyErrors(errors);
     }
 

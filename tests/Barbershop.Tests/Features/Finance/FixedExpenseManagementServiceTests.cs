@@ -50,7 +50,7 @@ public sealed class FixedExpenseManagementServiceTests : IDisposable
     var exception = await Assert.ThrowsAsync<ConflictException>(() =>
         _service.CreateAsync(new FixedExpenseCreateRequest("  arriendo  ", 2000000)));
 
-    Assert.Equal("A fixed expense with this name already exists.", exception.Message);
+    Assert.Equal("Ya existe un gasto fijo con ese nombre.", exception.Message);
   }
 
   [Fact]

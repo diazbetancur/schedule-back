@@ -66,7 +66,7 @@ public static class MediaEndpoints
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["file"] = ["Multipart form-data content is required."]
+        ["file"] = ["Envía el archivo como formulario (multipart/form-data)."]
       });
     }
 
@@ -77,7 +77,7 @@ public static class MediaEndpoints
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
     if (file is null)
     {
-      errors["file"] = ["File is required."];
+      errors["file"] = ["Selecciona un archivo."];
     }
 
     if (!MediaAssetPurposeParser.TryParse(purposeRaw, out var purpose))

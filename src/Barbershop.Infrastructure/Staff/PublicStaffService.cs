@@ -121,11 +121,11 @@ internal sealed class PublicStaffService : IPublicStaffService
         .AsNoTracking()
         .Include(profile => profile.User)
         .SingleOrDefaultAsync(profile => profile.Id == staffProfileId, cancellationToken)
-        ?? throw new KeyNotFoundException("The staff profile was not found.");
+        ?? throw new KeyNotFoundException("No encontramos este profesional.");
 
     if (!staffProfile.IsActive || !staffProfile.User.IsActive)
     {
-      throw new KeyNotFoundException("The staff profile was not found.");
+      throw new KeyNotFoundException("No encontramos este profesional.");
     }
 
     return staffProfile;

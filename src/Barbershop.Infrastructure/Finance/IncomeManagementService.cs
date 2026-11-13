@@ -52,7 +52,8 @@ internal sealed class IncomeManagementService : IAdminIncomeService
                 .Any(service => service.Id == entry.ServiceId && service.GeneralServiceId == generalServiceId));
         }
 
-        var totalAmount = await entries.SumAsync(entry => (int?)entry.Amount, cancellationToken) ?? 0;
+        // BUG-080: summed as bigint; an int total overflowed (HTTP 500) once the matching entries passed 2.147.483.647 COP.
+        var totalAmount = await entries.SumAsync(entry => (long?)entry.Amount, cancellationToken) ?? 0;
         var result = await entries
             .OrderByDescending(entry => entry.OccurredOn)
             .ThenByDescending(entry => entry.CreatedAt)

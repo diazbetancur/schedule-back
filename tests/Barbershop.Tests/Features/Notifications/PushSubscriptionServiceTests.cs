@@ -88,6 +88,42 @@ public sealed class PushSubscriptionServiceTests : IDisposable
     Assert.Empty(_dbContext.PushSubscriptions);
   }
 
+  /// <summary>BUG-106 (SSRF): the five endpoints SONDA registered, plus other internal or foreign targets.</summary>
+  [Theory]
+  [InlineData("https://127.0.0.1:1/x")]
+  [InlineData("https://169.254.169.254/x")]
+  [InlineData("https://localhost/x")]
+  [InlineData("https://[::1]/x")]
+  [InlineData("https://10.0.0.1/x")]
+  [InlineData("https://192.168.1.10/fcm/send/x")]
+  [InlineData("https://metadata.google.internal/x")]
+  [InlineData("https://fcm.googleapis.com.evil.example/x")]
+  [InlineData("https://evilfcm.googleapis.com.attacker.io/x")]
+  [InlineData("https://notify.windows.com.attacker.io/x")]
+  [InlineData("https://fcm.googleapis.com:8443/fcm/send/x")]
+  [InlineData("https://user@fcm.googleapis.com/fcm/send/x")]
+  public async Task SubscribeAsync_EndpointOutsideTheKnownPushServices_IsRejected(string endpoint)
+  {
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(
+        () => _service.SubscribeAsync(Guid.NewGuid(), Request(endpoint, "p256", "auth")));
+
+    Assert.True(exception.Errors.ContainsKey("endpoint"));
+    Assert.Empty(_dbContext.PushSubscriptions);
+  }
+
+  [Theory]
+  [InlineData("https://fcm.googleapis.com/fcm/send/abc:def")]
+  [InlineData("https://updates.push.services.mozilla.com/wpush/v2/gAAAA")]
+  [InlineData("https://wns2-bl2p.notify.windows.com/w/?token=BQYAAA")]
+  [InlineData("https://web.push.apple.com/QGuQyavXutnMbz")]
+  [InlineData("https://FCM.googleapis.com:443/fcm/send/upper")]
+  public async Task SubscribeAsync_BrowserPushServices_AreAccepted(string endpoint)
+  {
+    await _service.SubscribeAsync(Guid.NewGuid(), Request(endpoint, "p256", "auth"));
+
+    Assert.Single(_dbContext.PushSubscriptions);
+  }
+
   [Fact]
   public async Task UnsubscribeAsync_OnlyRemovesTheCallersOwnDevice()
   {

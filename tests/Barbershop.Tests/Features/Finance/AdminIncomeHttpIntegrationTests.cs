@@ -81,6 +81,41 @@ public sealed class AdminIncomeHttpIntegrationTests
     Assert.DoesNotContain(afterList!, e => e.Id == created.Id);
   }
 
+  /// <summary>
+  /// BUG-080 (SONDA CP-9020): three entries of 2.000.000.000 COP made the list answer 500, even with pageSize=1,
+  /// because the total was summed as int. A professional of its own keeps the filter isolated from other tests.
+  /// </summary>
+  [Fact]
+  public async Task ListIncome_WhenTheFilteredTotalExceedsInt32_ReturnsTheExactTotal()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAndPromoteAdminAsync(context, "income-overflow");
+    AuthenticateAs(context.Client, admin.AccessToken);
+    var serviceId = await SeedServiceAsync(context.Factory, "Corte", 25000);
+    var staffId = await SeedStaffAsync(context.Factory, "income-overflow");
+
+    for (var day = 10; day <= 12; day++)
+    {
+      using var create = await context.Client.PostAsJsonAsync(
+          "/api/v1/admin/income",
+          new IncomeEntryCreateRequest(serviceId, staffId, 2_000_000_000, IsPromo: false, new DateOnly(2019, 5, day)));
+      Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+    }
+
+    using var list = await context.Client.GetAsync(
+        $"/api/v1/admin/income?from=2019-05-01&to=2019-05-30&staffProfileId={staffId}&pageSize=1");
+
+    Assert.Equal(HttpStatusCode.OK, list.StatusCode);
+    var page = await list.Content.ReadFromJsonAsync<IncomeEntriesPage>();
+    Assert.Equal(3, page!.TotalCount);
+    Assert.Equal(6_000_000_000L, page.TotalAmount);
+  }
+
   [Fact]
   public async Task CreateIncome_AsPlainCustomer_ReturnsForbidden()
   {

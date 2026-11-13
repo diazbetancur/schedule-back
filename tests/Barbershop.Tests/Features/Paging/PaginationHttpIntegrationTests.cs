@@ -301,6 +301,13 @@ public sealed class PaginationHttpIntegrationTests
     Assert.Equal(6, seen.Count);
     Assert.Equal(6, seen.Distinct().Count());
 
+    // SONDA BUG-022: without "sort" the agenda is soonest first, exactly like "Asc"; "Desc" still reverses it.
+    var agendaDefault = (await GetPageAsync<AppointmentView>(context.Client, "/api/v1/admin/appointments?scope=Agenda&pageSize=10")).Items.Select(item => item.Id).ToList();
+    var agendaAsc = (await GetPageAsync<AppointmentView>(context.Client, "/api/v1/admin/appointments?scope=Agenda&sort=Asc&pageSize=10")).Items.Select(item => item.Id).ToList();
+    var agendaDesc = (await GetPageAsync<AppointmentView>(context.Client, "/api/v1/admin/appointments?scope=Agenda&sort=Desc&pageSize=10")).Items.Select(item => item.Id).ToList();
+    Assert.Equal(agendaAsc, agendaDefault);
+    Assert.Equal(Enumerable.Reverse(agendaAsc), agendaDesc);
+
     // The agenda never reaches the past (an earlier "from" is raised to today) and has no 30-day limit.
     Assert.Equal(6, (await GetPageAsync<AppointmentView>(context.Client, $"/api/v1/admin/appointments?scope=Agenda&from={Today.AddDays(-7):yyyy-MM-dd}")).TotalCount);
     Assert.Equal(6, (await GetPageAsync<AppointmentView>(context.Client, $"/api/v1/admin/appointments?scope=Agenda&to={Today.AddDays(90):yyyy-MM-dd}")).TotalCount);
@@ -377,6 +384,13 @@ public sealed class PaginationHttpIntegrationTests
     var staffFuture = await GetPageAsync<AppointmentView>(context.Client, $"/api/v1/staff/appointments?scope=Agenda&status=Pending,Confirmed&sort=Asc");
     Assert.Equal(2, staffFuture.TotalCount);
     Assert.True(staffFuture.Items[0].StartsAtUtc < staffFuture.Items[1].StartsAtUtc);
+
+    // SONDA BUG-022: without "sort" the staff agenda is soonest first too; "Desc" on request.
+    var staffAgenda = (await GetPageAsync<AppointmentView>(context.Client, "/api/v1/staff/appointments?scope=Agenda")).Items.Select(item => item.StartsAtUtc).ToList();
+    Assert.Equal(3, staffAgenda.Count);
+    Assert.Equal(staffAgenda.Order(), staffAgenda);
+    var staffAgendaDesc = (await GetPageAsync<AppointmentView>(context.Client, "/api/v1/staff/appointments?scope=Agenda&sort=Desc")).Items.Select(item => item.StartsAtUtc).ToList();
+    Assert.Equal(staffAgenda.OrderDescending(), staffAgendaDesc);
     Assert.Equal(2, (await GetPageAsync<AppointmentView>(context.Client, $"/api/v1/staff/appointments?to={Today.AddDays(-1):yyyy-MM-dd}&status=Completed")).TotalCount);
 
     AuthenticateAs(context.Client, customer.AccessToken);

@@ -3,6 +3,9 @@ using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Media;
+using Api.Barbershop.Features.Uploads;
+using Barbershop.Infrastructure.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace Api.Barbershop.Features.Admin.Media;
 
@@ -56,6 +59,7 @@ public static class MediaEndpoints
       ClaimsPrincipal user,
       HttpRequest request,
       IMediaAssetsService service,
+      IOptions<FileStorageOptions> fileStorageOptions,
       CancellationToken cancellationToken)
   {
     if (!request.HasFormContentType)
@@ -66,7 +70,7 @@ public static class MediaEndpoints
       });
     }
 
-    var form = await request.ReadFormAsync(cancellationToken);
+    var form = await UploadRequestBody.ReadFormAsync(request, fileStorageOptions.Value.MaxUploadBytes, cancellationToken);
     var file = form.Files.GetFile("file");
     var purposeRaw = form["purpose"].ToString();
 
@@ -78,7 +82,7 @@ public static class MediaEndpoints
 
     if (!MediaAssetPurposeParser.TryParse(purposeRaw, out var purpose))
     {
-      errors["purpose"] = ["Purpose is required and must be a valid value."];
+      errors["purpose"] = [MediaAssetPurposeParser.InvalidPurposeMessage];
     }
 
     if (errors.Count > 0)

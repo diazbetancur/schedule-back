@@ -1,3 +1,4 @@
+using Api.Barbershop.Features.Uploads;
 using Barbershop.Application.Common.Exceptions;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -58,6 +59,11 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
       ? (StatusCodes.Status503ServiceUnavailable, "Service unavailable", "service_unavailable")
       : exception switch
       {
+        PayloadTooLargeException => (StatusCodes.Status413PayloadTooLarge, "Payload too large", "payload_too_large"),
+        BadHttpRequestException { StatusCode: StatusCodes.Status413PayloadTooLarge } =>
+            (StatusCodes.Status413PayloadTooLarge, "Payload too large", "payload_too_large"),
+        BadHttpRequestException => (StatusCodes.Status400BadRequest, "Invalid request", "invalid_request"),
+        BadRequestException => (StatusCodes.Status400BadRequest, "Invalid request", "invalid_request"),
         ArgumentException => (StatusCodes.Status400BadRequest, "Invalid request", "invalid_request"),
         ConflictException => (StatusCodes.Status409Conflict, "Conflict", "conflict"),
         UnauthorizedException => (StatusCodes.Status401Unauthorized, "Unauthorized", "unauthorized"),
@@ -69,9 +75,14 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
         _ => (StatusCodes.Status500InternalServerError, "Unexpected server error", "server_error")
       };
 
-    var detail = status >= 500 && !_environment.IsDevelopment()
-        ? "An unexpected error occurred while processing the request."
-        : exception.Message;
+    var detail = exception switch
+    {
+      // Kestrel's own reading errors (BUG-095): fixed Spanish text, the framework message is not for end users.
+      BadHttpRequestException { StatusCode: StatusCodes.Status413PayloadTooLarge } => UploadRequestBody.TooLargeMessage,
+      BadHttpRequestException => UploadRequestBody.UnreadableMessage,
+      _ when status >= 500 && !_environment.IsDevelopment() => "An unexpected error occurred while processing the request.",
+      _ => exception.Message
+    };
 
     httpContext.Response.StatusCode = status;
 

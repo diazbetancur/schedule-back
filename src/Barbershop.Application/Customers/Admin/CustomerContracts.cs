@@ -38,11 +38,13 @@ public sealed record CustomerDetailView(
     DateTime? MergedAt,
     DateTime CreatedAt,
     DateTime? UpdatedAt,
-    IReadOnlyList<CustomerEventView> Events);
+    IReadOnlyList<CustomerEventView> Events,
+    uint Version = 0);
 
 public sealed record CustomerCreateRequest(string FullName, string Phone, string Email);
 
-public sealed record CustomerUpdateRequest(string FullName, string Phone, string Email);
+/// <param name="Version">The profile version the edit was made on (BUG-061); a different current version answers 409.</param>
+public sealed record CustomerUpdateRequest(string FullName, string Phone, string Email, uint? Version = null);
 
 /// <summary>
 /// A possible duplicate of the data being entered. <c>Kind</c> is "customer" or "account".

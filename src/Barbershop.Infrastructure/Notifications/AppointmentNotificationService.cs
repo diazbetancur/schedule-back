@@ -98,6 +98,14 @@ internal sealed class AppointmentNotificationService : IAppointmentNotificationS
           $"{CustomerFacingActor(context)} modificó tu cita. Nueva fecha: {FormatDateTime(context.StartsAtUtc)}.",
           cancellationToken);
 
+  public Task NotifyCustomerOfAppointmentDetailsChangeAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
+      => NotifyCustomerAsync(
+          context,
+          UserNotificationTypes.AppointmentUpdated,
+          "Tu cita fue modificada",
+          $"{CustomerFacingActor(context)} cambió el servicio o la duración de tu cita del {FormatDateTime(context.StartsAtUtc)}. La fecha y la hora no cambian.",
+          cancellationToken);
+
   public Task NotifyCustomerOfAppointmentCancellationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
       => NotifyCustomerAsync(
           context,

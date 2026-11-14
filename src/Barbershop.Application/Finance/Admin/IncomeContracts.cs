@@ -41,7 +41,9 @@ public sealed record IncomeEntryUpdateRequest(
     int Amount,
     bool IsPromo,
     DateOnly OccurredOn,
-    string? Kind = null);
+    string? Kind = null,
+    // BUG-104: required when the new amount of a linked membership sale differs from the memberships' total.
+    string? DiscrepancyJustification = null);
 
 /// <summary>
 /// Filters of <c>GET /admin/income</c> (ADR-0016 B7). <c>From</c>/<c>To</c> are inclusive Bogotá dates; when both are

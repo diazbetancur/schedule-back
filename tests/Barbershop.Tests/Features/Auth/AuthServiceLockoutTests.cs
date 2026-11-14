@@ -75,12 +75,12 @@ public sealed class AuthServiceLockoutTests : IDisposable
         }
 
         // 6th attempt, even with the CORRECT password, must be rejected because the account is locked.
-        await Assert.ThrowsAsync<TooManyRequestsException>(() =>
+        await Assert.ThrowsAsync<UnauthorizedException>(() =>
             _authService.LoginAsync(new LoginRequest("lockout@example.com", "Secret123!")));
     }
 
     [Fact]
-    public async Task Login_LockedAccount_ReturnsSpanishMessage()
+    public async Task Login_LockedAccount_AnswersLikeAWrongPassword()
     {
         await _authService.RegisterAsync(new RegisterRequest("Lockout Message User", "lockout-message@example.com", "Secret123!", null));
 
@@ -90,10 +90,11 @@ public sealed class AuthServiceLockoutTests : IDisposable
                 _authService.LoginAsync(new LoginRequest("lockout-message@example.com", "WrongPassword!")));
         }
 
-        var exception = await Assert.ThrowsAsync<TooManyRequestsException>(() =>
+        var exception = await Assert.ThrowsAsync<UnauthorizedException>(() =>
             _authService.LoginAsync(new LoginRequest("lockout-message@example.com", "Secret123!")));
 
-        Assert.Equal("Demasiados intentos fallidos. Intenta de nuevo más tarde.", exception.Message);
+        // BUG-005: the same message as a wrong password or an unknown email.
+        Assert.Equal(AuthService.InvalidCredentialsMessage, exception.Message);
     }
 
     [Fact]
@@ -133,7 +134,7 @@ public sealed class AuthServiceLockoutTests : IDisposable
                 _authService.LoginAsync(new LoginRequest("expiry@example.com", "WrongPassword!")));
         }
 
-        await Assert.ThrowsAsync<TooManyRequestsException>(() =>
+        await Assert.ThrowsAsync<UnauthorizedException>(() =>
             _authService.LoginAsync(new LoginRequest("expiry@example.com", "Secret123!")));
 
         // Advance time past the 15-minute lockout window.
@@ -151,7 +152,85 @@ public sealed class AuthServiceLockoutTests : IDisposable
         var exception = await Assert.ThrowsAsync<UnauthorizedException>(() =>
             _authService.LoginAsync(new LoginRequest("generic-message@example.com", "WrongPassword!")));
 
-        Assert.Equal("Invalid email or password.", exception.Message);
+        Assert.Equal(AuthService.InvalidCredentialsMessage, exception.Message);
+    }
+
+    /// <summary>BUG-005: after six attempts a locked account and an unknown email answer exactly the same.</summary>
+    [Fact]
+    public async Task Login_LockedAccountAndUnknownEmail_AreIndistinguishable()
+    {
+        await _authService.RegisterAsync(new RegisterRequest("Existing User", "existing@example.com", "Secret123!", null));
+
+        var existing = new List<(Type, string)>();
+        var unknown = new List<(Type, string)>();
+        for (var attempt = 0; attempt < 6; attempt++)
+        {
+            var existingFailure = await Assert.ThrowsAnyAsync<Exception>(() =>
+                _authService.LoginAsync(new LoginRequest("existing@example.com", "WrongPassword!")));
+            var unknownFailure = await Assert.ThrowsAnyAsync<Exception>(() =>
+                _authService.LoginAsync(new LoginRequest("nobody@example.com", "WrongPassword!")));
+            existing.Add((existingFailure.GetType(), existingFailure.Message));
+            unknown.Add((unknownFailure.GetType(), unknownFailure.Message));
+        }
+
+        Assert.Equal(unknown, existing);
+        Assert.All(existing, failure => Assert.Equal(typeof(UnauthorizedException), failure.Item1));
+        Assert.True((await _dbContext.Users.SingleAsync(user => user.NormalizedEmail == "EXISTING@EXAMPLE.COM")).IsLockedOut(_timeProvider.GetUtcNow().UtcDateTime));
+    }
+
+    // ── BUG-094: absolute session lifetime and reuse of a rotated refresh token ──
+
+    [Fact]
+    public async Task Refresh_KeepsTheSessionExpiry_SoTheSessionEndsRefreshTokenDaysAfterSignIn()
+    {
+        await _authService.RegisterAsync(new RegisterRequest("Session User", "session@example.com", "Secret123!", null));
+        var signIn = await _authService.LoginAsync(new LoginRequest("session@example.com", "Secret123!"));
+        var signInExpiry = signIn.RefreshTokenExpiresAtUtc;
+        Assert.Equal(_timeProvider.GetUtcNow().UtcDateTime.AddDays(7), signInExpiry);
+
+        var token = signIn.RefreshToken;
+        for (var day = 0; day < 6; day++)
+        {
+            _timeProvider.Advance(TimeSpan.FromDays(1));
+            var refreshed = await _authService.RefreshAsync(new RefreshRequest(token));
+            Assert.Equal(signInExpiry, refreshed.RefreshTokenExpiresAtUtc);
+            token = refreshed.RefreshToken;
+        }
+
+        _timeProvider.Advance(TimeSpan.FromDays(1) + TimeSpan.FromMinutes(1));
+        await Assert.ThrowsAsync<UnauthorizedException>(() => _authService.RefreshAsync(new RefreshRequest(token)));
+    }
+
+    [Fact]
+    public async Task Refresh_ReuseOfARotatedTokenAfterTheGrace_RevokesTheWholeSession()
+    {
+        await _authService.RegisterAsync(new RegisterRequest("Reuse User", "reuse@example.com", "Secret123!", null));
+        var first = await _authService.LoginAsync(new LoginRequest("reuse@example.com", "Secret123!"));
+        var second = await _authService.RefreshAsync(new RefreshRequest(first.RefreshToken));
+        var other = await _authService.LoginAsync(new LoginRequest("reuse@example.com", "Secret123!"));
+
+        _timeProvider.Advance(AuthService.RotatedTokenReuseGrace + TimeSpan.FromSeconds(1));
+        await Assert.ThrowsAsync<UnauthorizedException>(() => _authService.RefreshAsync(new RefreshRequest(first.RefreshToken)));
+
+        // The successor (possibly in a thief's hands) is dead too; another sign-in of the account is untouched.
+        await Assert.ThrowsAsync<UnauthorizedException>(() => _authService.RefreshAsync(new RefreshRequest(second.RefreshToken)));
+        var otherRefreshed = await _authService.RefreshAsync(new RefreshRequest(other.RefreshToken));
+        Assert.False(string.IsNullOrWhiteSpace(otherRefreshed.AccessToken));
+    }
+
+    /// <summary>Two tabs: the slower one still carried the token the other had just rotated. Not treated as theft.</summary>
+    [Fact]
+    public async Task Refresh_ReuseOfARotatedTokenWithinTheGrace_OnlyRefusesThatRequest()
+    {
+        await _authService.RegisterAsync(new RegisterRequest("Tabs User", "tabs@example.com", "Secret123!", null));
+        var first = await _authService.LoginAsync(new LoginRequest("tabs@example.com", "Secret123!"));
+        var second = await _authService.RefreshAsync(new RefreshRequest(first.RefreshToken));
+
+        _timeProvider.Advance(TimeSpan.FromSeconds(5));
+        await Assert.ThrowsAsync<UnauthorizedException>(() => _authService.RefreshAsync(new RefreshRequest(first.RefreshToken)));
+
+        var adopted = await _authService.RefreshAsync(new RefreshRequest(second.RefreshToken));
+        Assert.False(string.IsNullOrWhiteSpace(adopted.AccessToken));
     }
 
     private sealed class ManualTimeProvider : TimeProvider

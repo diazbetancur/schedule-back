@@ -63,6 +63,17 @@ internal sealed class StaffOfferingManagementService : IAdminStaffOfferingsServi
             .Where(service => requestedIds.Contains(service.Id))
             .ToDictionaryAsync(service => service.Id, cancellationToken);
 
+        // BUG-079: an offering the professional already had for a general service deleted since is dropped (it is no
+        // longer offered and nothing references an offering), instead of blocking every save with a 422. Adding a
+        // deleted or unknown general service is still refused.
+        requested = requested
+            .Where(item => !(services.TryGetValue(item.GeneralServiceId, out var service)
+                && service.IsDeleted
+                && currentByService.ContainsKey(item.GeneralServiceId)))
+            .ToList();
+        requestedIds = requested.Select(item => item.GeneralServiceId).ToArray();
+        activating = activating.Where(requestedIds.Contains).ToArray();
+
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
         for (var index = 0; index < requested.Count; index++)
         {
@@ -153,7 +164,7 @@ internal sealed class StaffOfferingManagementService : IAdminStaffOfferingsServi
     private async Task<StaffProfile> LoadStaffAsync(Guid staffProfileId, CancellationToken cancellationToken)
         => await _dbContext.StaffProfiles.AsNoTracking()
                .SingleOrDefaultAsync(profile => profile.Id == staffProfileId, cancellationToken)
-           ?? throw new KeyNotFoundException("The staff profile was not found.");
+           ?? throw new KeyNotFoundException("No encontramos este profesional.");
 
     private async Task<StaffServiceOfferingsView> MapAsync(StaffProfile staff, CancellationToken cancellationToken)
     {
@@ -161,7 +172,8 @@ internal sealed class StaffOfferingManagementService : IAdminStaffOfferingsServi
                 from offering in _dbContext.StaffServiceOfferings.AsNoTracking()
                 join service in _dbContext.GeneralServices.AsNoTracking() on offering.GeneralServiceId equals service.Id
                 join category in _dbContext.ServiceCategories.AsNoTracking() on service.CategoryId equals category.Id
-                where offering.StaffProfileId == staff.Id
+                // BUG-079: an offering of a deleted general service is not shown (it is dropped on the next save).
+                where offering.StaffProfileId == staff.Id && !service.IsDeleted
                 select new { offering, service, category })
             .ToListAsync(cancellationToken);
 

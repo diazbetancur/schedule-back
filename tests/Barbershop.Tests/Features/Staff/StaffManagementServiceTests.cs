@@ -114,7 +114,7 @@ public sealed class StaffManagementServiceTests : IDisposable
     var exception = await Assert.ThrowsAsync<ConflictException>(() =>
         _adminStaffService.CreateAsync(CreateRequest("DUPLICATE@example.com", "Second Staff", "Second")));
 
-    Assert.Equal("A user with this email already exists.", exception.Message);
+    Assert.Equal("Ya existe una cuenta con ese correo.", exception.Message);
   }
 
   [Fact]
@@ -316,6 +316,60 @@ public sealed class StaffManagementServiceTests : IDisposable
     Assert.Contains("https://", exception.Errors["instagramUrl"][0]);
   }
 
+  // ── BUG-068 / BUG-070: the admin PUT no longer overwrites what it does not carry ──
+
+  [Fact]
+  public async Task AdminUpdateAsync_WithoutIsActive_DoesNotReactivateAnAccountDeactivatedFromUsers()
+  {
+    var staff = await _adminStaffService.CreateAsync(CreateRequest("deactivated@example.com", "Deactivated Staff", "Deactivated"));
+    var user = await _dbContext.Users.SingleAsync(candidate => candidate.Id == staff.UserId);
+    user.Deactivate(DateTime.UtcNow);
+    await _dbContext.SaveChangesAsync();
+
+    await _adminStaffService.UpdateAsync(staff.StaffProfileId, new AdminStaffUpdateRequest(
+        "Deactivated Staff", "deactivated@example.com", "Renamed", null, null, 30, null, null, IsActive: null));
+
+    Assert.False((await _dbContext.Users.AsNoTracking().SingleAsync(candidate => candidate.Id == staff.UserId)).IsActive);
+  }
+
+  [Fact]
+  public async Task AdminUpdateAndStatusChange_KeepTheSocialLinksTheProfessionalEntered()
+  {
+    var staff = await _adminStaffService.CreateAsync(CreateRequest("socials-kept@example.com", "Socials Staff", "Socials"));
+    await _staffProfileService.UpdateCurrentAsync(staff.UserId, new StaffProfileUpdateRequest(
+        "Socials", null, null, 30, null, null,
+        "https://instagram.com/zona8", "https://facebook.com/zona8", "https://tiktok.com/@zona8", "https://youtube.com/@zona8", "https://x.com/zona8"));
+
+    var afterEdit = await _adminStaffService.UpdateAsync(staff.StaffProfileId, new AdminStaffUpdateRequest(
+        "Socials Staff", "socials-kept@example.com", "Socials Renamed", null, "Bio nueva", 30, null, null, true));
+    Assert.Equal("https://instagram.com/zona8", afterEdit.InstagramUrl);
+    Assert.Equal("https://x.com/zona8", afterEdit.XUrl);
+
+    var afterStatus = await _adminStaffService.UpdateStatusAsync(staff.StaffProfileId, new StaffStatusUpdateRequest(false));
+    Assert.Equal("https://facebook.com/zona8", afterStatus.FacebookUrl);
+    Assert.Equal("https://tiktok.com/@zona8", afterStatus.TikTokUrl);
+    Assert.Equal("https://youtube.com/@zona8", afterStatus.YoutubeUrl);
+  }
+
+  /// <summary>BUG-036: the server range is 10–240 and its message is in Spanish (the UI showed it in English).</summary>
+  [Theory]
+  [InlineData(5)]
+  [InlineData(9)]
+  [InlineData(241)]
+  [InlineData(480)]
+  public async Task UpdateCurrentAsync_RejectsADurationOutside10To240_InSpanish(int minutes)
+  {
+    var staff = await _adminStaffService.CreateAsync(CreateRequest($"dur-{minutes}@example.com", "Duration Staff", "Duration"));
+
+    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _staffProfileService.UpdateCurrentAsync(
+            staff.UserId,
+            new StaffProfileUpdateRequest("Duration", null, null, minutes, null, null, null, null, null, null, null)));
+
+    Assert.Equal("La duración de la cita debe estar entre 10 y 240 minutos.",
+        Assert.Single(exception.Errors["defaultAppointmentDurationMinutes"]));
+  }
+
   [Fact]
   public async Task UpdateCurrentAsync_AcceptsHttpAndHttpsSocialLinks()
   {
@@ -385,7 +439,7 @@ public sealed class StaffManagementServiceTests : IDisposable
         _adminStaffService.EnableProfessionalForCurrentUserAsync(
             adminUserId, new EnableProfessionalProfileRequest("Dup", null)));
 
-    Assert.Equal("The professional profile is already active.", exception.Message);
+    Assert.Equal("El profesional ya está activo.", exception.Message);
   }
 
   [Fact]

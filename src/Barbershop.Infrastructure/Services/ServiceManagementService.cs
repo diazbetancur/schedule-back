@@ -87,7 +87,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
     public async Task<ServiceView> CreateAsync(ServiceCreateRequest request, CancellationToken cancellationToken = default)
     {
         ValidateRequest(
-            request.Name, request.BasePrice, request.BusinessPercentage, request.LoyaltyPoints, request.GeneralServiceId,
+            request.Name, request.BasePrice, request.BusinessPercentage ?? 0, request.LoyaltyPoints, request.GeneralServiceId,
             requireGeneralService: true);
         await EnsureNameIsUniqueAsync(request.Name, null, cancellationToken);
 
@@ -98,7 +98,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
         await EnsureGeneralServiceCanReceiveAsync(request.GeneralServiceId!.Value, cancellationToken);
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        var service = new Service(request.Name, request.BasePrice, utcNow, request.BusinessPercentage, request.GeneralServiceId);
+        var service = new Service(request.Name, request.BasePrice, utcNow, request.BusinessPercentage ?? 0, request.GeneralServiceId);
         ApplyLoyaltyPoints(service, request.LoyaltyPoints, utcNow);
 
         _dbContext.Services.Add(service);
@@ -110,7 +110,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
     public async Task<ServiceView> UpdateAsync(Guid serviceId, ServiceUpdateRequest request, CancellationToken cancellationToken = default)
     {
         ValidateRequest(
-            request.Name, request.BasePrice, request.BusinessPercentage, request.LoyaltyPoints, request.GeneralServiceId,
+            request.Name, request.BasePrice, request.BusinessPercentage ?? 0, request.LoyaltyPoints, request.GeneralServiceId,
             requireGeneralService: false);
         await EnsureNameIsUniqueAsync(request.Name, serviceId, cancellationToken);
 
@@ -130,7 +130,8 @@ internal sealed class ServiceManagementService : IAdminServicesService
         }
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-        service.Update(request.Name, request.BasePrice, utcNow, request.BusinessPercentage);
+        // An omitted percentage keeps the current one (an omitted value used to reset the business share to 0).
+        service.Update(request.Name, request.BasePrice, utcNow, request.BusinessPercentage ?? service.BusinessPercentage);
         if (moveTo is { } destination)
         {
             // Only the rate moves: income, records, memberships and redemptions keep the rate id they already have.
@@ -183,7 +184,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
                 .Where(rate => rate.Id == serviceId && !rate.IsDeleted)
                 .Select(rate => (Guid?)rate.GeneralServiceId)
                 .SingleOrDefaultAsync(cancellationToken)
-                ?? throw new KeyNotFoundException("The service was not found.");
+                ?? throw new KeyNotFoundException("No encontramos la tarifa.");
 
             await _dbContext.ShareGeneralServiceAsync(generalServiceId, cancellationToken);
             await _dbContext.LockRateAsync(serviceId, cancellationToken);
@@ -197,6 +198,24 @@ internal sealed class ServiceManagementService : IAdminServicesService
         }
 
         throw new ConflictException("La tarifa cambió mientras se procesaba. Recarga e inténtalo de nuevo.");
+    }
+
+    public async Task<ServiceUsageView> GetUsageAsync(Guid serviceId, CancellationToken cancellationToken = default)
+    {
+        _ = await LoadAsync(serviceId, cancellationToken);
+
+        var plans = await _dbContext.MembershipPlans.AsNoTracking()
+            .Where(plan => !plan.IsDeleted && plan.IsActive && plan.Services.Any(included => included.ServiceId == serviceId))
+            .OrderBy(plan => plan.Name)
+            .Select(plan => plan.Name)
+            .ToListAsync(cancellationToken);
+        var rewards = await _dbContext.LoyaltyRewards.AsNoTracking()
+            .Where(reward => reward.IsActive && reward.ServiceId == serviceId)
+            .OrderBy(reward => reward.Name)
+            .Select(reward => reward.Name)
+            .ToListAsync(cancellationToken);
+
+        return new ServiceUsageView(plans, rewards);
     }
 
     public async Task SoftDeleteAsync(Guid serviceId, CancellationToken cancellationToken = default)
@@ -223,7 +242,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
     {
         return await _dbContext.Services
             .SingleOrDefaultAsync(service => service.Id == serviceId && !service.IsDeleted, cancellationToken)
-            ?? throw new KeyNotFoundException("The service was not found.");
+            ?? throw new KeyNotFoundException("No encontramos la tarifa.");
     }
 
     private async Task EnsureNameIsUniqueAsync(string name, Guid? excludeId, CancellationToken cancellationToken)
@@ -237,7 +256,7 @@ internal sealed class ServiceManagementService : IAdminServicesService
 
         if (duplicateExists)
         {
-            throw new ConflictException("A service with this name already exists.");
+            throw new ConflictException("Ya existe una tarifa con ese nombre.");
         }
     }
 
@@ -272,17 +291,17 @@ internal sealed class ServiceManagementService : IAdminServicesService
 
         if (string.IsNullOrWhiteSpace(name) || name.Trim().Length is < NameMinLength or > NameMaxLength)
         {
-            errors["name"] = [$"Name must be between {NameMinLength} and {NameMaxLength} characters."];
+            errors["name"] = [$"El nombre debe tener entre {NameMinLength} y {NameMaxLength} caracteres."];
         }
 
         if (basePrice < 0)
         {
-            errors["basePrice"] = ["BasePrice must be zero or greater."];
+            errors["basePrice"] = ["El precio debe ser cero o mayor."];
         }
 
         if (businessPercentage is < 0 or > 100)
         {
-            errors["businessPercentage"] = ["BusinessPercentage must be between 0 and 100."];
+            errors["businessPercentage"] = ["El porcentaje de la barbería debe estar entre 0 y 100."];
         }
 
         LoyaltyCatalogPoints.Validate(loyaltyPoints, errors);

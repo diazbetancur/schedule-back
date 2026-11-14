@@ -90,6 +90,42 @@ public sealed class UserNotificationsServiceTests : IDisposable
     Assert.Equal(2, (await _service.GetInboxAsync(otherUserId, 5)).UnreadCount);
   }
 
+  /// <summary>BUG-107: the panel shows the unread ones first and pages the rest with «Ver más».</summary>
+  [Fact]
+  public async Task GetInboxAsync_PutsUnreadFirst_AndPagesWithOffsetAndHasMore()
+  {
+    var userId = Guid.NewGuid();
+    var notifications = await SeedAsync(userId, count: 8);
+    // The two oldest stay unread; the six newest were read.
+    foreach (var notification in notifications.Skip(2))
+    {
+      notification.MarkAsRead(BaseTime.AddHours(1));
+    }
+
+    await _dbContext.SaveChangesAsync();
+
+    var first = await _service.GetInboxAsync(userId, 5);
+    var second = await _service.GetInboxAsync(userId, 5, offset: 5);
+
+    Assert.Equal(2, first.UnreadCount);
+    Assert.Equal(["Aviso 2", "Aviso 1", "Aviso 8", "Aviso 7", "Aviso 6"], first.Items.Select(item => item.Title));
+    Assert.True(first.HasMore);
+    Assert.Equal(["Aviso 5", "Aviso 4", "Aviso 3"], second.Items.Select(item => item.Title));
+    Assert.False(second.HasMore);
+  }
+
+  [Fact]
+  public async Task GetInboxAsync_ExactlyOnePage_HasNoMore()
+  {
+    var userId = Guid.NewGuid();
+    await SeedAsync(userId, count: 5);
+
+    var inbox = await _service.GetInboxAsync(userId, 5);
+
+    Assert.Equal(5, inbox.Items.Count);
+    Assert.False(inbox.HasMore);
+  }
+
   private async Task<List<UserNotification>> SeedAsync(Guid userId, int count)
   {
     var notifications = Enumerable.Range(1, count)

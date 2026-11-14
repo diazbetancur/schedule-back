@@ -45,6 +45,17 @@ public sealed class ServiceCatalogManagementServiceTests : IDisposable
         (general.Id, general.CategoryId, general.CategoryName, general.Name, general.PublicCode, general.IsActive));
   }
 
+  /// <summary>Same pattern as BUG-068/070: an omitted sort order used to move the category to position 0.</summary>
+  [Fact]
+  public async Task UpdateCategoryAsync_WithoutSortOrder_KeepsThePosition()
+  {
+    var category = await _catalog.CreateCategoryAsync(new ServiceCategoryCreateRequest("Uñas", 7));
+
+    var renamed = await _catalog.UpdateCategoryAsync(category.Id, new ServiceCategoryUpdateRequest("Uñas y manos"));
+
+    Assert.Equal(("Uñas y manos", 7), (renamed.Name, renamed.SortOrder));
+  }
+
   [Fact]
   public async Task Categories_HaveUniqueNames_IgnoringCaseAndSpaces()
   {
@@ -217,6 +228,23 @@ public sealed class ServiceCatalogManagementServiceTests : IDisposable
     Assert.DoesNotContain(await _catalog.GetGeneralServicesAsync(null), service => service.Id == beard.Id);
     var again = await _catalog.CreateGeneralServiceAsync(new GeneralServiceCreateRequest(Barberia, "Barba"));
     Assert.NotEqual(beard.PublicCode, again.PublicCode);
+  }
+
+  /// <summary>BUG-079: deleting a general service withdraws it from the professionals that offered it.</summary>
+  [Fact]
+  public async Task DeletingAGeneralService_RemovesItsOfferings()
+  {
+    var beard = await _catalog.CreateGeneralServiceAsync(new GeneralServiceCreateRequest(Barberia, "Barba"));
+    var user = new Barbershop.Domain.Users.User("Barbero", "barbero-offer@example.com", "hash", DateTime.UtcNow);
+    var staff = new Barbershop.Domain.Staff.StaffProfile(user.Id, "Barbero", 30, DateTime.UtcNow);
+    _dbContext.Users.Add(user);
+    _dbContext.StaffProfiles.Add(staff);
+    _dbContext.StaffServiceOfferings.Add(new Barbershop.Domain.Staff.StaffServiceOffering(staff.Id, beard.Id, 20, true, DateTime.UtcNow));
+    await _dbContext.SaveChangesAsync();
+
+    await _catalog.DeleteGeneralServiceAsync(beard.Id);
+
+    Assert.False(await _dbContext.StaffServiceOfferings.AnyAsync(offering => offering.GeneralServiceId == beard.Id));
   }
 
   [Fact]

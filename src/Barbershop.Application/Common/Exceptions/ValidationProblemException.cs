@@ -3,7 +3,7 @@ namespace Barbershop.Application.Common.Exceptions;
 public sealed class ValidationProblemException : Exception
 {
   public ValidationProblemException(IReadOnlyDictionary<string, string[]> errors)
-      : base("One or more validation errors occurred.")
+      : base("Hay datos que no son válidos. Revisa los campos marcados.")
   {
     Errors = errors;
   }

@@ -215,6 +215,21 @@ public sealed class AppointmentNotificationServiceTests : IDisposable
     Assert.StartsWith("Staff Display modificó tu cita.", call.Message.Body);
   }
 
+  /// <summary>BUG-115: a service or duration change never claims a new date.</summary>
+  [Fact]
+  public async Task NotifyCustomerOfAppointmentDetailsChangeAsync_SaysTheDateDoesNotChange()
+  {
+    var customer = await CreateUserAsync("customer6@example.com", "Customer Six", RoleNames.Customer);
+
+    await _service.NotifyCustomerOfAppointmentDetailsChangeAsync(
+        new AppointmentNotificationContext(Guid.NewGuid(), "Staff Display", customer.Id, "Customer Six", DateTime.UtcNow.AddDays(1)));
+
+    var call = Assert.Single(_dispatcher.Calls);
+    Assert.StartsWith("Staff Display cambió el servicio o la duración de tu cita del ", call.Message.Body);
+    Assert.EndsWith("La fecha y la hora no cambian.", call.Message.Body);
+    Assert.DoesNotContain("Nueva fecha", call.Message.Body);
+  }
+
   [Fact]
   public async Task NotifyCustomerOfAppointmentConfirmationAsync_TagsMessageWithAppointmentId()
   {

@@ -48,7 +48,7 @@ public sealed class ServiceManagementServiceTests : IDisposable
     var exception = await Assert.ThrowsAsync<ConflictException>(() =>
         _service.CreateAsync(new ServiceCreateRequest("  corte de cabello  ", 30000, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId)));
 
-    Assert.Equal("A service with this name already exists.", exception.Message);
+    Assert.Equal("Ya existe una tarifa con ese nombre.", exception.Message);
   }
 
   [Fact]
@@ -71,6 +71,18 @@ public sealed class ServiceManagementServiceTests : IDisposable
     Assert.Equal(15000, updated.BasePrice);
   }
 
+  /// <summary>Same pattern as BUG-068/070: an omitted business percentage used to reset the business share to 0.</summary>
+  [Fact]
+  public async Task UpdateAsync_WithoutBusinessPercentage_KeepsTheCurrentOne()
+  {
+    var created = await _service.CreateAsync(new ServiceCreateRequest("Cejas", 12000, 40, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
+
+    var updated = await _service.UpdateAsync(created.Id, new ServiceUpdateRequest("Cejas", 13000));
+
+    Assert.Equal(40, updated.BusinessPercentage);
+    Assert.Equal(13000, updated.BasePrice);
+  }
+
   [Fact]
   public async Task UpdateAsync_KeepingSameName_Succeeds()
   {
@@ -91,7 +103,7 @@ public sealed class ServiceManagementServiceTests : IDisposable
     var exception = await Assert.ThrowsAsync<ConflictException>(() =>
         _service.UpdateAsync(barba.Id, new ServiceUpdateRequest("corte", 15000)));
 
-    Assert.Equal("A service with this name already exists.", exception.Message);
+    Assert.Equal("Ya existe una tarifa con ese nombre.", exception.Message);
   }
 
   [Fact]

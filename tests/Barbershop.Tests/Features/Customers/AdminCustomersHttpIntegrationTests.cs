@@ -112,7 +112,7 @@ public sealed class AdminCustomersHttpIntegrationTests
     Assert.Equal(target.Id, Assert.Single(searchAfter!).Id);
 
     using var editMerged = await context.Client.PutAsJsonAsync(
-        $"/api/v1/admin/customers/{source.Id}", new CustomerUpdateRequest("Otro", "3001234567", "otro@example.com"));
+        $"/api/v1/admin/customers/{source.Id}", new CustomerUpdateRequest("Otro", "3001234567", "otro@example.com", sourceAfter.Version));
     Assert.Equal(HttpStatusCode.Conflict, editMerged.StatusCode);
   }
 

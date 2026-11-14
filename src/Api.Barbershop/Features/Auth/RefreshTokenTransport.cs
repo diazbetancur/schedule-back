@@ -70,13 +70,20 @@ internal static class RefreshTokenTransport
         }
     }
 
-    public static void SetCookie(HttpContext context, string refreshToken, int refreshTokenDays)
+    /// <param name="sessionExpiresAtUtc">
+    /// The session's absolute expiry (BUG-094). A refresh keeps it, so the cookie no longer gets a new window each time;
+    /// when unknown (default) it falls back to <paramref name="refreshTokenDays"/> from now.
+    /// </param>
+    public static void SetCookie(HttpContext context, string refreshToken, int refreshTokenDays, DateTime sessionExpiresAtUtc = default)
     {
         var options = BuildCookieOptions(context);
         // iOS WebKit (PWA standalone) requiere Expires explícito — Max-Age solo
         // hace que la cookie se trate como de sesión y se borre al cerrar la app.
-        var expiry = DateTimeOffset.UtcNow.AddDays(refreshTokenDays);
-        options.MaxAge = TimeSpan.FromDays(refreshTokenDays);
+        var now = DateTimeOffset.UtcNow;
+        var expiry = sessionExpiresAtUtc == default
+            ? now.AddDays(refreshTokenDays)
+            : new DateTimeOffset(DateTime.SpecifyKind(sessionExpiresAtUtc, DateTimeKind.Utc));
+        options.MaxAge = expiry > now ? expiry - now : TimeSpan.Zero;
         options.Expires = expiry;
         context.Response.Cookies.Append(CookieName, refreshToken, options);
     }

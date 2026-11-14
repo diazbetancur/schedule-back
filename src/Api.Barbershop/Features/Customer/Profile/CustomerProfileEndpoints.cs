@@ -119,7 +119,7 @@ public static class CustomerProfileEndpoints
         await service.ChangePasswordAsync(userId, request, cancellationToken);
 
         var session = await authService.IssueSessionAsync(userId, cancellationToken);
-        RefreshTokenTransport.SetCookie(httpContext, session.RefreshToken, jwtOptions.Value.RefreshTokenDays);
+        RefreshTokenTransport.SetCookie(httpContext, session.RefreshToken, jwtOptions.Value.RefreshTokenDays, session.RefreshTokenExpiresAtUtc);
         return Results.Ok(RefreshTokenTransport.ToApiResponse(session));
     }
 }

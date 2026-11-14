@@ -68,6 +68,19 @@ public sealed class AdminUsersServiceTests : IDisposable
     Assert.Equal("999888777", updated.PhoneNumber);
   }
 
+  /// <summary>BUG-075: editing name and phone used to reset the customer's birth date to null.</summary>
+  [Fact]
+  public async Task UpdateAsync_KeepsTheBirthDateTheCustomerEntered()
+  {
+    var user = await CreateUserAsync("birth@example.com");
+    user.UpdateCustomerProfile(user.FullName, null, new DateOnly(1990, 5, 20), DateTime.UtcNow);
+    await _dbContext.SaveChangesAsync();
+
+    await _service.UpdateAsync(user.Id, new AdminUserUpdateRequest("Juan Actualizado", "999888777"));
+
+    Assert.Equal(new DateOnly(1990, 5, 20), (await _dbContext.Users.AsNoTracking().SingleAsync(u => u.Id == user.Id)).DateOfBirth);
+  }
+
   // ── BUG-076: the platform always keeps an active administrator ──
 
   [Fact]

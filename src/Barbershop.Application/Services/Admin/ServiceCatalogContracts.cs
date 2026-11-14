@@ -16,7 +16,8 @@ public sealed record ServiceCategoryView(
 
 public sealed record ServiceCategoryCreateRequest(string Name, int SortOrder = 0);
 
-public sealed record ServiceCategoryUpdateRequest(string Name, int SortOrder = 0);
+/// <param name="SortOrder">Omitted: the current position is kept.</param>
+public sealed record ServiceCategoryUpdateRequest(string Name, int? SortOrder = null);
 
 public sealed record ServiceCategoryStatusUpdateRequest(bool IsActive);
 
@@ -37,7 +38,8 @@ public sealed record GeneralServiceView(
 
 public sealed record GeneralServiceCreateRequest(Guid CategoryId, string Name, string? Description = null, int SortOrder = 0);
 
-public sealed record GeneralServiceUpdateRequest(Guid CategoryId, string Name, string? Description = null, int SortOrder = 0);
+/// <param name="SortOrder">Omitted: the current position is kept.</param>
+public sealed record GeneralServiceUpdateRequest(Guid CategoryId, string Name, string? Description = null, int? SortOrder = null);
 
 public sealed record GeneralServiceStatusUpdateRequest(bool IsActive);
 

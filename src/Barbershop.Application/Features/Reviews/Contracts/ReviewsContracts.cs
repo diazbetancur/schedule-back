@@ -12,8 +12,8 @@ public sealed record CustomerReviewView(
     string? Comment,
     DateTime CreatedAtUtc);
 
+/// <summary>A public review: stars, comment and date only (BUG-041: never the id of the customer's appointment).</summary>
 public sealed record PublicStaffReviewView(
-    Guid AppointmentId,
     int Stars,
     string? Comment,
     DateTime CreatedAtUtc);

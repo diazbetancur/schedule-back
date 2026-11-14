@@ -24,7 +24,15 @@ public interface IAppointmentNotificationService
   /// <summary>The barber or an admin cancelled the appointment.</summary>
   Task NotifyStaffOfAppointmentCancelledAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default);
 
+  /// <summary>The date or time of the appointment changed (the message states the new one).</summary>
   Task NotifyCustomerOfAppointmentUpdateAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default);
+
+  /// <summary>
+  /// BUG-115: the date stayed but the service or the duration changed; the message never claims a new date. Edits that
+  /// only touch notes or contact data notify nobody.
+  /// </summary>
+  Task NotifyCustomerOfAppointmentDetailsChangeAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
+      => Task.CompletedTask;
 
   Task NotifyCustomerOfAppointmentCancellationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default);
 

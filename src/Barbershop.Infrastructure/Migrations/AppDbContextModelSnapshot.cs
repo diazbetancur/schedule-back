@@ -2878,6 +2878,10 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<int>("RecipientCount")
                         .HasColumnType("integer");
 
+                    b.Property<string>("RecipientsFingerprint")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<Guid>("SentByUserId")
                         .HasColumnType("uuid");
 

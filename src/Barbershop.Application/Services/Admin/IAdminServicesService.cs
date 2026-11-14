@@ -19,4 +19,7 @@ public interface IAdminServicesService
     Task<ServiceView> UpdateStatusAsync(Guid serviceId, ServiceStatusUpdateRequest request, CancellationToken cancellationToken = default);
 
     Task SoftDeleteAsync(Guid serviceId, CancellationToken cancellationToken = default);
+
+    /// <summary>Active plans and rewards that use the rate (BUG-103), to warn before deleting it.</summary>
+    Task<ServiceUsageView> GetUsageAsync(Guid serviceId, CancellationToken cancellationToken = default);
 }

@@ -66,6 +66,28 @@ public sealed class StaffOfferingManagementServiceTests : IDisposable
         Assert.Empty((await _service.GetAsync(_barber.Id)).Offerings);
     }
 
+    /// <summary>
+    /// BUG-079: an offering left behind by a general service deleted afterwards (data from before the fix) is not shown
+    /// and no longer blocks saving: it is dropped instead of answering 422 «El servicio general no existe».
+    /// </summary>
+    [Fact]
+    public async Task Replace_DropsAnOfferingWhoseGeneralServiceWasDeleted_InsteadOfBlockingTheSave()
+    {
+        var beard = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Barba");
+        await _service.ReplaceAsync(_barber.Id, Request((Corte, 30, true), (beard.Id, 20, true)));
+        beard.MarkDeleted(DateTime.UtcNow);
+        await _dbContext.SaveChangesAsync();
+
+        var shown = await _service.GetAsync(_barber.Id);
+        Assert.Equal([Corte], shown.Offerings.Select(offering => offering.GeneralServiceId));
+
+        // The admin's screen still had the orphan in its list and sends it back with a change to Corte.
+        var saved = await _service.ReplaceAsync(_barber.Id, Request((Corte, 45, true), (beard.Id, 20, true)));
+
+        Assert.Equal([(Corte, 45)], saved.Offerings.Select(offering => (offering.GeneralServiceId, offering.DurationMinutes)));
+        Assert.False(await _dbContext.StaffServiceOfferings.AnyAsync(offering => offering.GeneralServiceId == beard.Id));
+    }
+
     [Fact]
     public async Task Replace_ValidatesDurationsDuplicatesAndGeneralServices()
     {

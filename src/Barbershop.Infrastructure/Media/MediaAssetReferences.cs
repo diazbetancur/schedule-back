@@ -58,8 +58,9 @@ internal static class MediaAssetReferences
             return true;
         }
 
-        // Kept even on a logically deleted product, so restoring its row never points to a removed file.
-        if (await dbContext.Products.AsNoTracking().AnyAsync(product => product.ImageMediaAssetId == mediaAssetId, cancellationToken))
+        // BUG-099: a deleted product no longer holds its image (there is no way to restore a product), so the file can be
+        // archived; deleting the product archives it.
+        if (await dbContext.Products.AsNoTracking().AnyAsync(product => product.ImageMediaAssetId == mediaAssetId && !product.IsDeleted, cancellationToken))
         {
             return true;
         }

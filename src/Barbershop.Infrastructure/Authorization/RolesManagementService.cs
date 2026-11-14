@@ -54,7 +54,7 @@ internal sealed class RolesManagementService : IAdminRolesService
         var role = await LoadAsync(roleId, cancellationToken);
         if (role.IsSystemRole)
         {
-            throw new ConflictException("System roles cannot be edited.");
+            throw new ConflictException("Los roles del sistema no se pueden editar.");
         }
 
         ValidateName(request.Name);
@@ -86,7 +86,7 @@ internal sealed class RolesManagementService : IAdminRolesService
         var role = await LoadAsync(roleId, cancellationToken);
         if (role.IsSystemRole)
         {
-            throw new ConflictException("System roles cannot be deleted.");
+            throw new ConflictException("Los roles del sistema no se pueden eliminar.");
         }
 
         _dbContext.Roles.Remove(role);
@@ -107,7 +107,7 @@ internal sealed class RolesManagementService : IAdminRolesService
             .Include(role => role.RolePermissions)
             .ThenInclude(rolePermission => rolePermission.Permission)
             .SingleOrDefaultAsync(role => role.Id == roleId, cancellationToken)
-            ?? throw new NotFoundException("The role was not found.");
+            ?? throw new NotFoundException("No encontramos el rol.");
     }
 
     private async Task<List<Permission>> LoadPermissionsAsync(IReadOnlyList<Guid> permissionIds, CancellationToken cancellationToken)
@@ -126,7 +126,7 @@ internal sealed class RolesManagementService : IAdminRolesService
         {
             throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
-                ["permissionIds"] = ["One or more permission ids do not exist."]
+                ["permissionIds"] = ["Alguno de los permisos elegidos no existe."]
             });
         }
 
@@ -142,7 +142,7 @@ internal sealed class RolesManagementService : IAdminRolesService
 
         if (duplicateExists)
         {
-            throw new ConflictException("A role with this name already exists.");
+            throw new ConflictException("Ya existe un rol con ese nombre.");
         }
     }
 
@@ -152,7 +152,7 @@ internal sealed class RolesManagementService : IAdminRolesService
         {
             throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
-                ["name"] = [$"Name must be between {NameMinLength} and {NameMaxLength} characters."]
+                ["name"] = [$"El nombre debe tener entre {NameMinLength} y {NameMaxLength} caracteres."]
             });
         }
     }

@@ -509,7 +509,8 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
         return new ServiceRecordRelatedView(manualIncomes, otherRecords, consumptions, appointmentStatus);
     }
 
-    public async Task<IReadOnlyList<ServiceRecordCustomerOption>> SearchCustomersAsync(string? query, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ServiceRecordCustomerOption>> SearchCustomersAsync(
+        string? query, DateOnly? serviceDate = null, CancellationToken cancellationToken = default)
     {
         var customers = _dbContext.Customers.AsNoTracking().Where(customer => customer.MergedIntoCustomerId == null);
         var term = query?.Trim().ToLowerInvariant();
@@ -525,8 +526,11 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
             .Select(customer => new { customer.Id, customer.FullName, customer.Phone })
             .ToListAsync(cancellationToken);
         var ids = found.Select(customer => customer.Id).ToArray();
+        var validOn = serviceDate ?? Today();
         var memberships = await _dbContext.CustomerMemberships.AsNoTracking()
-            .Where(membership => ids.Contains(membership.CustomerId) && membership.Status == MembershipStatus.Active)
+            // BUG-085: active is not enough; the membership must be valid on the service date, as the ledger requires.
+            .Where(membership => ids.Contains(membership.CustomerId) && membership.Status == MembershipStatus.Active
+                && membership.StartsOn <= validOn && membership.EndsOn >= validOn)
             .OrderBy(membership => membership.EndsOn)
             .ToListAsync(cancellationToken);
 
@@ -664,11 +668,19 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 
+        // BUG-103: a deleted rate can still be used up by what was already sold or approved (a membership's uses or an
+        // approved loyalty redemption), as the membership's direct consumption already allowed; a new paid service
+        // needs a rate of the current catalog.
+        var consumesWhatWasSold = operationType is ServiceRecordOperationType.MembershipConsumption or ServiceRecordOperationType.LoyaltyReward;
         var service = await _dbContext.Services.AsNoTracking()
-            .SingleOrDefaultAsync(candidate => candidate.Id == request.ServiceId && !candidate.IsDeleted, cancellationToken);
+            .SingleOrDefaultAsync(candidate => candidate.Id == request.ServiceId, cancellationToken);
         if (service is null)
         {
             errors["serviceId"] = ["El servicio no existe en el catálogo."];
+        }
+        else if (service.IsDeleted && !consumesWhatWasSold)
+        {
+            errors["serviceId"] = ["Esta tarifa fue eliminada del catálogo. Elige una tarifa vigente."];
         }
 
         // ADR-0016 D12/F4: the confirmed general service (sent, or else the registered one; for an older record, the
@@ -1070,6 +1082,29 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                 .Where(customer => bookingUserIds.Contains(customer.UserId) && customer.MergedIntoCustomerId == null)
                 .ToDictionaryAsync(customer => customer.UserId!.Value, customer => new { customer.Id, customer.FullName }, cancellationToken);
 
+        // BUG-105: a pending record whose customer was merged keeps the origin id (history, ADR-0011); the live profile
+        // reached through MergedIntoCustomerId (the common resolver of ADR-0013) is suggested, the reviewer decides.
+        var mergedCustomerIds = records.Where(record => record.Status == ServiceRecordStatus.Pending && record.CustomerId is not null)
+            .Select(record => record.CustomerId!.Value)
+            .Distinct()
+            .ToArray();
+        mergedCustomerIds = mergedCustomerIds.Length == 0
+            ? []
+            : await _dbContext.Customers.AsNoTracking()
+                .Where(customer => mergedCustomerIds.Contains(customer.Id) && customer.MergedIntoCustomerId != null)
+                .Select(customer => customer.Id)
+                .ToArrayAsync(cancellationToken);
+        var liveProfiles = new Dictionary<Guid, (Guid Id, string FullName)>();
+        foreach (var mergedId in mergedCustomerIds)
+        {
+            var liveId = await _wallet.ResolveLiveCustomerIdAsync(mergedId, cancellationToken);
+            var liveName = await _dbContext.Customers.AsNoTracking()
+                .Where(customer => customer.Id == liveId)
+                .Select(customer => customer.FullName)
+                .SingleAsync(cancellationToken);
+            liveProfiles[mergedId] = (liveId, liveName);
+        }
+
         // Approved records marked to accrue: credited (original lot exists) or approved before the wallet existed.
         var accruingIds = records
             .Where(record => record.Status == ServiceRecordStatus.Approved && record.AccruesLoyaltyPoints)
@@ -1119,6 +1154,13 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                 && linkedProfiles.TryGetValue(bookingUserId, out var linked)
                     ? linked
                     : null;
+            if (suggestion is null
+                && record.Status == ServiceRecordStatus.Pending
+                && record.CustomerId is { } recordCustomerId
+                && liveProfiles.TryGetValue(recordCustomerId, out var live))
+            {
+                suggestion = new { live.Id, live.FullName };
+            }
 
             ServiceRecordApprovalView? approval = null;
             if (record.Status == ServiceRecordStatus.Approved)

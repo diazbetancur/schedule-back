@@ -2,6 +2,7 @@ using System.Net.Mail;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Customers.Admin;
+using Barbershop.Domain.Common;
 using Barbershop.Domain.Customers;
 using Barbershop.Domain.Memberships;
 using Barbershop.Domain.Users;
@@ -183,9 +184,27 @@ internal sealed class CustomerManagementService : IAdminCustomersService
 
     public async Task<CustomerDetailView> UpdateAsync(Guid customerId, CustomerUpdateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateDetails(request.FullName, request.Phone, request.Email);
-        var customer = await LoadLiveAsync(customerId, cancellationToken);
+        // BUG-061: the edit carries the version it was made on; a profile changed in between is not overwritten.
+        if (request.Version is null)
+        {
+            throw new ValidationProblemException(new Dictionary<string, string[]>
+            {
+                ["version"] = ["Falta la versión del cliente. Recarga la página e intenta de nuevo."]
+            });
+        }
 
+        var customer = await LoadLiveAsync(customerId, cancellationToken);
+        var keepsEmail = string.Equals(request.Email?.Trim(), customer.Email, StringComparison.OrdinalIgnoreCase);
+        ValidateDetails(request.FullName, request.Phone, request.Email, emailAlreadyStored: keepsEmail);
+
+        if (customer.Version != request.Version.Value)
+        {
+            throw new ConflictException(ConcurrencyConflictMessage);
+        }
+
+        // The row's xmin is compared on save too, so an edit committing between the read and this save still loses
+        // (SaveChangesAsync turns it into the same 409).
+        _dbContext.Entry(customer).Property(entity => entity.Version).OriginalValue = request.Version.Value;
         customer.UpdateDetails(request.FullName, request.Phone, request.Email, _timeProvider.GetUtcNow().UtcDateTime);
         await SaveChangesAsync(cancellationToken);
 
@@ -233,7 +252,7 @@ internal sealed class CustomerManagementService : IAdminCustomersService
 
             // Name and email come from the account as they are today; the phone can be typed when the account has none.
             var phone = string.IsNullOrWhiteSpace(request.Phone) ? user.PhoneNumber : request.Phone;
-            ValidateDetails(user.FullName, phone, user.Email);
+            ValidateDetails(user.FullName, phone, user.Email, emailAlreadyStored: true);
 
             var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
             var created = new CustomerProfile(user.FullName, phone!, user.Email, currentUserId, utcNow);
@@ -750,7 +769,8 @@ internal sealed class CustomerManagementService : IAdminCustomersService
             customer.MergedAt,
             customer.CreatedAt,
             customer.UpdatedAt,
-            eventViews);
+            eventViews,
+            customer.Version);
     }
 
     private async Task<Dictionary<Guid, User>> LoadUsersAsync(IEnumerable<Guid> userIds, CancellationToken cancellationToken)
@@ -813,7 +833,12 @@ internal sealed class CustomerManagementService : IAdminCustomersService
     }
 
     /// <summary>Same contact rules everywhere a profile's data is entered (also claims).</summary>
-    internal static void ValidateDetails(string? fullName, string? phone, string? email)
+    /// <param name="emailAlreadyStored">
+    /// The email is one the system already stores (copied from an account, or left unchanged in an edit): it keeps the
+    /// rule it was saved with. BUG-004/017 apply when an email is typed, so existing accounts are never invalidated
+    /// (rule applied at write time).
+    /// </param>
+    internal static void ValidateDetails(string? fullName, string? phone, string? email, bool emailAlreadyStored = false)
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 
@@ -827,9 +852,11 @@ internal sealed class CustomerManagementService : IAdminCustomersService
             errors["phone"] = [$"El teléfono es obligatorio y debe tener al menos {MinPhoneDigits} dígitos."];
         }
 
-        if (string.IsNullOrWhiteSpace(email) || email.Trim().Length > 256 || !MailAddress.TryCreate(email.Trim(), out _))
+        if (emailAlreadyStored
+            ? string.IsNullOrWhiteSpace(email) || email.Trim().Length > 256 || !MailAddress.TryCreate(email.Trim(), out _)
+            : !EmailRules.IsValid(email))
         {
-            errors["email"] = ["Ingresa un correo electrónico válido."];
+            errors["email"] = [EmailRules.InvalidMessage];
         }
 
         if (errors.Count > 0)

@@ -22,10 +22,10 @@ public sealed record ServiceView(
 // GeneralServiceId is required to create a rate; on update null keeps the current general service.
 
 public sealed record ServiceCreateRequest(
-    string Name, int BasePrice, int BusinessPercentage = 0, int? LoyaltyPoints = null, Guid? GeneralServiceId = null);
+    string Name, int BasePrice, int? BusinessPercentage = null, int? LoyaltyPoints = null, Guid? GeneralServiceId = null);
 
 public sealed record ServiceUpdateRequest(
-    string Name, int BasePrice, int BusinessPercentage = 0, int? LoyaltyPoints = null, Guid? GeneralServiceId = null);
+    string Name, int BasePrice, int? BusinessPercentage = null, int? LoyaltyPoints = null, Guid? GeneralServiceId = null);
 
 public sealed record ServiceStatusUpdateRequest(bool IsActive);
 
@@ -40,3 +40,9 @@ public sealed record ServiceListQuery(
     string? Status = null,
     int? Page = null,
     int? PageSize = null);
+
+/// <summary>
+/// What still points at a rate (BUG-103): the active membership plans that include it and the active loyalty rewards
+/// that deliver it. Shown before deleting it, so the admin knows those plans and rewards stop being sellable.
+/// </summary>
+public sealed record ServiceUsageView(IReadOnlyList<string> ActivePlans, IReadOnlyList<string> ActiveRewards);

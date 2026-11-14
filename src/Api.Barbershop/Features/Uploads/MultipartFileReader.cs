@@ -55,7 +55,7 @@ internal static class MultipartFileReader
 
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        [fieldName] = ["A file is required."]
+        [fieldName] = ["Selecciona un archivo."]
       });
     }
 
@@ -63,7 +63,7 @@ internal static class MultipartFileReader
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        [fieldName] = [$"File size must not exceed {maxBytes / 1024 / 1024} MB."]
+        [fieldName] = [$"El archivo no puede superar {maxBytes / 1024 / 1024} MB."]
       });
     }
 
@@ -96,7 +96,7 @@ internal static class MultipartFileReader
 
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        [fieldName] = ["A file is required."]
+        [fieldName] = ["Selecciona un archivo."]
       });
     }
 
@@ -104,7 +104,7 @@ internal static class MultipartFileReader
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        [fieldName] = [$"File size must not exceed {maxBytes / 1024 / 1024} MB."]
+        [fieldName] = [$"El archivo no puede superar {maxBytes / 1024 / 1024} MB."]
       });
     }
 

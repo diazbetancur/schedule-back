@@ -28,6 +28,7 @@ public sealed class StaffAppointmentsTests : IDisposable
     private static readonly DateTimeOffset CurrentUtc = new(2026, 1, 5, 15, 15, 0, TimeSpan.Zero);
 
     private readonly AppDbContext _dbContext;
+    private readonly NoOpAppointmentNotificationService _notifications = new();
     private readonly IAdminStaffService _adminStaffService;
     private readonly IAdminStaffAvailabilityService _adminStaffAvailabilityService;
     private readonly IStaffAppointmentsService _staffAppointmentsService;
@@ -62,7 +63,7 @@ public sealed class StaffAppointmentsTests : IDisposable
             null!);
 
         var availabilityManagementService = new AvailabilityManagementService(_dbContext, timeProvider);
-        var appointmentManagementService = new AppointmentManagementService(_dbContext, timeProvider, new NoOpAppointmentNotificationService());
+        var appointmentManagementService = new AppointmentManagementService(_dbContext, timeProvider, _notifications);
 
         _adminStaffService = staffManagementService;
         _adminStaffAvailabilityService = availabilityManagementService;
@@ -136,6 +137,25 @@ public sealed class StaffAppointmentsTests : IDisposable
                     "customer-b@example.com",
                     null,
                     "Reschedule")));
+    }
+
+    /// <summary>BUG-114: administration cancels the appointments of a deactivated professional and the customer is told.</summary>
+    [Fact]
+    public async Task AdminUpdateStatusAsync_CancelsAnAppointmentOfADeactivatedProfessional_AndNotifiesTheCustomer()
+    {
+        var staff = await CreateStaffAsync("disabled-staff@example.com", "Disabled Staff", "Disabled Staff");
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(nextDay.DayOfWeek, 9, 0, 12, 0)]);
+        var created = await _adminAppointmentsService.CreateAsync(new AdminManualAppointmentCreateRequest(
+            staff.StaffProfileId, ToUtc(nextDay, 9, 0), Corte, "Cliente Afectado", "cliente@example.com", "+573001234567", null));
+
+        await _adminStaffService.UpdateStatusAsync(staff.StaffProfileId, new StaffStatusUpdateRequest(false));
+
+        var cancelled = await _adminAppointmentsService.UpdateStatusAsync(
+            created.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Cancelled));
+
+        Assert.Equal(AppointmentStatus.Cancelled, cancelled.Status);
+        Assert.Equal(1, _notifications.CustomerCancellations);
     }
 
     [Fact]
@@ -353,6 +373,35 @@ public sealed class StaffAppointmentsTests : IDisposable
         Assert.Null(moved.ReservedDurationMinutes);
     }
 
+    /// <summary>BUG-115: «Nueva fecha» only when the date or time moved; a service change gets its own text; notes, none.</summary>
+    [Fact]
+    public async Task Update_NotifiesTheCustomerAccordingToWhatChanged()
+    {
+        var staff = await CreateStaffAsync("notice-staff@example.com", "Notice Staff", "Notice Staff");
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 13, 0)]);
+        var beard = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Barba");
+        await ServiceOfferingTestData.OfferAsync(_dbContext, staff.StaffProfileId, beard.Id, 20);
+        var created = await _adminAppointmentsService.CreateAsync(new AdminManualAppointmentCreateRequest(
+            staff.StaffProfileId, ToUtc(nextDay, 9, 0), Corte, "Cliente", "cliente@example.com", "+573001234567", null));
+
+        await _adminAppointmentsService.UpdateAsync(
+            created.Id, new AppointmentUpdateRequest(ToUtc(nextDay, 9, 0), "Cliente", "cliente@example.com", "+573001234567", "Solo una nota"));
+        Assert.Equal((0, 0), (_notifications.CustomerDateChanges, _notifications.CustomerDetailsChanges));
+
+        await _adminAppointmentsService.UpdateAsync(
+            created.Id, new AppointmentUpdateRequest(ToUtc(nextDay, 9, 0), "Cliente", "cliente@example.com", "+573001234567", "Solo una nota", beard.Id));
+        Assert.Equal((0, 1), (_notifications.CustomerDateChanges, _notifications.CustomerDetailsChanges));
+
+        await _adminAppointmentsService.UpdateAsync(
+            created.Id, new AppointmentUpdateRequest(ToUtc(nextDay, 9, 0), "Cliente", "cliente@example.com", "+573001234567", "Solo una nota", null, 45));
+        Assert.Equal((0, 2), (_notifications.CustomerDateChanges, _notifications.CustomerDetailsChanges));
+
+        await _adminAppointmentsService.UpdateAsync(
+            created.Id, new AppointmentUpdateRequest(ToUtc(nextDay, 11, 0), "Cliente", "cliente@example.com", "+573001234567", "Solo una nota"));
+        Assert.Equal((1, 2), (_notifications.CustomerDateChanges, _notifications.CustomerDetailsChanges));
+    }
+
     private static AvailabilityRuleRequest Rule(DayOfWeek dayOfWeek, int startHour, int startMinute, int endHour, int endMinute)
         => new((int)dayOfWeek, new TimeOnly(startHour, startMinute), new TimeOnly(endHour, endMinute), true);
 
@@ -406,9 +455,29 @@ public sealed class StaffAppointmentsTests : IDisposable
 
         public Task NotifyStaffOfAppointmentCancelledAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
-        public Task NotifyCustomerOfAppointmentUpdateAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public int CustomerDateChanges { get; private set; }
 
-        public Task NotifyCustomerOfAppointmentCancellationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public int CustomerDetailsChanges { get; private set; }
+
+        public Task NotifyCustomerOfAppointmentUpdateAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
+        {
+            CustomerDateChanges++;
+            return Task.CompletedTask;
+        }
+
+        public Task NotifyCustomerOfAppointmentDetailsChangeAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
+        {
+            CustomerDetailsChanges++;
+            return Task.CompletedTask;
+        }
+
+        public int CustomerCancellations { get; private set; }
+
+        public Task NotifyCustomerOfAppointmentCancellationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default)
+        {
+            CustomerCancellations++;
+            return Task.CompletedTask;
+        }
 
         public Task NotifyCustomerOfAppointmentConfirmationAsync(AppointmentNotificationContext context, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }

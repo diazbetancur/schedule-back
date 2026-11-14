@@ -37,11 +37,11 @@ internal sealed class PublicAvailabilityService : IPublicAvailabilityService
     var staffProfile = await _dbContext.StaffProfiles
         .Include(profile => profile.User)
         .SingleOrDefaultAsync(profile => profile.Id == staffProfileId, cancellationToken)
-        ?? throw new KeyNotFoundException("The staff profile was not found.");
+        ?? throw new KeyNotFoundException("No encontramos este profesional.");
 
     if (!staffProfile.IsActive || !staffProfile.User.IsActive)
     {
-      throw new KeyNotFoundException("The staff profile was not found.");
+      throw new KeyNotFoundException("No encontramos este profesional.");
     }
 
     var duration = durationMinutes ?? 0;
@@ -119,21 +119,21 @@ internal sealed class PublicAvailabilityService : IPublicAvailabilityService
 
     if (from == default)
     {
-      errors["from"] = ["From is required."];
+      errors["from"] = ["Indica la fecha inicial."];
     }
 
     if (to == default)
     {
-      errors["to"] = ["To is required."];
+      errors["to"] = ["Indica la fecha final."];
     }
 
     if (to < from)
     {
-      errors["to"] = ["To must be on or after From."];
+      errors["to"] = ["La fecha final no puede ser anterior a la inicial."];
     }
     else if (to.DayNumber - from.DayNumber > 30)
     {
-      errors["to"] = ["The availability range cannot exceed 31 days."];
+      errors["to"] = ["Consulta como máximo 31 días de disponibilidad a la vez."];
     }
 
     if (generalServiceId is null && durationMinutes is null)

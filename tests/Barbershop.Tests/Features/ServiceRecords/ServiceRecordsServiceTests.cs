@@ -1,3 +1,4 @@
+using Barbershop.Tests.Infrastructure;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Customers.Admin;
 using Barbershop.Application.Finance.Admin;
@@ -101,6 +102,70 @@ public sealed class ServiceRecordsServiceTests : IDisposable
     });
     Assert.Equal(["Corte", "Barba"], records.Select(record => record.ServiceName));
     Assert.Empty(await _dbContext.IncomeEntries.ToListAsync());
+  }
+
+  // ── SONDA lote G2 ──
+
+  /// <summary>
+  /// BUG-103: a rate deleted after a membership was sold is still used up through a service record (as the direct
+  /// consumption already allowed), while a new paid service and a new sale of the plan need a rate of the catalog.
+  /// </summary>
+  [Fact]
+  public async Task ADeletedRate_CanStillBeConsumedFromASoldMembership_ButNotChargedOrSoldAgain()
+  {
+    var (customer, membership) = await SellActiveMembershipAsync();
+
+    // Before deleting, the admin is told which active plans still include the rate.
+    var rates = new Barbershop.Infrastructure.Services.ServiceManagementService(
+        _dbContext, TimeProvider.System, new Barbershop.Infrastructure.Identity.NullCurrentUserAccessor());
+    Assert.Equal(["Oro"], (await rates.GetUsageAsync(_haircut.Id)).ActivePlans);
+    await rates.SoftDeleteAsync(_haircut.Id);
+
+    var consumed = (await RegisterAsync(serviceIds: [_haircut.Id])).Single();
+    var approved = await _service.ApproveAsync(_admin.Id, consumed.Id, Approve(
+        consumed, "MembershipConsumption", serviceId: _haircut.Id, customerId: customer.Id, membershipId: membership.Id));
+    Assert.Equal("Approved", approved.Status);
+
+    var paid = (await RegisterAsync(serviceIds: [_haircut.Id])).Single();
+    var refused = await Assert.ThrowsAsync<ValidationProblemException>(() => _service.ApproveAsync(_admin.Id, paid.Id, Approve(
+        paid, "Paid", chargedAmount: 25000, serviceId: _haircut.Id, customerId: customer.Id)));
+    Assert.Contains("eliminada", Assert.Single(refused.Errors["serviceId"]));
+
+    var sale = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+        _memberships.SellAsync(_admin.Id, customer.Id, new MembershipSaleRequest(membership.MembershipPlanId, _today, ActivateNow: true)));
+    Assert.Contains("fue eliminada", Assert.Single(sale.Errors["planId"]));
+  }
+
+  /// <summary>BUG-105: after a merge, the pending record keeps the origin profile and suggests the live one.</summary>
+  [Fact]
+  public async Task APendingRecordOfAMergedCustomer_SuggestsTheLiveProfile()
+  {
+    var origin = await CreateCustomerAsync("Cliente Origen", linkedUser: _customerUser);
+    var appointment = await CreateAppointmentAsync(_barber, AppointmentStatus.Confirmed, customerUser: _customerUser);
+    var record = (await RegisterAsync(appointmentId: appointment.Id, performedOn: null)).Single();
+    var survivor = await CreateCustomerAsync("Cliente Destino");
+
+    await ((Barbershop.Application.Customers.Admin.IAdminCustomersService)_customers).MergeWithPreviewAsync(_admin.Id, survivor.Id, origin.Id);
+
+    var reread = await _service.GetByIdAsync(record.Id);
+    Assert.Equal(origin.Id, reread.CustomerId); // history is not rewritten (ADR-0011)
+    Assert.Equal((survivor.Id, "Cliente Destino"), (reread.SuggestedCustomerId!.Value, reread.SuggestedCustomerName));
+
+    var approved = await _service.ApproveAsync(_admin.Id, record.Id, Approve(reread, "Paid", chargedAmount: 25000, customerId: survivor.Id));
+    Assert.Equal(survivor.Id, approved.Approval!.CustomerId);
+  }
+
+  /// <summary>BUG-085: only memberships valid on the service date are offered in the review.</summary>
+  [Fact]
+  public async Task CustomerOptions_OfferOnlyMembershipsValidOnTheServiceDate()
+  {
+    var (customer, membership) = await SellActiveMembershipAsync();
+
+    var onTheDay = await _service.SearchCustomersAsync("Dueño Membresía", _today);
+    var afterItEnds = await _service.SearchCustomersAsync("Dueño Membresía", membership.EndsOn.AddDays(1));
+
+    Assert.Equal([membership.Id], onTheDay.Single(option => option.Id == customer.Id).Memberships.Select(item => item.Id));
+    Assert.Empty(afterItEnds.Single(option => option.Id == customer.Id).Memberships);
   }
 
   [Fact]

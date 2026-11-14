@@ -35,7 +35,7 @@ internal sealed class ReportsQueryService : IAdminReportsService
         {
             throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
-                ["range"] = ["'from' must be on or before 'to'."],
+                ["range"] = ["La fecha inicial no puede ser posterior a la final."],
             });
         }
 

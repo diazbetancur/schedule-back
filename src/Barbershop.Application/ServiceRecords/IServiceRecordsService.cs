@@ -37,7 +37,9 @@ public interface IAdminServiceRecordsService
 
     Task<ServiceRecordRelatedView> GetRelatedAsync(Guid serviceRecordId, CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<ServiceRecordCustomerOption>> SearchCustomersAsync(string? query, CancellationToken cancellationToken = default);
+    /// <param name="serviceDate">BUG-085: only memberships valid on that date are offered (default: today in Bogota).</param>
+    Task<IReadOnlyList<ServiceRecordCustomerOption>> SearchCustomersAsync(
+        string? query, DateOnly? serviceDate = null, CancellationToken cancellationToken = default);
 
     /// <summary>Approved service redemptions of the customer (optionally for one service) waiting for delivery.</summary>
     Task<IReadOnlyList<ServiceRecordRedemptionOption>> GetRedemptionOptionsAsync(

@@ -54,13 +54,13 @@ internal sealed class ServiceCatalogManagementService : IAdminServiceCatalogServ
     public async Task<ServiceCategoryView> UpdateCategoryAsync(
         Guid categoryId, ServiceCategoryUpdateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateCategory(request.Name, request.SortOrder);
+        ValidateCategory(request.Name, request.SortOrder ?? 0);
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         await _dbContext.LockCategoryAsync(categoryId, cancellationToken);
         var category = await LoadCategoryAsync(categoryId, cancellationToken);
         await EnsureCategoryNameIsFreeAsync(request.Name, categoryId, cancellationToken);
 
-        category.Update(request.Name, request.SortOrder, UtcNow());
+        category.Update(request.Name, request.SortOrder ?? category.SortOrder, UtcNow());
         await _dbContext.SaveAndCommitAsync(transaction, cancellationToken);
         return await MapCategoryAsync(category, cancellationToken);
     }
@@ -155,7 +155,7 @@ internal sealed class ServiceCatalogManagementService : IAdminServiceCatalogServ
     public async Task<GeneralServiceView> UpdateGeneralServiceAsync(
         Guid generalServiceId, GeneralServiceUpdateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateGeneralService(request.CategoryId, request.Name, request.Description, request.SortOrder);
+        ValidateGeneralService(request.CategoryId, request.Name, request.Description, request.SortOrder ?? 0);
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         // Category before general service (the global order); the target is locked even if it does not change.
         await _dbContext.ShareCategoryAsync(request.CategoryId, cancellationToken);
@@ -169,7 +169,7 @@ internal sealed class ServiceCatalogManagementService : IAdminServiceCatalogServ
         // Checked in the target category, so moving a service where an equivalent name lives is a conflict too.
         await EnsureGeneralServiceNameIsFreeAsync(request.CategoryId, request.Name, generalServiceId, cancellationToken);
 
-        service.Update(request.CategoryId, request.Name, NormalizeDescription(request.Description), request.SortOrder, UtcNow());
+        service.Update(request.CategoryId, request.Name, NormalizeDescription(request.Description), request.SortOrder ?? service.SortOrder, UtcNow());
         await _dbContext.SaveAndCommitAsync(transaction, cancellationToken);
         return await MapGeneralServiceAsync(service, cancellationToken);
     }
@@ -226,6 +226,15 @@ internal sealed class ServiceCatalogManagementService : IAdminServiceCatalogServ
         }
 
         service.MarkDeleted(UtcNow());
+
+        // BUG-079: the professionals stop offering it. Appointments keep their own copy of the service and duration
+        // (ADR-0016 D11), so nothing references an offering. Blocking the deletion while there are offerings or future
+        // appointments is a pending business decision; it is not enforced here.
+        var offerings = await _dbContext.StaffServiceOfferings
+            .Where(offering => offering.GeneralServiceId == generalServiceId)
+            .ToListAsync(cancellationToken);
+        _dbContext.StaffServiceOfferings.RemoveRange(offerings);
+
         await _dbContext.SaveAndCommitAsync(transaction, cancellationToken);
     }
 
@@ -241,7 +250,7 @@ internal sealed class ServiceCatalogManagementService : IAdminServiceCatalogServ
                 .Where(service => service.Id == generalServiceId && !service.IsDeleted)
                 .Select(service => (Guid?)service.CategoryId)
                 .SingleOrDefaultAsync(cancellationToken)
-                ?? throw new KeyNotFoundException("The general service was not found.");
+                ?? throw new KeyNotFoundException("No encontramos el servicio general.");
 
             await _dbContext.ShareCategoryAsync(categoryId, cancellationToken);
             await _dbContext.LockGeneralServiceAsync(generalServiceId, cancellationToken);
@@ -261,12 +270,12 @@ internal sealed class ServiceCatalogManagementService : IAdminServiceCatalogServ
     private async Task<ServiceCategory> LoadCategoryAsync(Guid categoryId, CancellationToken cancellationToken)
         => await _dbContext.ServiceCategories
                .SingleOrDefaultAsync(category => category.Id == categoryId && !category.IsDeleted, cancellationToken)
-           ?? throw new KeyNotFoundException("The service category was not found.");
+           ?? throw new KeyNotFoundException("No encontramos la categoría de servicios.");
 
     private async Task<GeneralService> LoadGeneralServiceAsync(Guid generalServiceId, CancellationToken cancellationToken)
         => await _dbContext.GeneralServices
                .SingleOrDefaultAsync(service => service.Id == generalServiceId && !service.IsDeleted, cancellationToken)
-           ?? throw new KeyNotFoundException("The general service was not found.");
+           ?? throw new KeyNotFoundException("No encontramos el servicio general.");
 
     /// <summary>Read under the caller's lock on the category, so it reflects any committed deactivation or deletion.</summary>
     private async Task EnsureCategoryCanReceiveAsync(Guid categoryId, CancellationToken cancellationToken)

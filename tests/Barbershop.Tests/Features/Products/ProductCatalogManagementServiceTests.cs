@@ -184,6 +184,23 @@ public sealed class ProductCatalogManagementServiceTests : IDisposable
 
   // ── Image ─────────────────────────────────────────────────────────────────
 
+  /// <summary>BUG-099: a deleted product releases its image: it is archived and is no longer «in use».</summary>
+  [Fact]
+  public async Task DeletingAProduct_ReleasesAndArchivesItsImage()
+  {
+    var waxes = await _catalog.CreateCategoryAsync(new ProductCategoryCreateRequest("Ceras", 1));
+    var wax = await _catalog.CreateProductAsync(new ProductCreateRequest(waxes.Id, "Cera brillo", 30000));
+    var withImage = await _catalog.UploadProductImageAsync(wax.Id, _adminId, Image("brillo.png"));
+    var imageId = withImage.ImageMediaAssetId!.Value;
+
+    await _catalog.DeleteProductAsync(wax.Id);
+
+    var image = await _dbContext.MediaAssets.AsNoTracking().SingleAsync(asset => asset.Id == imageId);
+    Assert.Equal(MediaAssetStatus.Archived, image.Status);
+    Assert.Contains(image.StorageKey, _storage.Deleted);
+    Assert.False(await Barbershop.Infrastructure.Media.MediaAssetReferences.IsReferencedAsync(_dbContext, imageId, CancellationToken.None));
+  }
+
   [Fact]
   public async Task TheImage_IsUploadedAsAProductImage_ReplacedAndRemoved_ArchivingTheOldFile()
   {

@@ -59,7 +59,7 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
             name, description, kind, request.ServiceId, request.PointsCost, currentUserId, _timeProvider.GetUtcNow().UtcDateTime);
         _dbContext.LoyaltyRewards.Add(reward);
         _dbContext.LoyaltyRewardChanges.Add(reward.CreationChange());
-        if (!request.IsActive
+        if (request.IsActive is false
             && reward.Update(name, description, kind, request.ServiceId, request.PointsCost, false, currentUserId, reward.CreatedAt) is { } deactivation)
         {
             _dbContext.LoyaltyRewardChanges.Add(deactivation);
@@ -82,7 +82,7 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
 
         // Requests keep their own copy of name, kind, service and cost: nothing here changes them.
         var change = reward.Update(
-            name, description, kind, request.ServiceId, request.PointsCost, request.IsActive, currentUserId, _timeProvider.GetUtcNow().UtcDateTime);
+            name, description, kind, request.ServiceId, request.PointsCost, request.IsActive ?? reward.IsActive, currentUserId, _timeProvider.GetUtcNow().UtcDateTime);
         if (change is not null)
         {
             _dbContext.Entry(reward).Property(x => x.Version).OriginalValue = request.Version.Value;

@@ -87,7 +87,7 @@ internal sealed class ExpenseManagementService : IAdminExpensesService
             {
                 throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
                 {
-                    ["fixedExpenseId"] = ["The selected fixed expense does not exist."],
+                    ["fixedExpenseId"] = ["El gasto fijo elegido no existe."],
                 });
             }
 
@@ -98,7 +98,7 @@ internal sealed class ExpenseManagementService : IAdminExpensesService
         {
             throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
-                ["name"] = [$"Name must be between {NameMinLength} and {NameMaxLength} characters."],
+                ["name"] = [$"El nombre debe tener entre {NameMinLength} y {NameMaxLength} caracteres."],
             });
         }
 
@@ -111,12 +111,12 @@ internal sealed class ExpenseManagementService : IAdminExpensesService
 
         if (amount < 0)
         {
-            errors["amount"] = ["Amount must be zero or greater."];
+            errors["amount"] = ["El valor debe ser cero o mayor."];
         }
 
         if (occurredOn > Today())
         {
-            errors["occurredOn"] = ["OccurredOn cannot be in the future."];
+            errors["occurredOn"] = ["La fecha no puede ser futura."];
         }
 
         if (errors.Count > 0)
@@ -129,7 +129,7 @@ internal sealed class ExpenseManagementService : IAdminExpensesService
     {
         return await _dbContext.ExpenseEntries
             .SingleOrDefaultAsync(entry => entry.Id == expenseEntryId && !entry.IsDeleted, cancellationToken)
-            ?? throw new KeyNotFoundException("The expense entry was not found.");
+            ?? throw new KeyNotFoundException("No encontramos el gasto.");
     }
 
     private static ExpenseEntryView Map(ExpenseEntry entry)

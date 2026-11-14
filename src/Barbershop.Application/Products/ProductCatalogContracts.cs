@@ -18,7 +18,8 @@ public sealed record ProductCategoryView(
 
 public sealed record ProductCategoryCreateRequest(string Name, int SortOrder = 0);
 
-public sealed record ProductCategoryUpdateRequest(string Name, int SortOrder = 0);
+/// <param name="SortOrder">Omitted: the current position is kept.</param>
+public sealed record ProductCategoryUpdateRequest(string Name, int? SortOrder = null);
 
 public sealed record ProductCategoryStatusUpdateRequest(bool IsActive);
 
@@ -42,7 +43,8 @@ public sealed record ProductView(
 public sealed record ProductCreateRequest(Guid CategoryId, string Name, int? Price, string? Description = null, int SortOrder = 0);
 
 /// <summary>The price is nullable only so that a request without it is a validation error instead of a free product.</summary>
-public sealed record ProductUpdateRequest(Guid CategoryId, string Name, int? Price, string? Description = null, int SortOrder = 0);
+/// <param name="SortOrder">Omitted: the current position is kept.</param>
+public sealed record ProductUpdateRequest(Guid CategoryId, string Name, int? Price, string? Description = null, int? SortOrder = null);
 
 public sealed record ProductStatusUpdateRequest(bool IsActive);
 

@@ -7,6 +7,7 @@ using Barbershop.Domain.Media;
 using Barbershop.Domain.Products;
 using Barbershop.Domain.Services;
 using Barbershop.Domain.Users;
+using Barbershop.Infrastructure.Media;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -66,13 +67,13 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
     public async Task<ProductCategoryView> UpdateCategoryAsync(
         Guid categoryId, ProductCategoryUpdateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateCategory(request.Name, request.SortOrder);
+        ValidateCategory(request.Name, request.SortOrder ?? 0);
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         await _dbContext.LockProductCategoryAsync(categoryId, cancellationToken);
         var category = await LoadCategoryAsync(categoryId, cancellationToken);
         await EnsureCategoryNameIsFreeAsync(request.Name, categoryId, cancellationToken);
 
-        category.Update(request.Name, request.SortOrder, UtcNow());
+        category.Update(request.Name, request.SortOrder ?? category.SortOrder, UtcNow());
         await _dbContext.SaveProductCatalogAndCommitAsync(transaction, cancellationToken);
         return await MapCategoryAsync(category, cancellationToken);
     }
@@ -185,7 +186,7 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
 
     public async Task<ProductView> UpdateProductAsync(Guid productId, ProductUpdateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateProduct(request.CategoryId, request.Name, request.Description, request.Price, request.SortOrder);
+        ValidateProduct(request.CategoryId, request.Name, request.Description, request.Price, request.SortOrder ?? 0);
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         // Category before product (the global order); the target is locked even if it does not change.
         await _dbContext.ShareProductCategoryAsync(request.CategoryId, cancellationToken);
@@ -200,7 +201,7 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
         await EnsureProductNameIsFreeAsync(request.CategoryId, request.Name, productId, cancellationToken);
 
         product.Update(
-            request.CategoryId, request.Name, NormalizeDescription(request.Description), request.Price!.Value, request.SortOrder, UtcNow());
+            request.CategoryId, request.Name, NormalizeDescription(request.Description), request.Price!.Value, request.SortOrder ?? product.SortOrder, UtcNow());
         await _dbContext.SaveProductCatalogAndCommitAsync(transaction, cancellationToken);
         return await MapProductAsync(product, cancellationToken);
     }
@@ -240,8 +241,17 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
         await _dbContext.LockProductAsync(productId, cancellationToken);
         var product = await LoadProductAsync(productId, cancellationToken);
+        var imageId = product.ImageMediaAssetId;
         product.MarkDeleted(UtcNow());
         await _dbContext.SaveProductCatalogAndCommitAsync(transaction, cancellationToken);
+
+        // BUG-099: the image of a deleted product is released (no longer a reference) and archived, like a replaced one,
+        // unless something else still uses it.
+        if (imageId is { } releasedImage
+            && !await MediaAssetReferences.IsReferencedAsync(_dbContext, releasedImage, cancellationToken))
+        {
+            await TryArchiveMediaAssetAsync(releasedImage, "Product deleted", cancellationToken);
+        }
     }
 
     // ── Product image ─────────────────────────────────────────────────────────
@@ -252,7 +262,7 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
         // Fail before storing anything when the product does not exist.
         if (!await _dbContext.Products.AsNoTracking().AnyAsync(product => product.Id == productId && !product.IsDeleted, cancellationToken))
         {
-            throw new KeyNotFoundException("The product was not found.");
+            throw new KeyNotFoundException("No encontramos el producto.");
         }
 
         var media = await _mediaAssetsService.UploadAsync(
@@ -275,13 +285,13 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
         catch (KeyNotFoundException)
         {
             // Deleted while the file was uploading: the new file is not referenced by anything.
-            await TryArchiveMediaAssetAsync(media.Id, "Product deleted while its image was uploading", cancellationToken);
+            await TryArchiveMediaAssetAsync(media.Id, "Producto eliminado mientras se subía su imagen", cancellationToken);
             throw;
         }
 
         if (previousImageId is { } previous && previous != media.Id)
         {
-            await TryArchiveMediaAssetAsync(previous, "Replaced by a new product image", cancellationToken);
+            await TryArchiveMediaAssetAsync(previous, "Reemplazada por una nueva imagen del producto", cancellationToken);
         }
 
         return await MapProductAsync(product, cancellationToken);
@@ -305,7 +315,7 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
             await _dbContext.SaveProductCatalogAndCommitAsync(transaction, cancellationToken);
         }
 
-        await TryArchiveMediaAssetAsync(previousImageId.Value, "Removed by admin from the product", cancellationToken);
+        await TryArchiveMediaAssetAsync(previousImageId.Value, "Quitada del producto por el administrador", cancellationToken);
         return await MapProductAsync(product, cancellationToken);
     }
 
@@ -321,7 +331,7 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
                 .Where(product => product.Id == productId && !product.IsDeleted)
                 .Select(product => (Guid?)product.CategoryId)
                 .SingleOrDefaultAsync(cancellationToken)
-                ?? throw new KeyNotFoundException("The product was not found.");
+                ?? throw new KeyNotFoundException("No encontramos el producto.");
 
             await _dbContext.ShareProductCategoryAsync(categoryId, cancellationToken);
             await _dbContext.LockProductAsync(productId, cancellationToken);
@@ -341,12 +351,12 @@ internal sealed class ProductCatalogManagementService : IAdminProductCatalogServ
     private async Task<ProductCategory> LoadCategoryAsync(Guid categoryId, CancellationToken cancellationToken)
         => await _dbContext.ProductCategories
                .SingleOrDefaultAsync(category => category.Id == categoryId && !category.IsDeleted, cancellationToken)
-           ?? throw new KeyNotFoundException("The product category was not found.");
+           ?? throw new KeyNotFoundException("No encontramos la categoría de productos.");
 
     private async Task<Product> LoadProductAsync(Guid productId, CancellationToken cancellationToken)
         => await _dbContext.Products
                .SingleOrDefaultAsync(product => product.Id == productId && !product.IsDeleted, cancellationToken)
-           ?? throw new KeyNotFoundException("The product was not found.");
+           ?? throw new KeyNotFoundException("No encontramos el producto.");
 
     /// <summary>Read under the caller's lock on the category, so it reflects any committed deactivation or deletion.</summary>
     private async Task EnsureCategoryCanReceiveAsync(Guid categoryId, CancellationToken cancellationToken)

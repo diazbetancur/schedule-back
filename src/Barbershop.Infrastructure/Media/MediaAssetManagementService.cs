@@ -165,7 +165,7 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
           mediaAsset.Purpose,
           mediaAsset.ContentType);
 
-      throw new ServiceUnavailableException("The media storage service is temporarily unavailable.", exception);
+      throw new ServiceUnavailableException("El almacenamiento de archivos no está disponible en este momento. Inténtalo de nuevo en unos minutos.", exception);
     }
   }
 
@@ -194,7 +194,7 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
         await buffer.DisposeAsync();
         throw new ValidationProblemException(new Dictionary<string, string[]>
         {
-          ["sizeBytes"] = [$"SizeBytes must be less than or equal to {maxBytes} bytes."]
+          ["sizeBytes"] = [$"El archivo es demasiado grande."]
         });
       }
 
@@ -267,7 +267,7 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     var mediaAsset = await _dbContext.MediaAssets
         .AsNoTracking()
         .SingleOrDefaultAsync(asset => asset.Id == mediaAssetId, cancellationToken)
-        ?? throw new KeyNotFoundException("The media asset was not found.");
+        ?? throw new KeyNotFoundException("No encontramos el archivo.");
 
     return Map(mediaAsset);
   }
@@ -290,7 +290,7 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
   {
     var mediaAsset = await _dbContext.MediaAssets
         .SingleOrDefaultAsync(asset => asset.Id == mediaAssetId, cancellationToken)
-        ?? throw new KeyNotFoundException("The media asset was not found.");
+        ?? throw new KeyNotFoundException("No encontramos el archivo.");
 
     if (mediaAsset.Status is MediaAssetStatus.Archived)
     {
@@ -301,7 +301,7 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["mediaAssetId"] = ["Only ready media assets can be deleted."]
+        ["mediaAssetId"] = ["Este archivo todavía se está procesando y no se puede archivar."]
       });
     }
 
@@ -309,7 +309,7 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["mediaAssetId"] = ["The media asset is currently in use and cannot be deleted."]
+        ["mediaAssetId"] = ["Este archivo está en uso y no se puede archivar. Quítalo primero de donde se usa."]
       });
     }
 
@@ -319,7 +319,7 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     }
     catch (Exception exception) when (exception is not OperationCanceledException)
     {
-      throw new ServiceUnavailableException($"Unable to delete media from storage: {exception.Message}");
+      throw new ServiceUnavailableException("No pudimos eliminar el archivo del almacenamiento. Inténtalo de nuevo en unos minutos.");
     }
 
     mediaAsset.Archive(_timeProvider.GetUtcNow().UtcDateTime);
@@ -336,30 +336,30 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
 
     if (currentUserId == Guid.Empty)
     {
-      errors["userId"] = ["CurrentUserId is required."];
+      errors["userId"] = ["Inicia sesión de nuevo."];
     }
 
     if (request.Content is null)
     {
-      errors["file"] = ["A file stream is required."];
+      errors["file"] = ["Selecciona un archivo."];
     }
 
     if (string.IsNullOrWhiteSpace(request.FileName) || request.FileName.Trim().Length > 260)
     {
-      errors["fileName"] = ["FileName must be between 1 and 260 characters."];
+      errors["fileName"] = ["El nombre del archivo debe tener entre 1 y 260 caracteres."];
     }
     else if (IsDangerousFileName(request.FileName))
     {
-      errors["fileName"] = ["FileName contains dangerous characters or extension."];
+      errors["fileName"] = ["El nombre o la extensión del archivo no están permitidos."];
     }
 
     if (request.SizeBytes <= 0)
     {
-      errors["sizeBytes"] = ["SizeBytes must be greater than zero."];
+      errors["sizeBytes"] = ["El archivo está vacío."];
     }
     else if (request.SizeBytes > _fileStorageOptions.MaxUploadBytes)
     {
-      errors["sizeBytes"] = [$"SizeBytes must be less than or equal to {_fileStorageOptions.MaxUploadBytes} bytes."];
+      errors["sizeBytes"] = [$"El archivo es demasiado grande."];
     }
 
     var normalizedContentType = NormalizeContentType(request.ContentType);
@@ -369,7 +369,7 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     }
     else if (string.IsNullOrWhiteSpace(normalizedContentType))
     {
-      errors["contentType"] = ["ContentType is required."];
+      errors["contentType"] = ["No pudimos reconocer el tipo de archivo."];
     }
     else
     {
@@ -390,7 +390,7 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     }
     else if (!CanUploadPurpose(roles, request.Purpose))
     {
-      errors["purpose"] = ["The current role is not allowed to upload this media purpose."];
+      errors["purpose"] = ["Tu rol no puede subir este tipo de archivo."];
     }
 
     ThrowIfAnyErrors(errors);
@@ -492,7 +492,7 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
 
     if (!exists)
     {
-      throw new KeyNotFoundException("The current user was not found.");
+      throw new KeyNotFoundException("No encontramos tu usuario. Inicia sesión de nuevo.");
     }
   }
 
@@ -611,7 +611,7 @@ internal sealed class MediaAssetManagementService : IMediaAssetsService
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["mediaAssetId"] = ["MediaAssetId is required."]
+        ["mediaAssetId"] = ["Falta el archivo."]
       });
     }
   }

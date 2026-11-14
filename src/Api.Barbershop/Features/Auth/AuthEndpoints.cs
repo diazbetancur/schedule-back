@@ -71,7 +71,7 @@ public static class AuthEndpoints
         CancellationToken cancellationToken)
     {
         var response = await authService.RegisterAsync(request, cancellationToken);
-        RefreshTokenTransport.SetCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays);
+        RefreshTokenTransport.SetCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays, response.RefreshTokenExpiresAtUtc);
         return Results.Json(RefreshTokenTransport.ToApiResponse(response), statusCode: StatusCodes.Status201Created);
     }
 
@@ -83,7 +83,7 @@ public static class AuthEndpoints
         CancellationToken cancellationToken)
     {
         var response = await authService.LoginAsync(request, cancellationToken);
-        RefreshTokenTransport.SetCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays);
+        RefreshTokenTransport.SetCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays, response.RefreshTokenExpiresAtUtc);
         return Results.Ok(RefreshTokenTransport.ToApiResponse(response));
     }
 
@@ -103,7 +103,7 @@ public static class AuthEndpoints
             var body = await RefreshTokenTransport.ReadBodyAsync(httpContext.Request, cancellationToken);
             if (body.IsMalformed)
             {
-                throw new ArgumentException("The request body must be JSON like {\"refreshToken\": \"...\"}.");
+                throw new ArgumentException("La solicitud debe incluir el token de sesión en el formato esperado.");
             }
 
             refreshToken = body.Token;
@@ -115,7 +115,7 @@ public static class AuthEndpoints
         }
 
         var response = await authService.RefreshAsync(new RefreshRequest(refreshToken), cancellationToken);
-        RefreshTokenTransport.SetCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays);
+        RefreshTokenTransport.SetCookie(httpContext, response.RefreshToken, jwtOptions.Value.RefreshTokenDays, response.RefreshTokenExpiresAtUtc);
         return Results.Ok(RefreshTokenTransport.ToApiResponse(response));
     }
 

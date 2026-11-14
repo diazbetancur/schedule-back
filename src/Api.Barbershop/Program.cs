@@ -79,12 +79,15 @@ forwardedHeadersOptions.KnownProxies.Clear();
 app.UseForwardedHeaders(forwardedHeadersOptions);
 
 app.UseMiddleware<CorrelationIdMiddleware>();
+// BUG-101: no-store by default (personal data, errors); short public caching for anonymous public content.
+app.UseMiddleware<CacheControlMiddleware>();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseCors(CorsOptions.PolicyName);
-app.UseRateLimiter();
 app.UseAuthentication();
+// BUG-112: after authentication so the notification limits can be counted per signed-in user (the auth limits stay per IP).
+app.UseRateLimiter();
 app.UseAuthorization();
 
 if (app.Environment.IsDevelopment())
@@ -93,7 +96,8 @@ if (app.Environment.IsDevelopment())
 }
 
 var appOptions = app.Services.GetRequiredService<IOptions<AppOptions>>().Value;
-var api = app.MapGroup(appOptions.ApiBasePath);
+// BUG-039 / BUG-040: NUL characters and out-of-range dates are rejected once for every endpoint.
+var api = app.MapGroup(appOptions.ApiBasePath).AddEndpointFilterFactory(InputValueGuard.Create);
 api.MapAuthEndpoints();
 api.MapCustomerAppointmentsEndpoints();
 api.MapCustomerProfileEndpoints();

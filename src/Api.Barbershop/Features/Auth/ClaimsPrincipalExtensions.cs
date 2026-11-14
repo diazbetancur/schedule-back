@@ -10,7 +10,7 @@ internal static class ClaimsPrincipalExtensions
   {
     if (!principal.TryGetUserId(out var userId))
     {
-      throw new UnauthorizedException("The current access token is invalid.");
+      throw new UnauthorizedException("Tu sesión no es válida. Inicia sesión de nuevo.");
     }
 
     return userId;

@@ -111,7 +111,7 @@ internal sealed class PushSubscriptionService : IPushSubscriptionService
         || !Uri.TryCreate(request.Endpoint.Trim(), UriKind.Absolute, out var endpointUri)
         || endpointUri.Scheme != Uri.UriSchemeHttps)
     {
-      errors["endpoint"] = ["Endpoint must be an absolute HTTPS URL."];
+      errors["endpoint"] = ["La suscripción de notificaciones de este dispositivo no es válida."];
     }
     else if (!PushEndpointPolicy.IsAllowed(request.Endpoint))
     {
@@ -121,12 +121,12 @@ internal sealed class PushSubscriptionService : IPushSubscriptionService
 
     if (string.IsNullOrWhiteSpace(request.P256dhKey))
     {
-      errors["p256dhKey"] = ["P256dhKey is required."];
+      errors["p256dhKey"] = ["Faltan las claves de la suscripción de notificaciones."];
     }
 
     if (string.IsNullOrWhiteSpace(request.AuthKey))
     {
-      errors["authKey"] = ["AuthKey is required."];
+      errors["authKey"] = ["Faltan las claves de la suscripción de notificaciones."];
     }
 
     if (errors.Count > 0)

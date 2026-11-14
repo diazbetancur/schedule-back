@@ -106,8 +106,8 @@ public static class AdminServiceRecordsEndpoints
         => service.GetOptionsAsync(cancellationToken);
 
     private static Task<IReadOnlyList<ServiceRecordCustomerOption>> SearchCustomersAsync(
-        string? q, IAdminServiceRecordsService service, CancellationToken cancellationToken)
-        => service.SearchCustomersAsync(q, cancellationToken);
+        string? q, DateOnly? serviceDate, IAdminServiceRecordsService service, CancellationToken cancellationToken)
+        => service.SearchCustomersAsync(q, serviceDate, cancellationToken);
 
     // Same checks and creation as /admin/customers; the answer is reduced (ServiceRecordCustomerPrivacy) because
     // approvers may not have the Admin role.

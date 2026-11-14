@@ -13,7 +13,7 @@ namespace Barbershop.Infrastructure.Landing;
 
 internal sealed partial class ContentManagementService : IPublicContentService, IAdminContentService
 {
-  private const string DefaultHeroTitle = "Reserva tu proximo turno";
+  private const string DefaultHeroTitle = "Reserva tu próximo turno";
   private const string DefaultAppName = "Barbershop";
   private const string DefaultPrimaryColor = "#111111";
   private const string DefaultSecondaryColor = "#C59D5F";
@@ -94,7 +94,7 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
     ArgumentNullException.ThrowIfNull(request);
 
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-    ValidateRequiredText(request.HeroTitle, "heroTitle", 2, 200, errors, "HeroTitle is required and must be between 2 and 200 characters.");
+    ValidateRequiredText(request.HeroTitle, "heroTitle", 2, 200, errors, "El título principal es obligatorio y debe tener entre 2 y 200 caracteres.");
     ValidateMapsUrl(request.MapsUrl, errors);
     ThrowIfAnyValidationErrors(errors);
 
@@ -146,14 +146,14 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["bannerId"] = ["BannerId is required."]
+        ["bannerId"] = ["Falta el banner."]
       });
     }
 
     var banner = await _dbContext.Banners
         .AsNoTracking()
         .SingleOrDefaultAsync(candidate => candidate.Id == bannerId, cancellationToken)
-        ?? throw new KeyNotFoundException("The banner was not found.");
+        ?? throw new KeyNotFoundException("No encontramos el banner.");
 
     var mediaUrls = await LoadMediaUrlsAsync([banner.ImageMediaAssetId], cancellationToken);
     return MapBanner(banner, mediaUrls);
@@ -220,7 +220,7 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["bannerId"] = ["BannerId is required."]
+        ["bannerId"] = ["Falta el banner."]
       });
     }
 
@@ -234,7 +234,7 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
 
       var existing = await _dbContext.Banners
           .SingleOrDefaultAsync(candidate => candidate.Id == bannerId, cancellationToken)
-          ?? throw new KeyNotFoundException("The banner was not found.");
+          ?? throw new KeyNotFoundException("No encontramos el banner.");
 
       await ValidateMediaAssetReferenceAsync(request.ImageMediaAssetId, MediaAssetPurpose.Banner, "imageMediaAssetId", errors, cancellationToken);
       ThrowIfAnyValidationErrors(errors);
@@ -264,13 +264,13 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["bannerId"] = ["BannerId is required."]
+        ["bannerId"] = ["Falta el banner."]
       });
     }
 
     var banner = await _dbContext.Banners
         .SingleOrDefaultAsync(candidate => candidate.Id == bannerId, cancellationToken)
-        ?? throw new KeyNotFoundException("The banner was not found.");
+        ?? throw new KeyNotFoundException("No encontramos el banner.");
 
     _dbContext.Banners.Remove(banner);
     await _dbContext.SaveChangesAsync(cancellationToken);
@@ -293,14 +293,14 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["tickerItemId"] = ["TickerItemId is required."]
+        ["tickerItemId"] = ["Falta el aviso de la cinta."]
       });
     }
 
     var item = await _dbContext.TickerItems
         .AsNoTracking()
         .SingleOrDefaultAsync(candidate => candidate.Id == tickerItemId, cancellationToken)
-        ?? throw new KeyNotFoundException("The ticker item was not found.");
+        ?? throw new KeyNotFoundException("No encontramos el aviso de la cinta.");
 
     return MapTickerItem(item);
   }
@@ -310,7 +310,7 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
     ArgumentNullException.ThrowIfNull(request);
 
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-    ValidateRequiredText(request.Text, "text", 1, 120, errors, "Text is required and must be 120 characters or fewer.");
+    ValidateRequiredText(request.Text, "text", 1, 120, errors, "El texto es obligatorio y no puede superar 120 caracteres.");
     ThrowIfAnyValidationErrors(errors);
 
     var now = _timeProvider.GetUtcNow().UtcDateTime;
@@ -332,17 +332,17 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["tickerItemId"] = ["TickerItemId is required."]
+        ["tickerItemId"] = ["Falta el aviso de la cinta."]
       });
     }
 
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-    ValidateRequiredText(request.Text, "text", 1, 120, errors, "Text is required and must be 120 characters or fewer.");
+    ValidateRequiredText(request.Text, "text", 1, 120, errors, "El texto es obligatorio y no puede superar 120 caracteres.");
     ThrowIfAnyValidationErrors(errors);
 
     var item = await _dbContext.TickerItems
         .SingleOrDefaultAsync(candidate => candidate.Id == tickerItemId, cancellationToken)
-        ?? throw new KeyNotFoundException("The ticker item was not found.");
+        ?? throw new KeyNotFoundException("No encontramos el aviso de la cinta.");
 
     var now = _timeProvider.GetUtcNow().UtcDateTime;
     item.Update(request.Text, request.SortOrder, request.IsActive, now);
@@ -358,13 +358,13 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
     {
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
-        ["tickerItemId"] = ["TickerItemId is required."]
+        ["tickerItemId"] = ["Falta el aviso de la cinta."]
       });
     }
 
     var item = await _dbContext.TickerItems
         .SingleOrDefaultAsync(candidate => candidate.Id == tickerItemId, cancellationToken)
-        ?? throw new KeyNotFoundException("The ticker item was not found.");
+        ?? throw new KeyNotFoundException("No encontramos el aviso de la cinta.");
 
     _dbContext.TickerItems.Remove(item);
     await _dbContext.SaveChangesAsync(cancellationToken);
@@ -403,7 +403,7 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
     ArgumentNullException.ThrowIfNull(request);
 
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-    ValidateRequiredText(request.AppName, "appName", 2, 120, errors, "AppName is required and must be between 2 and 120 characters.");
+    ValidateRequiredText(request.AppName, "appName", 2, 120, errors, "El nombre de la marca es obligatorio y debe tener entre 2 y 120 caracteres.");
     ValidateHexColor(request.PrimaryColor, "primaryColor", errors);
     ValidateHexColor(request.SecondaryColor, "secondaryColor", errors);
     ThrowIfAnyValidationErrors(errors);
@@ -530,7 +530,7 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
 
     if (mediaAssetId == Guid.Empty)
     {
-      errors[fieldName] = ["The media asset identifier must be a valid GUID."];
+      errors[fieldName] = ["El archivo elegido no es válido."];
       return;
     }
 
@@ -542,7 +542,7 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
 
     if (asset is null)
     {
-      errors[fieldName] = ["The referenced media asset was not found."];
+      errors[fieldName] = ["No encontramos el archivo elegido."];
       return;
     }
 
@@ -594,11 +594,11 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
       string imageFieldName,
       Dictionary<string, string[]> errors)
   {
-    ValidateRequiredText(title, "title", 2, 160, errors, "Title is required and must be between 2 and 160 characters.");
+    ValidateRequiredText(title, "title", 2, 160, errors, "El título es obligatorio y debe tener entre 2 y 160 caracteres.");
 
     if (!string.IsNullOrWhiteSpace(subtitle) && subtitle.Trim().Length > 300)
     {
-      errors["subtitle"] = ["Subtitle must be 300 characters or fewer."];
+      errors["subtitle"] = ["El subtítulo no puede superar 300 caracteres."];
     }
 
     // BUG-096: the column holds 2048 characters; a longer link used to reach the database and answer 500.
@@ -614,7 +614,7 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
 
     if (startsAtUtc.HasValue && endsAtUtc.HasValue && endsAtUtc.Value <= startsAtUtc.Value)
     {
-      errors["endsAtUtc"] = ["EndsAtUtc must be after StartsAtUtc when both values are provided."];
+      errors["endsAtUtc"] = ["La fecha de fin debe ser posterior a la de inicio."];
     }
 
     _ = imageFieldName;
@@ -624,7 +624,7 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
   {
     if (string.IsNullOrWhiteSpace(value) || !HexColorRegex().IsMatch(value.Trim()))
     {
-      errors[fieldName] = ["The value must be a valid hex color in the format #RRGGBB."];
+      errors[fieldName] = ["El color debe tener el formato #RRGGBB."];
     }
   }
 
@@ -767,10 +767,18 @@ internal sealed partial class ContentManagementService : IPublicContentService, 
       ThrowIfAnyValidationErrors(errors);
     }
 
+    // BUG-097: a null element used to throw NullReferenceException (500).
+    var missingDay = request.Days!.ToList().FindIndex(day => day is null);
+    if (missingDay >= 0)
+    {
+      errors[$"days[{missingDay}]"] = ["Cada día debe tener datos: indica si abre y, si abre, su horario."];
+      ThrowIfAnyValidationErrors(errors);
+    }
+
     var orderedDayNumbers = request.Days!.Select(d => d.DayOfWeek).OrderBy(d => d).ToList();
     if (!orderedDayNumbers.SequenceEqual(Enumerable.Range(0, 7)))
     {
-      errors["days"] = ["Los dias deben ser exactamente 0-6 (lunes a domingo) sin duplicados."];
+      errors["days"] = ["Los días deben ser exactamente 0-6 (lunes a domingo) sin duplicados."];
       ThrowIfAnyValidationErrors(errors);
     }
 

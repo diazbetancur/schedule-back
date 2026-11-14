@@ -54,7 +54,7 @@ public sealed class RolesManagementServiceTests : IDisposable
     var exception = await Assert.ThrowsAsync<ConflictException>(() =>
         _service.CreateAsync(new RoleCreateRequest("  vendedor  ", [])));
 
-    Assert.Equal("A role with this name already exists.", exception.Message);
+    Assert.Equal("Ya existe un rol con ese nombre.", exception.Message);
   }
 
   [Fact]

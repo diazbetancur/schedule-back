@@ -31,7 +31,8 @@ public sealed record LoyaltyRewardUpsertRequest(
     string? Kind,
     Guid? ServiceId,
     int PointsCost,
-    bool IsActive = true,
+    // Omitted on create: active; omitted on update: unchanged (an omitted flag no longer re-activates a reward).
+    bool? IsActive = null,
     uint? Version = null);
 
 public sealed record LoyaltyRewardChangeView(

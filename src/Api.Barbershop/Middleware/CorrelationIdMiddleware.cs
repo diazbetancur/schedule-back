@@ -25,6 +25,14 @@ public sealed class CorrelationIdMiddleware
     context.Items[CorrelationIdItemKey] = correlationId;
     context.Response.Headers[headerName] = correlationId;
 
+    // BUG-089: the exception handler clears the response (headers included) before writing an error, so the header
+    // set above was lost on every error. Set it again right before the response starts, whoever wrote it.
+    context.Response.OnStarting(() =>
+    {
+      context.Response.Headers[headerName] = correlationId;
+      return Task.CompletedTask;
+    });
+
     await _next(context);
   }
 

@@ -120,14 +120,14 @@ public sealed class CustomerManagementServiceTests : IDisposable
     var target = await CreateCustomerAsync("Carlos Pérez", "3001234567", "carlos@example.com");
     var source = await CreateCustomerAsync("Carlos P.", "3001234567", "carlos.p@example.com");
 
-    var updated = await _service.UpdateAsync(target.Id, new CustomerUpdateRequest("Carlos Andrés Pérez", "3001112233", "carlos.andres@example.com"));
+    var updated = await _service.UpdateAsync(target.Id, new CustomerUpdateRequest("Carlos Andrés Pérez", "3001112233", "carlos.andres@example.com", target.Version));
     Assert.Equal("Carlos Andrés Pérez", updated.FullName);
     Assert.Equal("carlos.andres@example.com", updated.Email);
 
     await _service.MergeWithPreviewAsync(_adminId, target.Id, source.Id);
 
     await Assert.ThrowsAsync<ConflictException>(() =>
-        _service.UpdateAsync(source.Id, new CustomerUpdateRequest("Otro", "3001234567", "otro@example.com")));
+        _service.UpdateAsync(source.Id, new CustomerUpdateRequest("Otro", "3001234567", "otro@example.com", source.Version)));
   }
 
   [Fact]

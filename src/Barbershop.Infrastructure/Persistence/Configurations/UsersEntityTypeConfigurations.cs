@@ -215,6 +215,7 @@ internal sealed class NotificationCampaignConfiguration : IEntityTypeConfigurati
     builder.Property(x => x.Body).HasMaxLength(1000).IsRequired();
     builder.Property(x => x.TargetSummary).HasMaxLength(280).IsRequired();
     builder.Property(x => x.RecipientCount).IsRequired();
+    builder.Property(x => x.RecipientsFingerprint).HasMaxLength(64);
     builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
 
     builder.HasIndex(x => x.CreatedAt);

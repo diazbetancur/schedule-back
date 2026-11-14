@@ -6,6 +6,7 @@ using System.Text;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Email;
+using Barbershop.Domain.Common;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Configuration;
 using Barbershop.Infrastructure.Persistence;
@@ -19,13 +20,32 @@ namespace Barbershop.Infrastructure.Identity;
 
 internal sealed class AuthService : IAuthService
 {
-    private const string DuplicateEmailMessage = "A user with this email already exists.";
+    private const string DuplicateEmailMessage = "Ya existe una cuenta con ese correo.";
 
     // Name of the unique index on users."NormalizedEmail" (created by the InitialDomainModel migration).
     private const string UsersEmailUniqueIndex = "IX_users_NormalizedEmail";
 
     private const int MaxFailedLoginAttempts = 5;
     private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// The one answer of a failed sign-in (BUG-005): unknown email, wrong password, inactive and locked accounts all
+    /// get this same 401, so a locked account no longer confirms that an email is registered. The lockout itself is
+    /// kept (while locked even the right password fails) and the message tells a real user to wait.
+    /// </summary>
+    internal const string InvalidCredentialsMessage =
+        "Correo o contraseña incorrectos. Si fallaste varias veces seguidas, espera unos minutos antes de volver a intentarlo.";
+
+    /// <summary>
+    /// A rotated refresh token presented again after this window is treated as stolen and its whole session is revoked
+    /// (BUG-094). Inside it, it is a legitimate race: another tab or an in-flight request still carried the token the
+    /// first tab had just rotated (the front adopts the stored successor), so only that request is refused.
+    /// </summary>
+    internal static readonly TimeSpan RotatedTokenReuseGrace = TimeSpan.FromSeconds(60);
+
+    /// <summary>Hash compared for unknown emails, so they take as long as a real password check (BUG-005).</summary>
+    private static readonly Lazy<string> TimingEqualizerHash =
+        new(() => new PasswordHasher<object>().HashPassword(new object(), Convert.ToHexString(RandomNumberGenerator.GetBytes(16))));
 
     private readonly AppDbContext _dbContext;
     private readonly IPasswordHasher<object> _passwordHasher;
@@ -110,7 +130,9 @@ internal sealed class AuthService : IAuthService
 
         if (userId is null)
         {
-            throw new UnauthorizedException("Invalid email or password.");
+            // Same work and same answer as a wrong password (BUG-005).
+            _passwordHasher.VerifyHashedPassword(new object(), TimingEqualizerHash.Value, request.Password);
+            throw new UnauthorizedException(InvalidCredentialsMessage);
         }
 
         // Under the account lock: a password change or reset committing while this login checks the old password
@@ -128,16 +150,19 @@ internal sealed class AuthService : IAuthService
 
             if (lockedUser is null || !lockedUser.IsActive)
             {
-                throw new UnauthorizedException("Invalid email or password.");
+                throw new UnauthorizedException(InvalidCredentialsMessage);
             }
 
             var now = _timeProvider.GetUtcNow().UtcDateTime;
+            var verification = _passwordHasher.VerifyHashedPassword(new object(), lockedUser.PasswordHash, request.Password);
+
+            // A locked account answers exactly like a wrong password (BUG-005), even with the right one: the lockout
+            // stays, but it no longer tells an attacker that the email exists.
             if (lockedUser.IsLockedOut(now))
             {
-                throw new TooManyRequestsException("Demasiados intentos fallidos. Intenta de nuevo más tarde.");
+                throw new UnauthorizedException(InvalidCredentialsMessage);
             }
 
-            var verification = _passwordHasher.VerifyHashedPassword(new object(), lockedUser.PasswordHash, request.Password);
             if (verification == PasswordVerificationResult.Failed)
             {
                 // The failed attempt must be committed, so it is reported after the transaction instead of thrown.
@@ -159,7 +184,7 @@ internal sealed class AuthService : IAuthService
 
         if (failure || refreshToken is null)
         {
-            throw new UnauthorizedException("Invalid email or password.");
+            throw new UnauthorizedException(InvalidCredentialsMessage);
         }
 
         var roles = GetRoleNames(user);
@@ -185,11 +210,27 @@ internal sealed class AuthService : IAuthService
             .ThenInclude(rolePermission => rolePermission.Permission)
             .SingleOrDefaultAsync(token => token.TokenHash == refreshTokenHash, cancellationToken);
 
+        if (existingToken is not null && IsReuseOfRotatedToken(existingToken, utcNow))
+        {
+            // BUG-094: a token rotated a while ago is presented again. Either it was stolen and its successor is in
+            // the thief's hands, or the thief used it first and the victim is presenting it now: end the whole session.
+            await AccountSessions.InAccountTransactionAsync<object?>(_dbContext, async () =>
+            {
+                await AccountSessions.LockAccountAsync(_dbContext, existingToken.UserId, cancellationToken);
+                await AccountSessions.RevokeSessionAsync(
+                    _dbContext, existingToken.UserId, refreshTokenHash, _timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
+                await _dbContext.SaveChangesAsync(cancellationToken);
+                return null;
+            }, cancellationToken);
+
+            throw new UnauthorizedException("Tu sesión expiró. Inicia sesión de nuevo.");
+        }
+
         if (existingToken is null
             || !AccountSessions.IsUsable(existingToken, utcNow)
             || !existingToken.User.IsActive)
         {
-            throw new UnauthorizedException("The refresh token is invalid or expired.");
+            throw new UnauthorizedException("Tu sesión expiró. Inicia sesión de nuevo.");
         }
 
         // Single use even under concurrency (BUG-016): the check above ran without a lock, so two requests with the
@@ -204,10 +245,12 @@ internal sealed class AuthService : IAuthService
             var lockedNow = _timeProvider.GetUtcNow().UtcDateTime;
             if (!AccountSessions.IsUsable(existingToken, lockedNow) || !existingToken.User.IsActive)
             {
-                throw new UnauthorizedException("The refresh token is invalid or expired.");
+                throw new UnauthorizedException("Tu sesión expiró. Inicia sesión de nuevo.");
             }
 
-            var rotated = CreateRefreshToken(existingToken.UserId, lockedNow, existingToken.SessionId);
+            // BUG-094: the successor keeps the session's expiry, so the session ends RefreshTokenDays after the
+            // sign-in however often it is refreshed (absolute lifetime); rotating no longer extends it.
+            var rotated = CreateRefreshToken(existingToken.UserId, lockedNow, existingToken.SessionId, existingToken.ExpiresAt);
             existingToken.Revoke(lockedNow, rotated.Entity.Id);
 
             _dbContext.RefreshTokens.Add(rotated.Entity);
@@ -264,7 +307,7 @@ internal sealed class AuthService : IAuthService
 
         if (user is null || !user.IsActive)
         {
-            throw new UnauthorizedException("The current user is not available.");
+            throw new UnauthorizedException("Tu cuenta no está disponible. Inicia sesión de nuevo.");
         }
 
         var refreshToken = CreateRefreshToken(user.Id, _timeProvider.GetUtcNow().UtcDateTime);
@@ -286,7 +329,7 @@ internal sealed class AuthService : IAuthService
 
         if (user is null || !user.IsActive)
         {
-            throw new UnauthorizedException("The current user is not available.");
+            throw new UnauthorizedException("Tu cuenta no está disponible. Inicia sesión de nuevo.");
         }
 
         var roles = GetRoleNames(user);
@@ -461,7 +504,7 @@ internal sealed class AuthService : IAuthService
             signingCredentials: credentials);
 
         var accessToken = new JwtSecurityTokenHandler().WriteToken(securityToken);
-        return new TokenResponse(accessToken, (int)TimeSpan.FromMinutes(jwtOptions.AccessTokenMinutes).TotalSeconds, refreshToken.RawToken, CreateUserResponse(user, roles, permissions, profilePhotoUrl));
+        return new TokenResponse(accessToken, (int)TimeSpan.FromMinutes(jwtOptions.AccessTokenMinutes).TotalSeconds, refreshToken.RawToken, CreateUserResponse(user, roles, permissions, profilePhotoUrl), refreshToken.Entity.ExpiresAt);
     }
 
     private static IReadOnlyList<string> GetPermissionCodes(User user)
@@ -482,16 +525,26 @@ internal sealed class AuthService : IAuthService
             profilePhotoUrl,
             permissions);
 
-    private RefreshTokenEnvelope CreateRefreshToken(Guid userId, DateTime createdAt, Guid? sessionId = null)
+    /// <param name="sessionExpiresAt">For a rotation: the expiry of the session, inherited instead of a new window.</param>
+    private RefreshTokenEnvelope CreateRefreshToken(Guid userId, DateTime createdAt, Guid? sessionId = null, DateTime? sessionExpiresAt = null)
     {
         var jwtOptions = _jwtOptions.Value;
         var rawToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(64));
         var hash = ComputeTokenHash(rawToken);
-        var expiresAt = createdAt.AddDays(jwtOptions.RefreshTokenDays);
+        var expiresAt = sessionExpiresAt ?? createdAt.AddDays(jwtOptions.RefreshTokenDays);
         var entity = new RefreshToken(userId, hash, expiresAt, createdAt, sessionId: sessionId);
 
         return new RefreshTokenEnvelope(rawToken, entity);
     }
+
+    /// <summary>
+    /// A token that was rotated (it has a successor) more than <see cref="RotatedTokenReuseGrace"/> ago. A token revoked
+    /// by a logout or password change has no successor and is simply refused.
+    /// </summary>
+    private static bool IsReuseOfRotatedToken(RefreshToken token, DateTime utcNow)
+        => token.ReplacedByRefreshTokenId is not null
+            && token.RevokedAt is { } rotatedAt
+            && utcNow - rotatedAt > RotatedTokenReuseGrace;
 
     private static string ComputeTokenHash(string value)
     {
@@ -520,7 +573,7 @@ internal sealed class AuthService : IAuthService
             || !OptionsValidationHelpers.IsConfigured(options.Issuer)
             || !OptionsValidationHelpers.IsConfigured(options.Audience))
         {
-            throw new ServiceUnavailableException("JWT authentication is not fully configured.");
+            throw new ServiceUnavailableException("El inicio de sesión no está disponible en este momento. Inténtalo de nuevo en unos minutos.");
         }
     }
 
@@ -536,13 +589,16 @@ internal sealed class AuthService : IAuthService
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 
+        // BUG-006: the same limits as the User entity (email 5–256), checked first so the domain's ArgumentException
+        // never reaches the client.
         AddErrorIf(errors, "fullName", string.IsNullOrWhiteSpace(request.FullName) || request.FullName.Trim().Length is < 2 or > 120,
-            "Full name must be between 2 and 120 characters.");
-        AddErrorIf(errors, "email", !IsValidEmail(request.Email), "Email must be a valid email address.");
+            "El nombre debe tener entre 2 y 120 caracteres.");
+        AddErrorIf(errors, "email", !EmailRules.IsValid(request.Email),
+            EmailRules.InvalidMessage);
         AddErrorIf(errors, "password", string.IsNullOrWhiteSpace(request.Password) || request.Password.Length is < 8 or > 128,
-            "Password must be between 8 and 128 characters.");
+            "La contraseña debe tener entre 8 y 128 caracteres.");
         AddErrorIf(errors, "phoneNumber", !string.IsNullOrWhiteSpace(request.PhoneNumber) && request.PhoneNumber.Trim().Length > 40,
-            "Phone number must be 40 characters or fewer.");
+            "El teléfono no puede superar 40 caracteres.");
 
         ThrowIfAnyErrors(errors);
     }
@@ -551,8 +607,8 @@ internal sealed class AuthService : IAuthService
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
 
-        AddErrorIf(errors, "email", !IsValidEmail(request.Email), "Email must be a valid email address.");
-        AddErrorIf(errors, "password", string.IsNullOrWhiteSpace(request.Password), "Password is required.");
+        AddErrorIf(errors, "email", !IsValidEmail(request.Email), "Escribe un correo válido.");
+        AddErrorIf(errors, "password", string.IsNullOrWhiteSpace(request.Password), "Escribe la contraseña.");
 
         ThrowIfAnyErrors(errors);
     }
@@ -560,7 +616,7 @@ internal sealed class AuthService : IAuthService
     private static void ValidateRefreshRequest(RefreshRequest request)
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-        AddErrorIf(errors, "refreshToken", string.IsNullOrWhiteSpace(request.RefreshToken), "Refresh token is required.");
+        AddErrorIf(errors, "refreshToken", string.IsNullOrWhiteSpace(request.RefreshToken), "Inicia sesión de nuevo.");
         ThrowIfAnyErrors(errors);
     }
 

@@ -1,3 +1,4 @@
+using Api.Barbershop.Configuration;
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Notifications;
 using System.Security.Claims;
@@ -31,6 +32,8 @@ public static class NotificationsEndpoints
 
     notifications.MapPost("/test", SendTestAsync)
         .WithName("SendTestPushNotification")
+        .RequireRateLimiting(RateLimitPolicyNames.NotificationTest)
+        .ProducesProblem(StatusCodes.Status429TooManyRequests)
         .Produces<PushTestResultView>(StatusCodes.Status200OK)
         .ProducesProblem(StatusCodes.Status401Unauthorized);
 
@@ -57,9 +60,10 @@ public static class NotificationsEndpoints
   private static Task<UserNotificationInboxView> GetInboxAsync(
       ClaimsPrincipal user,
       int? limit,
+      int? offset,
       IUserNotificationsService service,
       CancellationToken cancellationToken)
-      => service.GetInboxAsync(user.GetRequiredUserId(), limit ?? 5, cancellationToken);
+      => service.GetInboxAsync(user.GetRequiredUserId(), limit ?? 5, cancellationToken, offset ?? 0);
 
   private static async Task<IResult> MarkAllAsReadAsync(
       ClaimsPrincipal user,

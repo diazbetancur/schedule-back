@@ -158,5 +158,8 @@ public enum MembershipEventType
   IncomeLinked = 4,
   IncomeUnlinked = 5,
   MovedByMerge = 6,
-  Annulled = 7
+  Annulled = 7,
+
+  /// <summary>The amount of the linked income was edited (BUG-104); carries the old and new values and the justification.</summary>
+  IncomeAmountChanged = 8
 }

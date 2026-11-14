@@ -1,3 +1,4 @@
+using Api.Barbershop.Configuration;
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Notifications;
@@ -15,7 +16,19 @@ public static class AdminNotificationsEndpoints
 
     notifications.MapPost("/broadcast", BroadcastAsync)
         .WithName("BroadcastAdminNotification")
+        .RequireRateLimiting(RateLimitPolicyNames.NotificationBroadcast)
+        .ProducesProblem(StatusCodes.Status409Conflict)
+        .ProducesProblem(StatusCodes.Status429TooManyRequests)
         .Produces<NotificationCampaignView>(StatusCodes.Status201Created)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden)
+        .ProducesProblem(StatusCodes.Status404NotFound)
+        .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
+
+    // BUG-110: read-only; how many customers the broadcast would reach, so the admin confirms before sending.
+    notifications.MapPost("/broadcast/preview", PreviewAsync)
+        .WithName("PreviewAdminNotificationBroadcast")
+        .Produces<NotificationBroadcastPreviewView>(StatusCodes.Status200OK)
         .ProducesProblem(StatusCodes.Status401Unauthorized)
         .ProducesProblem(StatusCodes.Status403Forbidden)
         .ProducesProblem(StatusCodes.Status404NotFound)
@@ -45,6 +58,12 @@ public static class AdminNotificationsEndpoints
     var response = await service.BroadcastAsync(user.GetRequiredUserId(), request, cancellationToken);
     return Results.Created($"/api/v1/admin/notifications/campaigns/{response.Id}", response);
   }
+
+  private static Task<NotificationBroadcastPreviewView> PreviewAsync(
+      NotificationBroadcastRequest request,
+      IAdminNotificationsService service,
+      CancellationToken cancellationToken)
+      => service.PreviewAsync(request, cancellationToken);
 
   private static Task<IReadOnlyList<NotificationCampaignView>> GetCampaignsAsync(
       IAdminNotificationsService service,

@@ -133,6 +133,7 @@ internal sealed class LoyaltyRedemptionConfiguration : IEntityTypeConfiguration<
     builder.Property(x => x.CancellationReason).HasMaxLength(LoyaltyRedemption.MaxReasonLength);
     builder.Property(x => x.ExpiredAt).HasColumnType("timestamp with time zone");
     builder.Ignore(x => x.IsPending);
+    builder.Property(x => x.ReopenedAt).HasColumnType("timestamp with time zone");
     builder.Ignore(x => x.CurrentDeadline);
     builder.Property(x => x.Version).IsRowVersion();
 
@@ -174,6 +175,7 @@ internal sealed class LoyaltyRedemptionAllocationConfiguration : IEntityTypeConf
     builder.Property(x => x.Id).ValueGeneratedNever();
 
     // One row per lot of a redemption: what it reserved there.
+    builder.Property(x => x.SupersededAt).HasColumnType("timestamp with time zone");
     builder.HasIndex(x => new { x.RedemptionId, x.LotId }).IsUnique();
     builder.HasIndex(x => x.LotId);
 

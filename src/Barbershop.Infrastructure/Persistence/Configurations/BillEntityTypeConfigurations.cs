@@ -170,15 +170,28 @@ internal sealed class BillApprovalConfiguration : IEntityTypeConfiguration<BillA
 {
   public void Configure(EntityTypeBuilder<BillApproval> builder)
   {
-    builder.ToTable("bill_approvals", table => table.HasCheckConstraint("ck_bill_approvals_sequence_positive", "\"Sequence\" >= 1"));
+    builder.ToTable("bill_approvals", table =>
+    {
+      table.HasCheckConstraint("ck_bill_approvals_sequence_positive", "\"Sequence\" >= 1");
+      // Stage 4: an unapproval names who, when, why and its idempotency key, or none of them.
+      table.HasCheckConstraint("ck_bill_approvals_unapproval_shape",
+          "(\"UnapprovedAt\" IS NULL AND \"UnapprovedByUserId\" IS NULL AND \"UnapprovalReason\" IS NULL AND \"UnapprovalKey\" IS NULL) "
+          + "OR (\"UnapprovedAt\" IS NOT NULL AND \"UnapprovedByUserId\" IS NOT NULL AND \"UnapprovalReason\" IS NOT NULL AND \"UnapprovalKey\" IS NOT NULL)");
+    });
     builder.HasKey(x => x.Id);
     builder.Property(x => x.Id).ValueGeneratedNever();
     builder.Property(x => x.LinesJson).HasColumnType("jsonb").IsRequired();
     builder.Property(x => x.Notes).HasMaxLength(Bill.MaxNotesLength);
     builder.Property(x => x.ApprovedAt).HasColumnType("timestamp with time zone").IsRequired();
+    builder.Property(x => x.UnapprovedAt).HasColumnType("timestamp with time zone");
+    builder.Property(x => x.UnapprovalReason).HasMaxLength(Bill.MaxReasonLength);
+    builder.Property(x => x.IsSelfUnapproved).HasDefaultValue(false);
+    builder.Ignore(x => x.IsUnapproved);
 
     builder.HasOne<Bill>().WithMany().HasForeignKey(x => x.BillId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<User>().WithMany().HasForeignKey(x => x.ApprovedByUserId).OnDelete(DeleteBehavior.Restrict);
+    builder.HasOne<User>().WithMany().HasForeignKey(x => x.UnapprovedByUserId).OnDelete(DeleteBehavior.Restrict);
+    builder.HasIndex(x => x.UnapprovalKey).IsUnique().HasFilter("\"UnapprovalKey\" IS NOT NULL");
     builder.HasOne<CustomerProfile>().WithMany().HasForeignKey(x => x.CustomerId).OnDelete(DeleteBehavior.Restrict);
     builder.HasIndex(x => x.IdempotencyKey).IsUnique();
     builder.HasIndex(x => new { x.BillId, x.Sequence }).IsUnique();
@@ -199,6 +212,8 @@ internal sealed class BillPostingConfiguration : IEntityTypeConfiguration<BillPo
     builder.Property(x => x.Id).ValueGeneratedNever();
     builder.Property(x => x.Effect).HasConversion<string>().HasMaxLength(32).IsRequired();
     builder.Property(x => x.CreatedAt).HasColumnType("timestamp with time zone").IsRequired();
+    builder.Property(x => x.ReversedAt).HasColumnType("timestamp with time zone");
+    builder.Ignore(x => x.IsReversed);
 
     builder.HasOne<BillApproval>().WithMany().HasForeignKey(x => x.ApprovalId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<BillLine>().WithMany().HasForeignKey(x => x.BillLineId).OnDelete(DeleteBehavior.Restrict);

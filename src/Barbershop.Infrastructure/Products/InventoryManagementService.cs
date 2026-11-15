@@ -385,7 +385,16 @@ internal sealed class InventoryManagementService : IAdminInventoryService
         var (from, to) = HistoryRange.Resolve(query.From, query.To, TodayInBogota());
         var sales = await _dbContext.IncomeEntries.AsNoTracking()
             .Where(entry => !entry.IsDeleted && entry.Kind == IncomeKind.ProductSale && entry.OccurredOn >= from && entry.OccurredOn <= to)
-            .Select(entry => new { ProductId = entry.ProductId!.Value, entry.ProductNameSnapshot, Quantity = entry.Quantity!.Value, entry.Amount, entry.UnitCostSnapshot, entry.CreatedAt })
+            // ADR-0020 Q8: a counter-entry (unapproved bill) takes its units back; its amount is already negative.
+            .Select(entry => new
+            {
+                ProductId = entry.ProductId!.Value,
+                entry.ProductNameSnapshot,
+                Quantity = entry.ReversesIncomeEntryId == null ? entry.Quantity!.Value : -entry.Quantity!.Value,
+                entry.Amount,
+                entry.UnitCostSnapshot,
+                entry.CreatedAt,
+            })
             .ToListAsync(cancellationToken);
 
         var items = sales

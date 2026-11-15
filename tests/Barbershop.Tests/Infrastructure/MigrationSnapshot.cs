@@ -26,8 +26,8 @@ internal static class MigrationSnapshot
 
   /// <summary>
   /// True when the rows are the same, ignoring the columns a later additive migration added to the table, which must be
-  /// NULL on every existing row (ADR-0020 adds nullable columns to income_entries and loyalty_redemptions). Any other
-  /// difference, or a later column with a value, makes it false.
+  /// NULL (or the false default of a new flag) on every existing row (ADR-0020 adds such columns to income_entries,
+  /// loyalty_redemptions and bill_approvals). Any other difference, or a later column with a value, makes it false.
   /// </summary>
   public static bool SameRows(IReadOnlyList<string> before, IReadOnlyList<string> after)
   {
@@ -46,7 +46,7 @@ internal static class MigrationSnapshot
     foreach (var row in after)
     {
       var parts = Columns(row).ToList();
-      if (parts.Any(part => !columns.Contains(part.Name) && part.Value != "null"))
+      if (parts.Any(part => !columns.Contains(part.Name) && part.Value is not ("null" or "False")))
       {
         return false;
       }

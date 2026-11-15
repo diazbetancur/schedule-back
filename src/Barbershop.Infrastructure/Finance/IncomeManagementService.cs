@@ -397,7 +397,8 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             .FirstOrDefaultAsync(cancellationToken);
         var bills = await LoadBillsAsync([entry], cancellationToken);
         var bill = entry.BillId is { } billId ? bills.GetValueOrDefault(billId) : null;
-        return Map(entry, displayName, serviceRecord?.Id, (serviceRecord?.IsSelfApproved ?? false) || (bill?.IsSelfApproved ?? false), bill?.Number);
+        var selfApproved = await Barbershop.Infrastructure.Bills.BillIncomeApprovals.SelfApprovedIncomeIdsAsync(_dbContext, [entry.Id], cancellationToken);
+        return Map(entry, displayName, serviceRecord?.Id, (serviceRecord?.IsSelfApproved ?? false) || selfApproved.Contains(entry.Id), bill?.Number);
     }
 
     private async Task<IReadOnlyList<IncomeEntryView>> MapManyAsync(IReadOnlyCollection<IncomeEntry> entries, CancellationToken cancellationToken)
@@ -426,6 +427,8 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             .ToDictionaryAsync(record => record.IncomeEntryId, cancellationToken);
 
         var bills = await LoadBillsAsync(entries, cancellationToken);
+        var selfApprovedBillIncomes = await Barbershop.Infrastructure.Bills.BillIncomeApprovals.SelfApprovedIncomeIdsAsync(
+            _dbContext, entries.Where(entry => entry.BillId is not null).Select(entry => entry.Id).ToArray(), cancellationToken);
         return entries
             .Select(entry =>
             {
@@ -435,7 +438,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
                     entry,
                     entry.StaffProfileId is { } staffId ? displayNames.GetValueOrDefault(staffId, string.Empty) : null,
                     fromRecord ? serviceRecord!.Id : null,
-                    (fromRecord && serviceRecord!.IsSelfApproved) || (bill?.IsSelfApproved ?? false),
+                    (fromRecord && serviceRecord!.IsSelfApproved) || selfApprovedBillIncomes.Contains(entry.Id),
                     bill?.Number);
             })
             .ToArray();
@@ -486,5 +489,6 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             billNumber,
             entry.ProductNameSnapshot,
             entry.Quantity,
-            entry.CommissionBaseAmount);
+            entry.CommissionBaseAmount,
+            entry.ReversesIncomeEntryId);
 }

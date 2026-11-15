@@ -26,6 +26,7 @@ namespace Barbershop.Tests.Features.Bills;
 public sealed class BillsPostgresTests
 {
   private const string MigrationBeforeBills = "20261115124512_AddInventory";
+  private const string MigrationBeforeReversals = "20261115155934_AddBillsAndApprovals";
 
   private static readonly string[] NewTables =
       ["bills", "bill_lines", "bill_events", "bill_approvals", "bill_postings", "payment_methods", "bill_number_series"];
@@ -211,6 +212,110 @@ public sealed class BillsPostgresTests
     Assert.Equal((25000, bill.Id), (income.Amount, income.BillId!.Value));
     Assert.Single(await db.BillApprovals.AsNoTracking().ToListAsync());
     Assert.Equal(BillStatus.Approved, (await db.Bills.AsNoTracking().SingleAsync()).Status);
+  }
+
+  [Fact]
+  public async Task TheReversalMigration_KeepsEveryRow_AndOnlyACounterEntryMayBeNegative()
+  {
+    if (!_postgres.IsAvailable) return;
+    var seeded = await ResetAndSeedAsync();
+    var bill = await AddServiceAsync(seeded, await OpenAsync(seeded));
+    await using (var context = CreateContext())
+    {
+      bill = await Service(context).CloseAsync(seeded.AdminId, bill.Id, new BillCloseRequest(bill.Version, seeded.Cash));
+    }
+
+    await using (var context = CreateContext())
+    {
+      await Service(context).ApproveAsync(seeded.AdminId, bill.Id, new BillApproveRequest(bill.Version, Guid.NewGuid()));
+    }
+
+    await using var db = CreateContext();
+    await db.GetService<IMigrator>().MigrateAsync(MigrationBeforeReversals);
+    var before = await MigrationSnapshotReader.ReadAsync(db);
+    Assert.Single(before["income_entries"]);
+    await db.GetService<IMigrator>().MigrateAsync();
+    var after = await MigrationSnapshotReader.ReadAsync(db);
+    Assert.Equal(before.Keys.Order(), after.Keys.Order());
+    foreach (var (table, rows) in before)
+    {
+      Assert.True(MigrationSnapshot.SameRows(rows, after[table]), $"{table} changed");
+    }
+
+    // A negative amount that does not reverse anything is still refused.
+    var negative = await Assert.ThrowsAsync<PostgresException>(() => db.Database.ExecuteSqlRawAsync("""
+        UPDATE public.income_entries SET "Amount" = -1
+        """));
+    Assert.Equal(PostgresErrorCodes.CheckViolation, negative.SqlState);
+
+    await db.GetService<IMigrator>().MigrateAsync(MigrationBeforeReversals);
+    var rolledBack = await MigrationSnapshotReader.ReadAsync(db);
+    foreach (var (table, rows) in before)
+    {
+      Assert.True(rows.SequenceEqual(rolledBack[table]), $"{table} changed after the rollback");
+    }
+
+    await db.GetService<IMigrator>().MigrateAsync();
+  }
+
+  [Fact]
+  public async Task SimultaneousUnapprovalsAndApprovals_ReverseOnce_AndTheCycleNetsToOneApproval()
+  {
+    if (!_postgres.IsAvailable) return;
+    var seeded = await ResetAndSeedAsync();
+    var bill = await AddServiceAsync(seeded, await OpenAsync(seeded));
+    await using (var context = CreateContext())
+    {
+      bill = await Service(context).CloseAsync(seeded.AdminId, bill.Id, new BillCloseRequest(bill.Version, seeded.Cash));
+    }
+
+    await using (var context = CreateContext())
+    {
+      bill = await Service(context).ApproveAsync(seeded.AdminId, bill.Id, new BillApproveRequest(bill.Version, Guid.NewGuid()));
+    }
+
+    var version = bill.Version;
+    var outcomes = await Task.WhenAll(Enumerable.Range(0, 5).Select(async index =>
+    {
+      await using var context = CreateContext();
+      try
+      {
+        if (index == 4)
+        {
+          await Service(context).ApproveAsync(seeded.AdminId, bill.Id, new BillApproveRequest(version, Guid.NewGuid()));
+        }
+        else
+        {
+          await Service(context).UnapproveAsync(seeded.AdminId, bill.Id, new BillUnapproveRequest(version, Guid.NewGuid(), "Corrección"));
+        }
+
+        return (Exception?)null;
+      }
+      catch (Exception exception)
+      {
+        return exception;
+      }
+    }));
+
+    Assert.Single(outcomes, outcome => outcome is null);
+    Assert.All(outcomes.OfType<Exception>(), outcome => Assert.IsType<ConflictException>(outcome));
+    await using (var db = CreateContext())
+    {
+      Assert.Equal(0, await db.IncomeEntries.SumAsync(income => income.Amount));
+      Assert.Single(await db.IncomeEntries.Where(income => income.ReversesIncomeEntryId != null).ToListAsync());
+      var stored = await db.Bills.AsNoTracking().SingleAsync();
+      Assert.Equal(BillStatus.Unapproved, stored.Status);
+      version = stored.Version;
+    }
+
+    await using (var context = CreateContext())
+    {
+      await Service(context).ApproveAsync(seeded.AdminId, bill.Id, new BillApproveRequest(version, Guid.NewGuid()));
+    }
+
+    await using var check = CreateContext();
+    Assert.Equal(25000, await check.IncomeEntries.SumAsync(income => income.Amount));
+    Assert.Equal(2, await check.BillApprovals.CountAsync());
   }
 
   private sealed record Seeded(Guid AdminId, Guid StaffId, Guid RateId, Guid Cash);

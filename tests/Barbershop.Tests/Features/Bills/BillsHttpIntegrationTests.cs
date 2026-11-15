@@ -72,8 +72,23 @@ public sealed class BillsHttpIntegrationTests
     Assert.Equal(15000, Assert.Single(preview!.Lines).ProfessionalAmount);
     var approved = await ReadAsync<BillView>(client.PostAsJsonAsync($"/api/v1/bills/{bill.Id}/approve", new BillApproveRequest(bill.Version, Guid.NewGuid())));
     Assert.Equal("Approved", approved.Status);
+    Assert.True(approved.Actions.CanUnapprove);
     var report = await client.GetFromJsonAsync<Barbershop.Application.Finance.Admin.ReportSummaryView>("/api/v1/admin/reports/summary");
     Assert.Equal(25000, report!.TotalIncome);
+
+    // Stage 4: bills.unapprove is critical and Staff does not hold it; the reason is required.
+    AuthenticateAs(client, staff.AccessToken);
+    Assert.Equal(HttpStatusCode.Forbidden, await StatusAsync(client.PostAsJsonAsync(
+        $"/api/v1/bills/{bill.Id}/unapprove", new BillUnapproveRequest(approved.Version, Guid.NewGuid(), "Corrección"))));
+    AuthenticateAs(client, admin.AccessToken);
+    Assert.Equal(HttpStatusCode.UnprocessableEntity, await StatusAsync(client.PostAsJsonAsync(
+        $"/api/v1/bills/{bill.Id}/unapprove", new BillUnapproveRequest(approved.Version, Guid.NewGuid(), " "))));
+    var unapproved = await ReadAsync<BillView>(client.PostAsJsonAsync(
+        $"/api/v1/bills/{bill.Id}/unapprove", new BillUnapproveRequest(approved.Version, Guid.NewGuid(), "Se cobró de más")));
+    Assert.Equal(("Unapproved", "Se cobró de más"), (unapproved.Status, unapproved.LastUnapprovalReason));
+    // The period of the service keeps its income; today carries the counter-entry. Same day here: they net to 0.
+    var corrected = await client.GetFromJsonAsync<Barbershop.Application.Finance.Admin.ReportSummaryView>("/api/v1/admin/reports/summary");
+    Assert.Equal(0, corrected!.TotalIncome);
   }
 
   [Fact]

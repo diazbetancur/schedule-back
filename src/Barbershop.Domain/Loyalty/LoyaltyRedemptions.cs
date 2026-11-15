@@ -345,7 +345,32 @@ public sealed class LoyaltyRedemption
   };
 
   /// <summary>Pending and past its deadline on <paramref name="today"/> (Bogotá), even if the job has not recorded it yet.</summary>
-  public bool IsPastDeadlineOn(DateOnly today) => CurrentDeadline is { } deadline && today > deadline;
+  public bool IsPastDeadlineOn(DateOnly today) => ReopenedAt is null && CurrentDeadline is { } deadline && today > deadline;
+
+  /// <summary>
+  /// ADR-0020 Q20: the redemption went back to Approved because the bill that delivered it was unapproved. Its delivery
+  /// deadline no longer applies: it does not expire and it can be delivered again by the corrected bill.
+  /// </summary>
+  public DateTime? ReopenedAt { get; private set; }
+
+  /// <summary>
+  /// ADR-0020 Q20: the bill that delivered it was unapproved. Back to Approved (the delivery is cleared; the bill's
+  /// postings and events keep it), in the live profile of the customer (a merge after the delivery moves it there).
+  /// </summary>
+  public void Reopen(Guid liveCustomerId, DateTime utcNow)
+  {
+    if (Status != LoyaltyRedemptionStatus.Delivered || BillLineId is null)
+    {
+      throw new InvalidOperationException("Only a redemption delivered by a bill is reopened.");
+    }
+
+    CustomerId = liveCustomerId;
+    DeliveredByUserId = null;
+    DeliveredAt = null;
+    BillLineId = null;
+    ReopenedAt = DomainValidation.EnsureUtc(utcNow, nameof(utcNow));
+    Status = LoyaltyRedemptionStatus.Approved;
+  }
 
   /// <summary>ADR-0018 D11: the approval or delivery was made by the beneficiary (an Admin).</summary>
   public void MarkSelfApproved() => IsSelfApproved = true;
@@ -461,4 +486,12 @@ public sealed class LoyaltyRedemptionAllocation
   public Guid RedemptionId { get; private set; }
   public Guid LotId { get; private set; }
   public int Points { get; private set; }
+
+  /// <summary>
+  /// ADR-0020 Q20: a reservation consumed by a delivery that was later undone; a new allocation holds the points again.
+  /// Only allocations without it are the redemption's current reservation.
+  /// </summary>
+  public DateTime? SupersededAt { get; private set; }
+
+  public void Supersede(DateTime utcNow) => SupersededAt = DomainValidation.EnsureUtc(utcNow, nameof(utcNow));
 }

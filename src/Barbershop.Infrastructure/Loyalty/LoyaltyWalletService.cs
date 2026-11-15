@@ -519,8 +519,11 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
     private async Task<(IReadOnlyList<LoyaltyRedemptionAllocation> Allocations, Dictionary<Guid, LoyaltyLot> Lots)> LoadReservationAsync(
         Guid lockedCustomerId, Guid redemptionId, CancellationToken cancellationToken)
     {
+        // ADR-0020 Q20: a reservation consumed by a delivery that was undone was superseded by a new one.
         var allocations = await TrackedAsync(
-            _dbContext.LoyaltyRedemptionAllocations, allocation => allocation.RedemptionId == redemptionId, cancellationToken);
+            _dbContext.LoyaltyRedemptionAllocations,
+            allocation => allocation.RedemptionId == redemptionId && allocation.SupersededAt == null,
+            cancellationToken);
         var lotIds = allocations.Select(allocation => allocation.LotId).ToArray();
         var lots = (await TrackedAsync(_dbContext.LoyaltyLots, lot => lotIds.Contains(lot.Id), cancellationToken))
             .ToDictionary(lot => lot.Id);
@@ -531,6 +534,119 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
         }
 
         return (allocations.OrderBy(allocation => allocation.LotId).ToList(), lots);
+    }
+
+    // ── Bills (ADR-0020 stage 4) ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// ADR-0020 Q9: a bill whose service earned points was unapproved. Takes the still usable points of the lot that
+    /// posting opened (wherever merges moved it) from the profile the caller locked; what the customer already spent
+    /// (redeemed, reserved for a redemption or settled against a debt) becomes a debt of that profile, so approving
+    /// again never gives points twice. Points that expired are not owed. Returns the points withdrawn and the debt.
+    /// </summary>
+    internal async Task<(int Withdrawn, LoyaltyDebt? Debt)> WithdrawForBillUnapprovalInCurrentTransactionAsync(
+        Guid postingId, Guid lockedCustomerId, string billNumber, Guid performedByUserId, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        EnsureTransaction();
+        var today = BogotaDate(utcNow);
+        var lots = await TrackedAsync(
+            _dbContext.LoyaltyLots, lot => lot.SourceType == LoyaltySourceType.BillLine && lot.SourceId == postingId, cancellationToken);
+        var original = lots.SingleOrDefault(lot => lot.OriginLotId == null)
+            ?? throw new ConflictException("No encontramos los puntos de esta cuenta. Recarga e intenta de nuevo.");
+        var lotIds = lots.Select(lot => lot.Id).ToArray();
+        var expired = await _dbContext.LoyaltyMovements.AsNoTracking()
+            .Where(movement => lotIds.Contains(movement.LotId!.Value) && movement.Type == LoyaltyMovementType.Expiration)
+            .SumAsync(movement => (int?)movement.Points, cancellationToken) ?? 0;
+
+        var withdrawn = 0;
+        foreach (var lot in lots.Where(candidate => candidate.RemainingPoints > 0))
+        {
+            if (lot.IsExpiredOn(today))
+            {
+                // Past its validity: those points were lost, not spent; the expiration job records them.
+                expired += lot.RemainingPoints;
+                continue;
+            }
+
+            if (lot.CustomerId != lockedCustomerId)
+            {
+                throw new ConflictException("Los puntos de esta cuenta están en otro perfil. Recarga e intenta de nuevo.");
+            }
+
+            var points = lot.RemainingPoints;
+            lot.Take(points);
+            _dbContext.LoyaltyMovements.Add(new LoyaltyMovement(
+                lot.CustomerId, LoyaltyMovementType.BillUnapprovalWithdrawal, points, utcNow,
+                lotId: lot.Id, performedByUserId: performedByUserId, reason: $"Cuenta {billNumber} desaprobada."));
+            withdrawn += points;
+        }
+
+        LoyaltyDebt? debt = null;
+        var owed = original.InitialPoints - withdrawn - expired;
+        if (owed > 0)
+        {
+            debt = new LoyaltyDebt(lockedCustomerId, LoyaltyDebtOrigin.PointsReversal, owed, utcNow);
+            _dbContext.LoyaltyDebts.Add(debt);
+            _dbContext.LoyaltyMovements.Add(new LoyaltyMovement(
+                lockedCustomerId, LoyaltyMovementType.DebtOpened, owed, utcNow, debtId: debt.Id, performedByUserId: performedByUserId,
+                reason: $"Puntos ya usados de la cuenta {billNumber}, que se desaprobó."));
+            await SettleDebtsAsync(lockedCustomerId, performedByUserId, utcNow, cancellationToken);
+        }
+
+        var removed = withdrawn + owed;
+        if (removed > 0)
+        {
+            await _notifications.QueueForCustomerAsync(
+                lockedCustomerId,
+                UserNotificationTypes.LoyaltyPointsWithdrawn,
+                CustomerNotificationMessages.PointsWithdrawn(
+                    removed,
+                    owed > 0
+                        ? $"Corregimos tu cuenta {billNumber}: retiramos los {CustomerNotificationOutbox.Points(removed)} que te dio. Los que ya usaste se descuentan de tus próximos puntos."
+                        : $"Corregimos tu cuenta {billNumber}: retiramos los {CustomerNotificationOutbox.Points(removed)} que te dio."),
+                cancellationToken);
+        }
+
+        return (withdrawn, debt);
+    }
+
+    /// <summary>
+    /// ADR-0020 Q20: the redemption delivered by an unapproved bill gets its points reserved again. Its consumed
+    /// reservation is superseded and a lot of the live profile (the caller locked it) opens fully reserved for it, with
+    /// the latest validity of the lots it came from: what the delivery consumed comes back as a reservation, never as
+    /// free points. The source id is the posting of the delivery, so each undone delivery restores once.
+    /// </summary>
+    internal async Task RestoreRedemptionReservationInCurrentTransactionAsync(
+        LoyaltyRedemption redemption, Guid lockedCustomerId, Guid postingId, Guid performedByUserId, DateTime utcNow,
+        CancellationToken cancellationToken)
+    {
+        EnsureTransaction();
+        var today = BogotaDate(utcNow);
+        var consumed = await TrackedAsync(
+            _dbContext.LoyaltyRedemptionAllocations,
+            allocation => allocation.RedemptionId == redemption.Id && allocation.SupersededAt == null,
+            cancellationToken);
+        var lotIds = consumed.Select(allocation => allocation.LotId).ToArray();
+        var latestExpiry = await _dbContext.LoyaltyLots.AsNoTracking()
+            .Where(lot => lotIds.Contains(lot.Id))
+            .MaxAsync(lot => (DateOnly?)lot.ExpiresOn, cancellationToken) ?? today;
+        foreach (var allocation in consumed)
+        {
+            allocation.Supersede(utcNow);
+        }
+
+        var validityDays = Math.Max(1, latestExpiry.DayNumber - today.DayNumber + 1);
+        var lot = LoyaltyLot.Accrue(
+            lockedCustomerId, LoyaltySourceType.RedemptionRestore, postingId, redemption.PointsCost, utcNow, today, validityDays);
+        lot.Reserve(redemption.PointsCost);
+        _dbContext.LoyaltyLots.Add(lot);
+        _dbContext.LoyaltyRedemptionAllocations.Add(new LoyaltyRedemptionAllocation(redemption.Id, lot.Id, redemption.PointsCost));
+        _dbContext.LoyaltyMovements.Add(new LoyaltyMovement(
+            lockedCustomerId, LoyaltyMovementType.RedemptionRestored, redemption.PointsCost, utcNow,
+            lotId: lot.Id, performedByUserId: performedByUserId, redemptionId: redemption.Id));
+        _dbContext.LoyaltyMovements.Add(new LoyaltyMovement(
+            lockedCustomerId, LoyaltyMovementType.RedemptionHold, redemption.PointsCost, utcNow,
+            lotId: lot.Id, performedByUserId: performedByUserId, redemptionId: redemption.Id));
     }
 
     // ── Expiration (daily job) ─────────────────────────────────────────────────────────────────
@@ -1060,6 +1176,7 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
             {
                 LoyaltySourceType.ServiceRecord => $"Servicio: {services.GetValueOrDefault(lot.SourceId, "servicio realizado")}",
                 LoyaltySourceType.BillLine => $"Servicio: {billLines.GetValueOrDefault(lot.SourceId, "servicio de una cuenta")}",
+                LoyaltySourceType.RedemptionRestore => "Canje: puntos reservados de nuevo al corregir una cuenta",
                 LoyaltySourceType.Membership => $"Membresía: {plans.GetValueOrDefault(lot.SourceId, "membresía")}",
                 _ => "Ajuste manual"
             });

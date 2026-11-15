@@ -314,6 +314,11 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<bool>("IsSelfApproved")
                         .HasColumnType("boolean");
 
+                    b.Property<bool>("IsSelfUnapproved")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.Property<string>("LinesJson")
                         .IsRequired()
                         .HasColumnType("jsonb");
@@ -325,6 +330,19 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<int>("Sequence")
                         .HasColumnType("integer");
 
+                    b.Property<Guid?>("UnapprovalKey")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("UnapprovalReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTime?>("UnapprovedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("UnapprovedByUserId")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
 
                     b.HasIndex("ApprovedByUserId");
@@ -334,12 +352,20 @@ namespace Barbershop.Infrastructure.Migrations
                     b.HasIndex("IdempotencyKey")
                         .IsUnique();
 
+                    b.HasIndex("UnapprovalKey")
+                        .IsUnique()
+                        .HasFilter("\"UnapprovalKey\" IS NOT NULL");
+
+                    b.HasIndex("UnapprovedByUserId");
+
                     b.HasIndex("BillId", "Sequence")
                         .IsUnique();
 
                     b.ToTable("bill_approvals", "public", t =>
                         {
                             t.HasCheckConstraint("ck_bill_approvals_sequence_positive", "\"Sequence\" >= 1");
+
+                            t.HasCheckConstraint("ck_bill_approvals_unapproval_shape", "(\"UnapprovedAt\" IS NULL AND \"UnapprovedByUserId\" IS NULL AND \"UnapprovalReason\" IS NULL AND \"UnapprovalKey\" IS NULL) OR (\"UnapprovedAt\" IS NOT NULL AND \"UnapprovedByUserId\" IS NOT NULL AND \"UnapprovalReason\" IS NOT NULL AND \"UnapprovalKey\" IS NOT NULL)");
                         });
                 });
 
@@ -547,6 +573,12 @@ namespace Barbershop.Infrastructure.Migrations
 
                     b.Property<Guid?>("MembershipConsumptionId")
                         .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ReversalTargetId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ReversedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
@@ -1006,6 +1038,9 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<int?>("Quantity")
                         .HasColumnType("integer");
 
+                    b.Property<Guid?>("ReversesIncomeEntryId")
+                        .HasColumnType("uuid");
+
                     b.Property<Guid?>("ServiceId")
                         .HasColumnType("uuid");
 
@@ -1033,13 +1068,17 @@ namespace Barbershop.Infrastructure.Migrations
 
                     b.HasIndex("ProductId");
 
+                    b.HasIndex("ReversesIncomeEntryId")
+                        .IsUnique()
+                        .HasFilter("\"ReversesIncomeEntryId\" IS NOT NULL");
+
                     b.HasIndex("ServiceId");
 
                     b.HasIndex("StaffProfileId");
 
                     b.ToTable("income_entries", "public", t =>
                         {
-                            t.HasCheckConstraint("ck_income_entries_amount_non_negative", "\"Amount\" >= 0");
+                            t.HasCheckConstraint("ck_income_entries_amount_non_negative", "\"Amount\" >= 0 OR \"ReversesIncomeEntryId\" IS NOT NULL");
 
                             t.HasCheckConstraint("ck_income_entries_base_price_non_negative", "\"BasePriceSnapshot\" >= 0");
 
@@ -1047,9 +1086,11 @@ namespace Barbershop.Infrastructure.Migrations
 
                             t.HasCheckConstraint("ck_income_entries_business_percentage_range", "\"BusinessPercentageSnapshot\" >= 0 AND \"BusinessPercentageSnapshot\" <= 100");
 
-                            t.HasCheckConstraint("ck_income_entries_commission_base_range", "\"CommissionBaseAmount\" IS NULL OR \"CommissionBaseAmount\" >= \"Amount\"");
+                            t.HasCheckConstraint("ck_income_entries_commission_base_range", "\"CommissionBaseAmount\" IS NULL OR (\"ReversesIncomeEntryId\" IS NULL AND \"CommissionBaseAmount\" >= \"Amount\") OR (\"ReversesIncomeEntryId\" IS NOT NULL AND \"CommissionBaseAmount\" <= \"Amount\")");
 
                             t.HasCheckConstraint("ck_income_entries_kind_consistency", "(\"Kind\" = 'Service' AND \"ServiceId\" IS NOT NULL AND \"StaffProfileId\" IS NOT NULL AND \"ServiceNameSnapshot\" IS NOT NULL) OR (\"Kind\" = 'MembershipSale' AND \"ServiceId\" IS NULL AND \"StaffProfileId\" IS NULL AND \"ServiceNameSnapshot\" IS NULL AND \"BusinessPercentageSnapshot\" = 100 AND \"BasePriceSnapshot\" = 0 AND \"IsPromo\" = false) OR (\"Kind\" = 'ProductSale' AND \"ServiceId\" IS NULL AND \"StaffProfileId\" IS NULL AND \"ServiceNameSnapshot\" IS NULL AND \"ProductId\" IS NOT NULL AND \"ProductNameSnapshot\" IS NOT NULL AND \"Quantity\" IS NOT NULL AND \"Quantity\" > 0 AND \"BillLineId\" IS NOT NULL AND \"BusinessPercentageSnapshot\" = 100 AND \"IsPromo\" = false) OR (\"Kind\" = 'Tip' AND \"ServiceId\" IS NULL AND \"StaffProfileId\" IS NOT NULL AND \"ServiceNameSnapshot\" IS NULL AND \"ProductId\" IS NULL AND \"BillLineId\" IS NOT NULL AND \"BusinessPercentageSnapshot\" = 0 AND \"BasePriceSnapshot\" = 0 AND \"IsPromo\" = false)");
+
+                            t.HasCheckConstraint("ck_income_entries_reversal_shape", "\"ReversesIncomeEntryId\" IS NULL OR (\"BillLineId\" IS NOT NULL AND \"Amount\" <= 0)");
                         });
                 });
 
@@ -1628,6 +1669,9 @@ namespace Barbershop.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<DateTime?>("ReopenedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<DateTime>("RequestedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -1729,6 +1773,9 @@ namespace Barbershop.Infrastructure.Migrations
 
                     b.Property<Guid>("RedemptionId")
                         .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("SupersededAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
 
@@ -4090,6 +4137,11 @@ namespace Barbershop.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("CustomerId")
                         .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("UnapprovedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Bills.BillEvent", b =>
@@ -4250,6 +4302,11 @@ namespace Barbershop.Infrastructure.Migrations
                     b.HasOne("Barbershop.Domain.Products.Product", null)
                         .WithMany()
                         .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Finance.IncomeEntry", null)
+                        .WithMany()
+                        .HasForeignKey("ReversesIncomeEntryId")
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("Barbershop.Domain.Services.Service", null)

@@ -12,9 +12,10 @@ internal sealed class IncomeEntryConfiguration : IEntityTypeConfiguration<Income
   {
     builder.ToTable("income_entries", tableBuilder =>
     {
+      // ADR-0020 Q8: only a counter-entry (it names the income it reverses) carries a negative amount.
       tableBuilder.HasCheckConstraint(
               "ck_income_entries_amount_non_negative",
-              "\"Amount\" >= 0");
+              "\"Amount\" >= 0 OR \"ReversesIncomeEntryId\" IS NOT NULL");
       tableBuilder.HasCheckConstraint(
               "ck_income_entries_base_price_non_negative",
               "\"BasePriceSnapshot\" >= 0");
@@ -38,9 +39,16 @@ internal sealed class IncomeEntryConfiguration : IEntityTypeConfiguration<Income
               + "AND \"ProductId\" IS NULL AND \"BillLineId\" IS NOT NULL AND \"BusinessPercentageSnapshot\" = 0 "
               + "AND \"BasePriceSnapshot\" = 0 AND \"IsPromo\" = false)");
       // P7: the commission base is the value before discounts, never below what was charged.
+      // The commission base never goes below what was charged; a counter-entry mirrors it with both signs negated.
       tableBuilder.HasCheckConstraint(
               "ck_income_entries_commission_base_range",
-              "\"CommissionBaseAmount\" IS NULL OR \"CommissionBaseAmount\" >= \"Amount\"");
+              "\"CommissionBaseAmount\" IS NULL "
+              + "OR (\"ReversesIncomeEntryId\" IS NULL AND \"CommissionBaseAmount\" >= \"Amount\") "
+              + "OR (\"ReversesIncomeEntryId\" IS NOT NULL AND \"CommissionBaseAmount\" <= \"Amount\")");
+      // A counter-entry reverses an income posted by a bill, and never adds money.
+      tableBuilder.HasCheckConstraint(
+              "ck_income_entries_reversal_shape",
+              "\"ReversesIncomeEntryId\" IS NULL OR (\"BillLineId\" IS NOT NULL AND \"Amount\" <= 0)");
       tableBuilder.HasCheckConstraint(
               "ck_income_entries_bill_shape",
               "(\"BillId\" IS NULL) = (\"BillLineId\" IS NULL)");
@@ -71,6 +79,13 @@ internal sealed class IncomeEntryConfiguration : IEntityTypeConfiguration<Income
     builder.Property(x => x.ProductNameSnapshot).HasMaxLength(120);
     builder.Property(x => x.UnitCostSnapshot).HasPrecision(18, 4);
     builder.Ignore(x => x.BusinessAmount);
+    builder.Ignore(x => x.IsReversal);
+    builder.HasOne<IncomeEntry>()
+        .WithMany()
+        .HasForeignKey(x => x.ReversesIncomeEntryId)
+        .OnDelete(DeleteBehavior.Restrict);
+    // An income is reversed at most once.
+    builder.HasIndex(x => x.ReversesIncomeEntryId).IsUnique().HasFilter("\"ReversesIncomeEntryId\" IS NOT NULL");
     builder.Ignore(x => x.ProfessionalAmount);
 
     builder.HasOne<global::Barbershop.Domain.Products.Product>()

@@ -15,7 +15,8 @@ public sealed record BillActionsView(
     bool CanVoid,
     bool CanApprove,
     bool CanDetachAppointment,
-    bool CanChangePaymentMethod);
+    bool CanChangePaymentMethod,
+    bool CanUnapprove = false);
 
 public sealed record BillLineView(
     Guid Id,
@@ -79,7 +80,12 @@ public sealed record BillView(
     uint Version,
     IReadOnlyList<BillLineView> Lines,
     IReadOnlyList<string> Warnings,
-    BillActionsView Actions);
+    BillActionsView Actions,
+    /// <summary>ADR-0020 stage 4: how many times it was approved, and the last unapproval (when, by whom, why).</summary>
+    int ApprovalCount = 0,
+    DateTime? LastUnapprovedAt = null,
+    string? LastUnapprovedByName = null,
+    string? LastUnapprovalReason = null);
 
 public sealed record BillSummaryView(
     Guid Id,
@@ -205,6 +211,9 @@ public sealed record BillPaymentMethodRequest(uint? Version, Guid? PaymentMethod
 /// <summary>Approve the whole bill. <c>NoPointsLineIds</c>: eligible service lines the approver decides not to credit.</summary>
 public sealed record BillApproveRequest(uint? Version, Guid IdempotencyKey, IReadOnlyList<Guid>? NoPointsLineIds = null, string? Notes = null);
 
+/// <summary>ADR-0020 stage 4: unapprove the approved bill; every posting of its approval is reversed. The reason is required.</summary>
+public sealed record BillUnapproveRequest(uint? Version, Guid IdempotencyKey, string? Reason);
+
 public sealed record BillApprovalLinePreview(
     Guid LineId,
     string Type,
@@ -279,6 +288,8 @@ public interface IBillApprovalService
   Task<BillApprovalPreviewView> PreviewAsync(Guid currentUserId, Guid billId, CancellationToken cancellationToken = default);
 
   Task<BillView> ApproveAsync(Guid currentUserId, Guid billId, BillApproveRequest request, CancellationToken cancellationToken = default);
+
+  Task<BillView> UnapproveAsync(Guid currentUserId, Guid billId, BillUnapproveRequest request, CancellationToken cancellationToken = default);
 }
 
 public interface IPaymentMethodsService

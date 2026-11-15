@@ -28,7 +28,7 @@ namespace Barbershop.Tests.Features.Bills;
 /// ADR-0020 stages 2 and 3: the rules of the bill and of its approval with postings. Locks, real concurrency and the
 /// database constraints are in BillsPostgresTests; permissions over HTTP in BillsHttpIntegrationTests.
 /// </summary>
-public sealed class BillsServiceTests : IDisposable
+public sealed partial class BillsServiceTests : IDisposable
 {
   private const string Terms = "La membresía es personal e intransferible.";
 
@@ -92,6 +92,7 @@ public sealed class BillsServiceTests : IDisposable
     var approverRole = new Role("Aprobación");
     approverRole.AddPermission(permissions[PermissionCodes.BillsApprove].Id, now);
     approverRole.AddPermission(permissions[PermissionCodes.BillsVoid].Id, now);
+    approverRole.AddPermission(permissions[PermissionCodes.BillsUnapprove].Id, now);
     _dbContext.Roles.AddRange(adminRole, staffRole, approverRole);
     _dbContext.UserRoles.AddRange(
         new UserRole(_admin.Id, adminRole.Id, now),

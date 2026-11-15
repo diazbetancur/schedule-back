@@ -10,7 +10,13 @@ public enum LoyaltySourceType
   Adjustment = 3,
 
   /// <summary>ADR-0020: a service of an approved bill; the source id is the posting of that line in that approval.</summary>
-  BillLine = 4
+  BillLine = 4,
+
+  /// <summary>
+  /// ADR-0020 Q20: the reservation of a delivered redemption given back when its bill is unapproved; the source id is the
+  /// posting of the delivery. The lot is opened fully reserved for the redemption.
+  /// </summary>
+  RedemptionRestore = 5
 }
 
 /// <summary>
@@ -69,13 +75,19 @@ public enum LoyaltyMovementType
   MembershipUnlinkWithdrawal = 15,
 
   /// <summary>ADR-0018 D5: gives back to the lot what an unlink withdrew, when the payment is linked again.</summary>
-  MembershipRelinkCredit = 16
+  MembershipRelinkCredit = 16,
+
+  /// <summary>ADR-0020 Q9: takes the still usable points a bill's service earned, when the bill is unapproved.</summary>
+  BillUnapprovalWithdrawal = 17,
+
+  /// <summary>ADR-0020 Q20: opens the lot that holds again the reservation of a redemption whose bill was unapproved.</summary>
+  RedemptionRestored = 18
 }
 
-/// <summary>Why a debt exists. Stage 4 creates none of its own: debts only move with merges and get settled.</summary>
+/// <summary>Why a debt exists.</summary>
 public enum LoyaltyDebtOrigin
 {
-  /// <summary>Reserved for reversing points already spent (ADR-0010); not created yet.</summary>
+  /// <summary>ADR-0020 Q9: points a bill's service earned and the customer already spent, when the bill is unapproved.</summary>
   PointsReversal = 1,
 
   /// <summary>The outstanding part of a debt of a merged profile.</summary>
@@ -381,10 +393,11 @@ public sealed class LoyaltyMovement
   public static int LotSign(LoyaltyMovementType type) => type switch
   {
     LoyaltyMovementType.Accrual or LoyaltyMovementType.MergeTransferIn or LoyaltyMovementType.AdjustmentCredit
-        or LoyaltyMovementType.RedemptionRelease or LoyaltyMovementType.MembershipRelinkCredit => 1,
+        or LoyaltyMovementType.RedemptionRelease or LoyaltyMovementType.MembershipRelinkCredit
+        or LoyaltyMovementType.RedemptionRestored => 1,
     LoyaltyMovementType.Expiration or LoyaltyMovementType.MembershipAnnulmentWithdrawal or LoyaltyMovementType.AdjustmentDebit
         or LoyaltyMovementType.MergeTransferOut or LoyaltyMovementType.DebtSettlement or LoyaltyMovementType.RedemptionHold
-        or LoyaltyMovementType.MembershipUnlinkWithdrawal => -1,
+        or LoyaltyMovementType.MembershipUnlinkWithdrawal or LoyaltyMovementType.BillUnapprovalWithdrawal => -1,
     _ => 0
   };
 

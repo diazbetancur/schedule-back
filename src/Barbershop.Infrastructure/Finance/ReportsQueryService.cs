@@ -92,7 +92,7 @@ internal sealed class ReportsQueryService : IAdminReportsService
                 group.Key,
                 names.TryGetValue(group.Key, out var name) ? name : string.Empty,
                 group.Sum(entry => (long)entry.Amount),
-                group.Count(),
+                group.Sum(Count),
                 group.Sum(entry => (long)entry.BusinessAmount),
                 group.Sum(entry => (long)entry.ProfessionalAmount),
                 tipsByProfessional.GetValueOrDefault(group.Key)))
@@ -169,16 +169,11 @@ internal sealed class ReportsQueryService : IAdminReportsService
             .Where(record => record.IsSelfApproved && incomeIds.Contains(record.IncomeEntryId))
             .Select(record => record.IncomeEntryId!.Value)
             .ToListAsync(cancellationToken);
-        // ADR-0020 P4: incomes of bills an Admin approved for themselves.
-        var billIds = incomes.Where(entry => entry.BillId is not null).Select(entry => entry.BillId!.Value).Distinct().ToArray();
-        var selfApprovedBillIds = billIds.Length == 0
-            ? []
-            : await _dbContext.Bills.AsNoTracking()
-                .Where(bill => billIds.Contains(bill.Id) && bill.IsSelfApproved)
-                .Select(bill => bill.Id)
-                .ToListAsync(cancellationToken);
+        // ADR-0020 P4: incomes (and counter-entries) of bill approvals an Admin made for themselves.
+        var selfApprovedBillIncomes = await Barbershop.Infrastructure.Bills.BillIncomeApprovals.SelfApprovedIncomeIdsAsync(
+            _dbContext, incomes.Where(entry => entry.BillId is not null).Select(entry => entry.Id).ToArray(), cancellationToken);
         var selfApprovedIncomes = incomes
-            .Where(entry => selfApprovedIncomeIds.Contains(entry.Id) || (entry.BillId is { } billId && selfApprovedBillIds.Contains(billId)))
+            .Where(entry => selfApprovedIncomeIds.Contains(entry.Id) || selfApprovedBillIncomes.Contains(entry.Id))
             .ToList();
 
         return new ReportSummaryView(
@@ -187,7 +182,7 @@ internal sealed class ReportsQueryService : IAdminReportsService
             totalIncome,
             totalExpenses,
             totalIncome - totalExpenses,
-            serviceIncomes.Count,
+            serviceIncomes.Sum(Count),
             promoIncome,
             serviceIncome - promoIncome,
             businessIncome,
@@ -200,13 +195,16 @@ internal sealed class ReportsQueryService : IAdminReportsService
             rewardCommissions,
             rewardCommissions.Sum(view => view.ProfessionalCommissionTotal),
             selfApprovedIncomes.Sum(entry => (long)entry.Amount),
-            selfApprovedIncomes.Count,
+            selfApprovedIncomes.Sum(Count),
             productSales.Sum(entry => (long)entry.Amount),
-            productSales.Sum(entry => entry.Quantity ?? 0),
+            productSales.Sum(entry => (entry.Quantity ?? 0) * Count(entry)),
             tips.Sum(entry => (long)entry.Amount),
-            tips.Count,
+            tips.Sum(Count),
             incomes.Where(entry => entry.CommissionBaseAmount is not null).Sum(entry => (long)(entry.CommissionBaseAmount!.Value - entry.Amount)));
     }
+
+    /// <summary>ADR-0020 Q8: a counter-entry takes back the service, unit or tip its original counted.</summary>
+    private static int Count(IncomeEntry entry) => entry.IsReversal ? -1 : 1;
 
     private static IReadOnlyList<ReportTrendPointView> BuildTrend(
         DateOnly rangeFrom,

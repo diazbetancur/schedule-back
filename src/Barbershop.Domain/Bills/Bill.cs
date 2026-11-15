@@ -238,6 +238,25 @@ public sealed class Bill
     Touch(utcNow);
   }
 
+  /// <summary>
+  /// ADR-0020 §3: the postings of the current approval were reversed; the bill waits for correction and a new
+  /// approval (or is voided). Its approval keeps its own copy and its postings.
+  /// </summary>
+  public void Unapprove(DateTime utcNow)
+  {
+    if (Status != BillStatus.Approved)
+    {
+      throw new InvalidOperationException($"The bill is {Status}; only an approved bill can be unapproved.");
+    }
+
+    CurrentApprovalId = null;
+    ApprovedByUserId = null;
+    ApprovedAt = null;
+    IsSelfApproved = false;
+    Status = BillStatus.Unapproved;
+    Touch(utcNow);
+  }
+
   /// <summary>Final. Only a bill without postings (open, closed or unapproved) can be voided; it keeps its number.</summary>
   public void Void(string reason, Guid voidedByUserId, DateTime utcNow)
   {
@@ -276,7 +295,7 @@ public enum BillStatus
   /// <summary>Posted.</summary>
   Approved = 3,
 
-  /// <summary>Reserved for stage 4 (postings reversed, waiting for correction).</summary>
+  /// <summary>Postings reversed; waiting for correction and a new approval (stage 4).</summary>
   Unapproved = 4,
 
   /// <summary>Final; keeps its number if it had one.</summary>

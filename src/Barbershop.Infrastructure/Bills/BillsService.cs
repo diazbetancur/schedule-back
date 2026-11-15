@@ -766,6 +766,12 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             var previousStatus = bill.Status;
             bill.Void(reason, currentUserId, Now());
             _dbContext.BillEvents.Add(new BillEvent(bill.Id, BillEventType.Voided, previousStatus, currentUserId, Now(), reason));
+            if (bill.Number is not null && bill.CustomerId is { } customerId)
+            {
+                // ADR-0020 §7: the customer received this receipt; they are told it was voided.
+                var live = await _wallet.ResolveLiveCustomerIdAsync(customerId, cancellationToken);
+                await _notifications.QueueForCustomerAsync(live, UserNotificationTypes.BillVoided, VoidedMessage(bill), cancellationToken);
+            }
             await _dbContext.SaveChangesAsync(cancellationToken);
             await CommitAsync(transaction, cancellationToken);
         }
@@ -1326,7 +1332,8 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
     {
         public bool Has(string code) => IsAdmin || Permissions.Contains(code);
 
-        public bool SeesAll => Has(PermissionCodes.BillsManage) || Has(PermissionCodes.BillsApprove) || Has(PermissionCodes.BillsVoid);
+        public bool SeesAll => Has(PermissionCodes.BillsManage) || Has(PermissionCodes.BillsApprove) || Has(PermissionCodes.BillsUnapprove)
+            || Has(PermissionCodes.BillsVoid);
 
         public bool Owns(Bill bill) => bill.OpenedByUserId == UserId || (StaffProfileId is { } staffId && bill.StaffProfileId == staffId);
 
@@ -1483,7 +1490,17 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             actor.Has(PermissionCodes.BillsVoid) && bill.Status is BillStatus.Open or BillStatus.Closed or BillStatus.Unapproved,
             actor.Has(PermissionCodes.BillsApprove) && bill.Status is BillStatus.Closed or BillStatus.Unapproved,
             bill.Status == BillStatus.Open && appointmentClosed && actor.CanEdit(bill),
-            actor.Has(PermissionCodes.BillsApprove) && bill.Status is BillStatus.Closed or BillStatus.Unapproved && bill.Total > 0);
+            actor.Has(PermissionCodes.BillsApprove) && bill.Status is BillStatus.Closed or BillStatus.Unapproved && bill.Total > 0,
+            actor.Has(PermissionCodes.BillsUnapprove) && bill.Status == BillStatus.Approved);
+
+        var approvals = await _dbContext.BillApprovals.AsNoTracking()
+            .Where(approval => approval.BillId == bill.Id)
+            .Select(approval => new { approval.Sequence, approval.UnapprovedAt, approval.UnapprovedByUserId, approval.UnapprovalReason })
+            .ToListAsync(cancellationToken);
+        var lastUnapproval = approvals.Where(approval => approval.UnapprovedAt != null).OrderByDescending(approval => approval.Sequence).FirstOrDefault();
+        var unapprovedByName = lastUnapproval?.UnapprovedByUserId is { } unapprovedBy
+            ? await _dbContext.Users.AsNoTracking().Where(user => user.Id == unapprovedBy).Select(user => user.FullName).SingleOrDefaultAsync(cancellationToken)
+            : null;
 
         return new BillView(
             bill.Id,
@@ -1520,7 +1537,11 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             bill.Version,
             lineViews,
             warnings,
-            actions);
+            actions,
+            approvals.Count,
+            lastUnapproval?.UnapprovedAt,
+            unapprovedByName,
+            lastUnapproval?.UnapprovalReason);
     }
 
     private async Task<IReadOnlyList<BillSummaryView>> MapSummariesAsync(IReadOnlyList<Bill> bills, CancellationToken cancellationToken)
@@ -1684,7 +1705,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
     private static BillStatus? ParseStatus(string? status)
         => string.IsNullOrWhiteSpace(status)
             ? null
-            : ParseName<BillStatus>(status) ?? throw Invalid("status", "El estado debe ser Open, Closed, Approved o Voided.");
+            : ParseName<BillStatus>(status) ?? throw Invalid("status", "El estado debe ser Open, Closed, Approved, Unapproved o Voided.");
 
     private static int? ParseNumber(string term)
     {
@@ -1741,6 +1762,24 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             $"bill-{bill.Id:N}",
             IsTimeSensitive: false);
     }
+
+    private static PushNotificationMessage CorrectedMessage(Bill bill)
+        => new(
+            $"Corregimos tu comprobante {bill.DisplayNumber}",
+            bill.Total > 0
+                ? $"Tu cuenta {bill.DisplayNumber} quedó corregida por $ {bill.Total.ToString("N0", DisplayCulture)}."
+                : $"Tu cuenta {bill.DisplayNumber} quedó corregida.",
+            null,
+            $"bill-{bill.Id:N}",
+            IsTimeSensitive: false);
+
+    private static PushNotificationMessage VoidedMessage(Bill bill)
+        => new(
+            $"Anulamos tu comprobante {bill.DisplayNumber}",
+            $"La cuenta {bill.DisplayNumber} quedó anulada. Si tienes dudas, pregúntanos en la barbería.",
+            null,
+            $"bill-{bill.Id:N}",
+            IsTimeSensitive: false);
 
     private async Task<Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction?> BeginTransactionAsync(CancellationToken cancellationToken)
         => _dbContext.Database.IsRelational() ? await _dbContext.Database.BeginTransactionAsync(cancellationToken) : null;

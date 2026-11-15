@@ -104,6 +104,29 @@ public sealed class ProductStock
         supplier: null, reference: null, expenseEntryId: null, idempotencyKey, performedByUserId, utcNow);
   }
 
+  /// <summary>
+  /// ADR-0020 stage 4: the units of an unapproved bill come back at the cost they left with. They count in the weighted
+  /// average like a receipt at that cost (covering any shortfall first, as a receipt does); without a cost (the product
+  /// had none when it was sold) the average is left as it is.
+  /// </summary>
+  public InventoryMovement ReturnSale(
+      int quantity, decimal? unitCost, DateOnly occurredOn, Guid idempotencyKey, Guid performedByUserId, DateTime utcNow)
+  {
+    EnsureQuantity(quantity);
+    if (unitCost is { } cost)
+    {
+      AverageUnitCost = OnHand <= 0 || AverageUnitCost is null
+          ? cost
+          : Math.Round(((OnHand * AverageUnitCost.Value) + (quantity * cost)) / (OnHand + quantity), 4, MidpointRounding.AwayFromZero);
+    }
+
+    OnHand = checked(OnHand + quantity);
+    Touch(utcNow);
+    return new InventoryMovement(
+        ProductId, InventoryMovementType.SaleReversal, quantity, unitCost, OnHand, AverageUnitCost, occurredOn, reason: null,
+        supplier: null, reference: null, expenseEntryId: null, idempotencyKey, performedByUserId, utcNow);
+  }
+
   public void SetMinStock(int? minStock, DateTime utcNow)
   {
     MinStock = minStock is { } value ? DomainValidation.EnsureRange(value, 0, MaxQuantity, nameof(minStock)) : null;

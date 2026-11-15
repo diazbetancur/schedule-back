@@ -28,7 +28,9 @@ public sealed record IncomeEntryView(
     string? BillNumber = null,
     string? ProductName = null,
     int? Quantity = null,
-    int? CommissionBase = null);
+    int? CommissionBase = null,
+    /// <summary>ADR-0020 Q8: this income is the counter-entry of that one (its bill was unapproved).</summary>
+    Guid? ReversesIncomeEntryId = null);
 
 /// <summary>
 /// <c>Kind</c> is optional: clients that predate membership sales omit it and get a service income.

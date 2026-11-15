@@ -667,6 +667,26 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
         return redemption;
     }
 
+    /// <summary>
+    /// ADR-0020 Q20: the bill that delivered this redemption was unapproved. Inside the caller's transaction, which already
+    /// holds the bill's lock and the live customer's: the redemption is locked, goes back to Approved in the live profile
+    /// (without its delivery deadline) and its points are reserved again. Returns it.
+    /// </summary>
+    internal async Task<LoyaltyRedemption> ReopenForBillUnapprovalInCurrentTransactionAsync(
+        Guid redemptionId, Guid lockedLiveCustomerId, Guid postingId, Guid currentUserId, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        await LockRedemptionAsync(redemptionId, cancellationToken);
+        var redemption = await _dbContext.LoyaltyRedemptions.SingleAsync(candidate => candidate.Id == redemptionId, cancellationToken);
+        if (redemption.Status != LoyaltyRedemptionStatus.Delivered || redemption.BillLineId is null)
+        {
+            throw new ConflictException("El canje de esta cuenta ya no está entregado por ella. Recarga e intenta de nuevo.");
+        }
+
+        await _wallet.RestoreRedemptionReservationInCurrentTransactionAsync(redemption, lockedLiveCustomerId, postingId, currentUserId, utcNow, cancellationToken);
+        redemption.Reopen(lockedLiveCustomerId, utcNow);
+        return redemption;
+    }
+
     // ── Expiration job ─────────────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -715,7 +735,8 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
     private static IQueryable<LoyaltyRedemption> DueRedemptions(IQueryable<LoyaltyRedemption> query, DateOnly today)
         => query.Where(redemption =>
             (redemption.Status == LoyaltyRedemptionStatus.Requested && redemption.ApproveBy < today)
-            || (redemption.Status == LoyaltyRedemptionStatus.Approved && redemption.DeliverBy < today));
+            // ADR-0020 Q20: a redemption reopened by an unapproved bill keeps no delivery deadline.
+            || (redemption.Status == LoyaltyRedemptionStatus.Approved && redemption.DeliverBy < today && redemption.ReopenedAt == null));
 
     // ── Merges (ADR-0013 D5) ───────────────────────────────────────────────────────────────────
 

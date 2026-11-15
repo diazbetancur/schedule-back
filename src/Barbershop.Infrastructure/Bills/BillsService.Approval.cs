@@ -1,6 +1,7 @@
 using Barbershop.Application.Bills;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Memberships.Admin;
+using Barbershop.Application.Notifications;
 using Barbershop.Domain.Appointments;
 using Barbershop.Domain.Bills;
 using Barbershop.Domain.Finance;
@@ -177,6 +178,10 @@ internal sealed partial class BillsService
             }
 
             var sequence = await _dbContext.BillApprovals.CountAsync(approval => approval.BillId == bill.Id, cancellationToken) + 1;
+            // ADR-0020 (decided 2026-11-15): a new approval after an unapproval posts its money and stock on the day of
+            // the new approval, so the period of the service never changes; the counter-entries are on the day of the
+            // unapproval. Membership consumptions keep the service date (their validity is checked against it).
+            var postingDate = sequence > 1 ? Today() : bill.ServiceDate;
             var approvalId = Guid.NewGuid();
             var shares = AllocateDiscounts(bill);
             var loyaltyEnabled = await _wallet.IsProgramEnabledAsync(cancellationToken);
@@ -196,7 +201,7 @@ internal sealed partial class BillsService
                     {
                         var income = IncomeEntry.CreateBillService(
                             line.ServiceId!.Value, line.NameSnapshot, line.UnitPrice, line.BusinessPercentageSnapshot!.Value,
-                            line.StaffProfileId!.Value, share.Net, line.GrossAmount, bill.ServiceDate, bill.Id, line.Id, currentUserId, utcNow);
+                            line.StaffProfileId!.Value, share.Net, line.GrossAmount, postingDate, bill.Id, line.Id, currentUserId, utcNow);
                         _dbContext.IncomeEntries.Add(income);
                         postings.Add(new BillPosting(Guid.NewGuid(), approvalId, line.Id, BillPostingEffect.Income, income.Id, utcNow));
                         if (live is { } customer && points.TryGetValue(line.Id, out var linePoints) && !noPoints.Contains(line.Id))
@@ -220,10 +225,10 @@ internal sealed partial class BillsService
                         var stock = await LoadStockAsync(line.ProductId!.Value, stocks, utcNow, cancellationToken);
                         var costBefore = stock.AverageUnitCost;
                         var movementPostingId = Guid.NewGuid();
-                        var movement = stock.Sell(line.Quantity, bill.ServiceDate, movementPostingId, currentUserId, utcNow);
+                        var movement = stock.Sell(line.Quantity, postingDate, movementPostingId, currentUserId, utcNow);
                         _dbContext.InventoryMovements.Add(movement);
                         var income = IncomeEntry.CreateProductSale(
-                            line.ProductId!.Value, line.NameSnapshot, line.Quantity, line.UnitPrice, costBefore, share.Net, bill.ServiceDate,
+                            line.ProductId!.Value, line.NameSnapshot, line.Quantity, line.UnitPrice, costBefore, share.Net, postingDate,
                             bill.Id, line.Id, currentUserId, utcNow);
                         _dbContext.IncomeEntries.Add(income);
                         postings.Add(new BillPosting(Guid.NewGuid(), approvalId, line.Id, BillPostingEffect.Income, income.Id, utcNow));
@@ -263,7 +268,7 @@ internal sealed partial class BillsService
 
                     case BillLineType.Tip when line.TipPaymentMode == TipPaymentMode.WithBill:
                     {
-                        var income = IncomeEntry.CreateTip(line.StaffProfileId!.Value, line.UnitPrice, bill.ServiceDate, bill.Id, line.Id, currentUserId, utcNow);
+                        var income = IncomeEntry.CreateTip(line.StaffProfileId!.Value, line.UnitPrice, postingDate, bill.Id, line.Id, currentUserId, utcNow);
                         _dbContext.IncomeEntries.Add(income);
                         postings.Add(new BillPosting(Guid.NewGuid(), approvalId, line.Id, BillPostingEffect.Income, income.Id, utcNow));
                         break;
@@ -300,6 +305,11 @@ internal sealed partial class BillsService
             _dbContext.BillEvents.Add(new BillEvent(
                 bill.Id, BillEventType.Approved, statusBefore, currentUserId, utcNow, request.Notes?.Trim(),
                 afterJson: Json(new { sequence, selfApproved, postings = postings.Count })));
+            if (sequence > 1 && live is { } corrected)
+            {
+                // ADR-0020 §7: the customer saw the receipt; a corrected approval tells them.
+                await _notifications.QueueForCustomerAsync(corrected, UserNotificationTypes.BillCorrected, CorrectedMessage(bill), cancellationToken);
+            }
 
             await _dbContext.SaveChangesAsync(cancellationToken);
             await CommitAsync(transaction, cancellationToken);
@@ -324,6 +334,178 @@ internal sealed partial class BillsService
         }
 
         return await GetAsync(currentUserId, billId, cancellationToken);
+    }
+
+    internal const string SelfUnapprovalForbiddenMessage =
+        "No puedes desaprobar una cuenta en la que tú eres el cliente o el profesional de alguna línea. Pide a otra persona que la revise.";
+
+    /// <summary>
+    /// ADR-0020 stage 4 (Q8, Q9, Q20): unapproves the approved bill. In one transaction, with the same lock order as the
+    /// approval and the version the client saw, every posting of the current approval is reversed: incomes get their
+    /// counter-entry dated today, sold units come back at their cost, membership consumptions are reversed in the ledger,
+    /// earned points are withdrawn (what was spent becomes a debt) and delivered redemptions go back to Approved with their
+    /// points reserved. A retry with the same key returns the stored result; anything else on a bill not approved is a 409.
+    /// </summary>
+    public async Task<BillView> UnapproveAsync(Guid currentUserId, Guid billId, BillUnapproveRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request.Version is null)
+        {
+            throw Invalid("version", MissingVersionMessage);
+        }
+
+        if (request.IdempotencyKey == Guid.Empty)
+        {
+            throw Invalid("idempotencyKey", "Falta la clave de la operación; recarga la página e intenta de nuevo.");
+        }
+
+        var reason = ValidateReason(request.Reason);
+        var actor = await LoadActorAsync(currentUserId, cancellationToken);
+        if (!actor.Has(PermissionCodes.BillsUnapprove))
+        {
+            throw new UnauthorizedAccessException("No tienes permiso para desaprobar cuentas.");
+        }
+
+        if (await ReplayUnapprovalAsync(currentUserId, billId, request.IdempotencyKey, cancellationToken) is { } replay)
+        {
+            return replay;
+        }
+
+        try
+        {
+            await using var transaction = await BeginTransactionAsync(cancellationToken);
+            var bill = await LoadLockedAsync(actor, billId, cancellationToken);
+            if (bill.Status != BillStatus.Approved)
+            {
+                throw new ConflictException(bill.Status == BillStatus.Unapproved
+                    ? "Esta cuenta ya fue desaprobada por otra persona. Recarga la página."
+                    : "Solo se desaprueba una cuenta aprobada.");
+            }
+
+            EnsureVersion(bill, request.Version.Value);
+            // ADR-0018 D1, applied to the unapproval too (decided 2026-11-15): an Admin may, and it stays marked.
+            var selfUnapproved = await SelfApprovalGuard.ResolveAsync(
+                _dbContext, currentUserId, await IsBeneficiaryAsync(currentUserId, bill, cancellationToken), SelfUnapprovalForbiddenMessage,
+                cancellationToken);
+
+            var approval = await _dbContext.BillApprovals.SingleAsync(candidate => candidate.Id == bill.CurrentApprovalId, cancellationToken);
+            var postings = await _dbContext.BillPostings
+                .Where(posting => posting.ApprovalId == approval.Id && posting.ReversedAt == null)
+                .OrderBy(posting => posting.CreatedAt).ThenBy(posting => posting.Id)
+                .ToListAsync(cancellationToken);
+
+            // Same global order as the approval: bill → customer profiles → memberships → redemptions → products.
+            Guid? live = approval.CustomerId is { } customerId ? await _wallet.LockLiveCustomerAsync(customerId, cancellationToken) : null;
+            var consumptionIds = postings.Where(posting => posting.MembershipConsumptionId is not null).Select(posting => posting.MembershipConsumptionId!.Value).ToArray();
+            var membershipIds = await _dbContext.MembershipConsumptions.AsNoTracking()
+                .Where(consumption => consumptionIds.Contains(consumption.Id))
+                .Select(consumption => (Guid?)consumption.CustomerMembershipId)
+                .ToListAsync(cancellationToken);
+            await LockInOrderAsync("customer_memberships", membershipIds, cancellationToken);
+            await LockInOrderAsync("loyalty_redemptions", postings.Select(posting => posting.LoyaltyRedemptionId), cancellationToken);
+            var movementIds = postings.Where(posting => posting.InventoryMovementId is not null).Select(posting => posting.InventoryMovementId!.Value).ToArray();
+            var sales = await _dbContext.InventoryMovements.AsNoTracking()
+                .Where(movement => movementIds.Contains(movement.Id))
+                .ToDictionaryAsync(movement => movement.Id, cancellationToken);
+            foreach (var productId in sales.Values.Select(movement => movement.ProductId).Distinct().Order())
+            {
+                await _dbContext.LockProductAsync(productId, cancellationToken);
+            }
+
+            var utcNow = Now();
+            var today = Today();
+            var number = bill.DisplayNumber!;
+            var stocks = new Dictionary<Guid, ProductStock>();
+            foreach (var posting in postings)
+            {
+                switch (posting.Effect)
+                {
+                    case BillPostingEffect.Income:
+                    {
+                        var original = await _dbContext.IncomeEntries.AsNoTracking().SingleAsync(entry => entry.Id == posting.IncomeEntryId, cancellationToken);
+                        var counter = IncomeEntry.CreateReversal(original, today, currentUserId, utcNow);
+                        _dbContext.IncomeEntries.Add(counter);
+                        posting.MarkReversed(counter.Id, utcNow);
+                        break;
+                    }
+
+                    case BillPostingEffect.InventorySale:
+                    {
+                        var sale = sales[posting.InventoryMovementId!.Value];
+                        var stock = await LoadStockAsync(sale.ProductId, stocks, utcNow, cancellationToken);
+                        var returned = stock.ReturnSale(sale.Quantity, sale.UnitCost, today, Guid.NewGuid(), currentUserId, utcNow);
+                        _dbContext.InventoryMovements.Add(returned);
+                        posting.MarkReversed(returned.Id, utcNow);
+                        break;
+                    }
+
+                    case BillPostingEffect.MembershipConsumption:
+                    {
+                        var reversal = await _ledger.ReverseInCurrentTransactionAsync(
+                            currentUserId, posting.MembershipConsumptionId!.Value, $"Cuenta {number} desaprobada: {reason}", cancellationToken);
+                        posting.MarkReversed(reversal.Id, utcNow);
+                        break;
+                    }
+
+                    case BillPostingEffect.LoyaltyAccrual:
+                    {
+                        var (_, debt) = await _wallet.WithdrawForBillUnapprovalInCurrentTransactionAsync(
+                            posting.Id, live ?? throw new ConflictException(WalkInLimitMessage), number, currentUserId, utcNow, cancellationToken);
+                        posting.MarkReversed(debt?.Id ?? posting.LoyaltyLotId, utcNow);
+                        break;
+                    }
+
+                    case BillPostingEffect.RedemptionDelivery:
+                    {
+                        var redemption = await _redemptions.ReopenForBillUnapprovalInCurrentTransactionAsync(
+                            posting.LoyaltyRedemptionId!.Value, live ?? throw new ConflictException(WalkInLimitMessage), posting.Id, currentUserId,
+                            utcNow, cancellationToken);
+                        posting.MarkReversed(redemption.Id, utcNow);
+                        break;
+                    }
+                }
+            }
+
+            approval.Unapprove(request.IdempotencyKey, reason, currentUserId, utcNow, selfUnapproved);
+            bill.Unapprove(utcNow);
+            _dbContext.BillEvents.Add(new BillEvent(
+                bill.Id, BillEventType.Unapproved, BillStatus.Approved, currentUserId, utcNow, reason,
+                afterJson: Json(new { approval.Sequence, reversed = postings.Count, selfUnapproved })));
+            await _dbContext.SaveChangesAsync(cancellationToken);
+            await CommitAsync(transaction, cancellationToken);
+        }
+        catch (Exception) when (ResetTracker())
+        {
+            throw;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            throw new ConflictException(StaleMessage);
+        }
+        catch (DbUpdateException exception) when (IsUniqueViolation(exception))
+        {
+            _dbContext.ChangeTracker.Clear();
+            if (await ReplayUnapprovalAsync(currentUserId, billId, request.IdempotencyKey, cancellationToken) is { } stored)
+            {
+                return stored;
+            }
+
+            throw new ConflictException("Esta cuenta ya fue desaprobada por otra persona. Recarga la página.");
+        }
+
+        return await GetAsync(currentUserId, billId, cancellationToken);
+    }
+
+    private async Task<BillView?> ReplayUnapprovalAsync(Guid currentUserId, Guid billId, Guid key, CancellationToken cancellationToken)
+    {
+        var previous = await _dbContext.BillApprovals.AsNoTracking().SingleOrDefaultAsync(approval => approval.UnapprovalKey == key, cancellationToken);
+        if (previous is null)
+        {
+            return null;
+        }
+
+        return previous.BillId == billId && previous.UnapprovedByUserId == currentUserId
+            ? await GetAsync(currentUserId, billId, cancellationToken)
+            : throw new ConflictException("Esta desaprobación ya se usó para otra cuenta. Recarga la página.");
     }
 
     private async Task<BillView?> ReplayApprovalAsync(Guid currentUserId, Guid billId, Guid key, CancellationToken cancellationToken)

@@ -26,6 +26,8 @@ public static class UserNotificationTypes
 
   // ADR-0020 Q19: category «Compras» (purchases).
   public const string BillClosed = "bill.closed";
+  public const string BillCorrected = "bill.corrected";
+  public const string BillVoided = "bill.voided";
 }
 
 /// <summary>

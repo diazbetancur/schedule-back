@@ -24,6 +24,9 @@ public static class AuthPolicyNames
   /// <summary>ADR-0020: Admin, or bills.approve still granted in the database (critical).</summary>
   public const string BillsApproveAccess = "BillsApproveAccessPolicy";
 
+  /// <summary>ADR-0020 stage 4: Admin, or bills.unapprove still granted in the database (critical).</summary>
+  public const string BillsUnapproveAccess = "BillsUnapproveAccessPolicy";
+
   /// <summary>ADR-0020: Admin, or bills.void still granted in the database (critical).</summary>
   public const string BillsVoidAccess = "BillsVoidAccessPolicy";
 }

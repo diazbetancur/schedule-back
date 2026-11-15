@@ -99,6 +99,38 @@ public sealed class BillApproval
 
   public string LinesJson { get; private set; } = "[]";
   public string? Notes { get; private set; }
+
+  // ADR-0020 stage 4: the unapproval of this cycle (its postings were reversed).
+  public DateTime? UnapprovedAt { get; private set; }
+  public Guid? UnapprovedByUserId { get; private set; }
+  public string? UnapprovalReason { get; private set; }
+
+  /// <summary>Sent by the client: a retried unapproval returns the stored one.</summary>
+  public Guid? UnapprovalKey { get; private set; }
+
+  /// <summary>ADR-0018 D1 applied to the unapproval: an Admin who is the customer or a professional of the bill.</summary>
+  public bool IsSelfUnapproved { get; private set; }
+
+  public bool IsUnapproved => UnapprovedAt is not null;
+
+  public void Unapprove(Guid unapprovalKey, string reason, Guid unapprovedByUserId, DateTime utcNow, bool selfUnapproved)
+  {
+    if (IsUnapproved)
+    {
+      throw new InvalidOperationException("This approval was already unapproved.");
+    }
+
+    if (unapprovalKey == Guid.Empty)
+    {
+      throw new ArgumentException("An unapproval needs an idempotency key.", nameof(unapprovalKey));
+    }
+
+    UnapprovalKey = unapprovalKey;
+    UnapprovalReason = DomainValidation.Required(reason?.Trim(), nameof(reason), Bill.MaxReasonLength, Bill.MinReasonLength);
+    UnapprovedByUserId = unapprovedByUserId;
+    UnapprovedAt = DomainValidation.EnsureUtc(utcNow, nameof(utcNow));
+    IsSelfUnapproved = selfUnapproved;
+  }
 }
 
 /// <summary>
@@ -150,6 +182,26 @@ public sealed class BillPosting
   public Guid? LoyaltyRedemptionId { get; private set; }
   public Guid? InventoryMovementId { get; private set; }
   public DateTime CreatedAt { get; private set; }
+
+  /// <summary>
+  /// ADR-0020 stage 4: when the approval was unapproved, what reversed this effect: the counter-entry income, the
+  /// consumption reversal, the debt (or the lot) of the points, the redemption reopened or the stock return movement.
+  /// </summary>
+  public DateTime? ReversedAt { get; private set; }
+  public Guid? ReversalTargetId { get; private set; }
+
+  public bool IsReversed => ReversedAt is not null;
+
+  public void MarkReversed(Guid? reversalTargetId, DateTime utcNow)
+  {
+    if (IsReversed)
+    {
+      throw new InvalidOperationException("This posting was already reversed.");
+    }
+
+    ReversalTargetId = reversalTargetId;
+    ReversedAt = DomainValidation.EnsureUtc(utcNow, nameof(utcNow));
+  }
 }
 
 public enum BillPostingEffect

@@ -83,6 +83,14 @@ public sealed class IncomeEntry
   public decimal? UnitCostSnapshot { get; private set; }
 
   /// <summary>
+  /// ADR-0020 Q8: this income is the counter-entry of another one (a bill unapproved): same snapshots, amount and
+  /// commission base negated, dated the day of the unapproval. The original is never edited.
+  /// </summary>
+  public Guid? ReversesIncomeEntryId { get; private set; }
+
+  public bool IsReversal => ReversesIncomeEntryId is not null;
+
+  /// <summary>
   /// The professional's share: the commission computed on <see cref="CommissionBaseAmount"/> when there is one (P7),
   /// otherwise on <see cref="Amount"/>. The business keeps the rest, so the two always sum to <see cref="Amount"/> (the
   /// business share of a discounted service can be smaller than the commission, even negative: the business bears it).
@@ -165,6 +173,42 @@ public sealed class IncomeEntry
         CreatedAt = DomainValidation.EnsureUtc(createdAt, nameof(createdAt)),
         IsDeleted = false,
       };
+
+  /// <summary>
+  /// ADR-0020 Q8: the counter-entry of an income posted by a bill. The commission is the exact mirror of the original
+  /// (the business share is truncated toward zero on both signs), so the original plus its counter-entry add up to 0.
+  /// </summary>
+  public static IncomeEntry CreateReversal(IncomeEntry original, DateOnly occurredOn, Guid createdByUserId, DateTime createdAt)
+  {
+    if (original.BillLineId is null || original.IsReversal)
+    {
+      throw new InvalidOperationException("Only an income posted by a bill, and not a counter-entry, can be reversed.");
+    }
+
+    return new IncomeEntry
+    {
+      Kind = original.Kind,
+      ServiceId = original.ServiceId,
+      ServiceNameSnapshot = original.ServiceNameSnapshot,
+      BasePriceSnapshot = original.BasePriceSnapshot,
+      BusinessPercentageSnapshot = original.BusinessPercentageSnapshot,
+      StaffProfileId = original.StaffProfileId,
+      Amount = -original.Amount,
+      CommissionBaseAmount = original.CommissionBaseAmount is { } commissionBase ? -commissionBase : null,
+      IsPromo = false,
+      OccurredOn = occurredOn,
+      BillId = original.BillId,
+      BillLineId = original.BillLineId,
+      ProductId = original.ProductId,
+      ProductNameSnapshot = original.ProductNameSnapshot,
+      Quantity = original.Quantity,
+      UnitCostSnapshot = original.UnitCostSnapshot,
+      ReversesIncomeEntryId = original.Id,
+      CreatedByUserId = createdByUserId,
+      CreatedAt = DomainValidation.EnsureUtc(createdAt, nameof(createdAt)),
+      IsDeleted = false,
+    };
+  }
 
   public static IncomeEntry CreateMembershipSale(int amount, DateOnly occurredOn, Guid createdByUserId, DateTime createdAt)
   {

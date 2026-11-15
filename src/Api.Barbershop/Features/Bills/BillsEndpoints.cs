@@ -155,6 +155,16 @@ public static class BillsEndpoints
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
 
+        bills.MapPost("/{billId:guid}/unapprove",
+                (Guid billId, BillUnapproveRequest request, ClaimsPrincipal user, IBillApprovalService service, CancellationToken ct)
+                    => service.UnapproveAsync(user.GetRequiredUserId(), billId, request, ct))
+            .RequireAuthorization(AuthPolicyNames.BillsUnapproveAccess)
+            .WithName("UnapproveBill")
+            .Produces<BillView>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
+
         return api;
     }
 

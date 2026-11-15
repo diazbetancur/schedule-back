@@ -105,6 +105,40 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
         return await RegisterAsync(currentUserId, membership, request, cancellationToken);
     }
 
+    /// <summary>
+    /// ADR-0020 stage 4: reverses the consumption of an unapproved bill inside the caller's transaction, with the same
+    /// append-only rows as <see cref="ReverseAsync"/>: the units go back to their lines; a membership that expired or was
+    /// annulled meanwhile is not reactivated (ADR-0010 P7). Nothing is saved: the caller saves and commits.
+    /// </summary>
+    internal async Task<MembershipConsumptionReversal> ReverseInCurrentTransactionAsync(
+        Guid currentUserId, Guid consumptionId, string reason, CancellationToken cancellationToken)
+    {
+        var consumption = await _dbContext.MembershipConsumptions.AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Id == consumptionId, cancellationToken)
+            ?? throw new ConflictException("No encontramos el consumo de la membresía de esta cuenta.");
+        await LockMembershipAsync(consumption.CustomerMembershipId, cancellationToken);
+        if (await _dbContext.MembershipConsumptionReversals.AnyAsync(reversal => reversal.MembershipConsumptionId == consumption.Id, cancellationToken))
+        {
+            throw new ConflictException("El consumo de la membresía de esta cuenta ya fue revertido.");
+        }
+
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        var trimmed = reason.Length <= ReasonMaxLength ? reason : reason[..ReasonMaxLength];
+        var reversal = new MembershipConsumptionReversal(consumption.Id, trimmed, currentUserId, utcNow);
+        _dbContext.MembershipConsumptionReversals.Add(reversal);
+        var taken = await _dbContext.MembershipMovements
+            .Where(movement => movement.MembershipConsumptionId == consumption.Id && movement.Type == MembershipMovementType.Consumption)
+            .ToListAsync(cancellationToken);
+        foreach (var movement in taken)
+        {
+            _dbContext.MembershipMovements.Add(new MembershipMovement(
+                consumption.CustomerMembershipId, movement.MembershipAllowanceId, consumption.Id, MembershipMovementType.Reversal,
+                movement.Quantity, currentUserId, utcNow));
+        }
+
+        return reversal;
+    }
+
     public async Task<CustomerMembershipDetailView> ReverseAsync(
         Guid currentUserId,
         Guid membershipId,
@@ -144,6 +178,13 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
             {
                 throw new ConflictException(
                     "Este consumo proviene de un servicio realizado confirmado y no se puede revertir desde la membresía.");
+            }
+
+            // ADR-0020: a consumption of an approved bill is undone by unapproving the bill, which reverses it too.
+            if (await _dbContext.BillPostings.AnyAsync(posting => posting.MembershipConsumptionId == consumption.Id, cancellationToken))
+            {
+                throw new ConflictException(
+                    "Este consumo proviene de una cuenta aprobada; se corrige desaprobando la cuenta.");
             }
 
             // Allowed on an annulled membership too: the units go back to their lines but the membership stays

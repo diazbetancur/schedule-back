@@ -119,11 +119,16 @@ public static class ApiFoundationServiceCollectionExtensions
                     global::Barbershop.Domain.Users.PermissionCodes.BillsClose,
                     global::Barbershop.Domain.Users.PermissionCodes.BillsManage,
                     global::Barbershop.Domain.Users.PermissionCodes.BillsApprove,
+                    global::Barbershop.Domain.Users.PermissionCodes.BillsUnapprove,
                     global::Barbershop.Domain.Users.PermissionCodes.BillsVoid)));
             options.AddPolicy(AuthPolicyNames.BillsApproveAccess, policy => policy
                 .RequireAuthenticatedUser()
                 .AddRequirements(new AdminOrCurrentPermissionRequirement(
                     AuthRoleNames.Admin, global::Barbershop.Domain.Users.PermissionCodes.BillsApprove)));
+            options.AddPolicy(AuthPolicyNames.BillsUnapproveAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin, global::Barbershop.Domain.Users.PermissionCodes.BillsUnapprove)));
             options.AddPolicy(AuthPolicyNames.BillsVoidAccess, policy => policy
                 .RequireAuthenticatedUser()
                 .AddRequirements(new AdminOrCurrentPermissionRequirement(

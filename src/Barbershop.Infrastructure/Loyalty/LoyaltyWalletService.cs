@@ -183,6 +183,92 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
     }
 
     /// <summary>
+    /// ADR-0018 D5: the payment of a membership was unlinked, so its points go too. Takes the still usable points of the
+    /// membership's lots (wherever merges moved them) from the profile the caller locked; what was already redeemed or
+    /// expired is not owed back (no debt), as with an annulment.
+    /// </summary>
+    internal async Task<int> WithdrawForMembershipUnlinkInCurrentTransactionAsync(
+        Guid membershipId, Guid lockedCustomerId, Guid performedByUserId, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        EnsureTransaction();
+        var today = BogotaDate(utcNow);
+        var lots = await _dbContext.LoyaltyLots
+            .Where(lot => lot.SourceType == LoyaltySourceType.Membership && lot.SourceId == membershipId && lot.RemainingPoints > 0)
+            .ToListAsync(cancellationToken);
+
+        var withdrawn = 0;
+        foreach (var lot in lots.Where(candidate => !candidate.IsExpiredOn(today)))
+        {
+            if (lot.CustomerId != lockedCustomerId)
+            {
+                throw new ConflictException("Los puntos de la membresía están en otro perfil. Recarga e intenta de nuevo.");
+            }
+
+            var points = lot.RemainingPoints;
+            lot.Take(points);
+            _dbContext.LoyaltyMovements.Add(new LoyaltyMovement(
+                lot.CustomerId, LoyaltyMovementType.MembershipUnlinkWithdrawal, points, utcNow,
+                lotId: lot.Id, performedByUserId: performedByUserId, reason: "Se desvinculó el pago de la membresía."));
+            withdrawn += points;
+        }
+
+        return withdrawn;
+    }
+
+    /// <summary>
+    /// ADR-0018 D5: the payment is linked again, so each lot gets back what unlinks took and was not given back yet.
+    /// Lots that expired meanwhile get nothing back (those points would have expired anyway).
+    /// </summary>
+    internal async Task<int> RecreditForMembershipRelinkInCurrentTransactionAsync(
+        Guid membershipId, Guid lockedCustomerId, Guid performedByUserId, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        EnsureTransaction();
+        var today = BogotaDate(utcNow);
+        var lots = await _dbContext.LoyaltyLots
+            .Where(lot => lot.SourceType == LoyaltySourceType.Membership && lot.SourceId == membershipId)
+            .ToListAsync(cancellationToken);
+        if (lots.Count == 0)
+        {
+            return 0;
+        }
+
+        var lotIds = lots.Select(lot => (Guid?)lot.Id).ToArray();
+        var balances = await _dbContext.LoyaltyMovements.AsNoTracking()
+            .Where(movement => lotIds.Contains(movement.LotId)
+                && (movement.Type == LoyaltyMovementType.MembershipUnlinkWithdrawal || movement.Type == LoyaltyMovementType.MembershipRelinkCredit))
+            .GroupBy(movement => movement.LotId!.Value)
+            .Select(group => new
+            {
+                LotId = group.Key,
+                Pending = group.Sum(movement => movement.Type == LoyaltyMovementType.MembershipUnlinkWithdrawal ? movement.Points : -movement.Points),
+            })
+            .ToDictionaryAsync(balance => balance.LotId, balance => balance.Pending, cancellationToken);
+
+        var credited = 0;
+        foreach (var lot in lots.Where(candidate => !candidate.IsExpiredOn(today)))
+        {
+            var pending = balances.GetValueOrDefault(lot.Id);
+            if (pending <= 0)
+            {
+                continue;
+            }
+
+            if (lot.CustomerId != lockedCustomerId)
+            {
+                throw new ConflictException("Los puntos de la membresía están en otro perfil. Recarga e intenta de nuevo.");
+            }
+
+            lot.Restore(pending);
+            _dbContext.LoyaltyMovements.Add(new LoyaltyMovement(
+                lot.CustomerId, LoyaltyMovementType.MembershipRelinkCredit, pending, utcNow,
+                lotId: lot.Id, performedByUserId: performedByUserId, reason: "Se volvió a vincular el pago de la membresía."));
+            credited += pending;
+        }
+
+        return credited;
+    }
+
+    /// <summary>
     /// Moves the usable points and the outstanding debt of <paramref name="sourceId"/> to <paramref name="targetId"/>
     /// with new movements (ADR-0013 D1–D4): each new lot keeps the original expiry and points to its source lot and
     /// profile; expired points stay behind; debts move by their outstanding part only, then the common settlement

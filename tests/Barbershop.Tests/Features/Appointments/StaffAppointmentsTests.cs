@@ -158,6 +158,40 @@ public sealed class StaffAppointmentsTests : IDisposable
         Assert.Equal(1, _notifications.CustomerCancellations);
     }
 
+    /// <summary>ADR-0018 D2 (SONDA BUG-067): administration follows the same rule as the professional.</summary>
+    [Fact]
+    public async Task AdminUpdateStatusAsync_RefusesToCompleteAFutureDayAppointment_ButCanCancelIt()
+    {
+        var staff = await CreateStaffAsync("admin-future@example.com", "Admin Future", "Admin Future");
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(nextDay.DayOfWeek, 9, 0, 12, 0)]);
+        var created = await _adminAppointmentsService.CreateAsync(new AdminManualAppointmentCreateRequest(
+            staff.StaffProfileId, ToUtc(nextDay, 9, 0), Corte, "Cliente Futuro", "futuro@example.com", "+573001234568", null));
+
+        var refused = await Assert.ThrowsAsync<ValidationProblemException>(() => _adminAppointmentsService.UpdateStatusAsync(
+            created.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Completed)));
+        Assert.Equal(AppointmentManagementService.CompleteFutureAppointmentMessage, Assert.Single(refused.Errors["status"]));
+
+        Assert.Equal(AppointmentStatus.Cancelled, (await _adminAppointmentsService.UpdateStatusAsync(
+            created.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Cancelled))).Status);
+    }
+
+    /// <summary>ADR-0018 D2: an appointment of today (Bogotá) is completed as before.</summary>
+    [Fact]
+    public async Task AdminUpdateStatusAsync_CompletesAnAppointmentOfToday()
+    {
+        var staff = await CreateStaffAsync("admin-today@example.com", "Admin Today", "Admin Today");
+        // The service runs on the fixed clock of this class: later the same Bogotá day it was "now".
+        var startsAt = CurrentUtc.UtcDateTime.AddHours(2);
+        var appointment = new Appointment(staff.StaffProfileId, "Cliente Hoy", startsAt, startsAt.AddMinutes(30),
+            AppointmentStatus.Confirmed, AppointmentSource.Manual, CurrentUtc.UtcDateTime.AddDays(-1));
+        _dbContext.Appointments.Add(appointment);
+        await _dbContext.SaveChangesAsync();
+
+        Assert.Equal(AppointmentStatus.Completed, (await _adminAppointmentsService.UpdateStatusAsync(
+            appointment.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Completed))).Status);
+    }
+
     [Fact]
     public async Task AdminUpdateAsync_AllowsCrossStaffManagement()
     {
@@ -195,8 +229,25 @@ public sealed class StaffAppointmentsTests : IDisposable
         Assert.Equal(AppointmentStatus.NoShow, statusUpdated.Status);
     }
 
+    /// <summary>ADR-0018 D2 (SONDA BUG-067): an appointment of a future day (Bogotá) cannot be completed yet.</summary>
+    [Fact]
+    public async Task UpdateStatusForCurrentStaffAsync_RefusesToCompleteAFutureDayAppointment()
+    {
+        var staff = await CreateStaffAsync("status-future@example.com", "Future Staff", "Future Staff");
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 12, 0)]);
+        var created = await _staffAppointmentsService.CreateForCurrentStaffAsync(
+            staff.UserId,
+            new StaffManualAppointmentCreateRequest(ToUtc(nextDay, 9, 0), Corte, "Future Customer", null, null, null));
+
+        var refused = await Assert.ThrowsAsync<ValidationProblemException>(() => _staffAppointmentsService.UpdateStatusForCurrentStaffAsync(
+            staff.UserId, created.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Completed)));
+
+        Assert.Equal(AppointmentManagementService.CompleteFutureAppointmentMessage, Assert.Single(refused.Errors["status"]));
+        Assert.NotEqual(AppointmentStatus.Completed, (await _dbContext.Appointments.AsNoTracking().SingleAsync(a => a.Id == created.Id)).Status);
+    }
+
     [Theory]
-    [InlineData(AppointmentStatus.Completed)]
     [InlineData(AppointmentStatus.Cancelled)]
     [InlineData(AppointmentStatus.NoShow)]
     public async Task UpdateStatusForCurrentStaffAsync_AppliesTerminalStatus(AppointmentStatus targetStatus)

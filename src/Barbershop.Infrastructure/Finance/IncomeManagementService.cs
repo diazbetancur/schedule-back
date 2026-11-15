@@ -365,11 +365,11 @@ internal sealed class IncomeManagementService : IAdminIncomeService
                 .SingleOrDefaultAsync(cancellationToken) ?? string.Empty;
         }
 
-        var serviceRecordId = await _dbContext.ServiceRecords
+        var serviceRecord = await _dbContext.ServiceRecords
             .Where(record => record.IncomeEntryId == entry.Id)
-            .Select(record => (Guid?)record.Id)
+            .Select(record => new { record.Id, record.IsSelfApproved })
             .FirstOrDefaultAsync(cancellationToken);
-        return Map(entry, displayName, serviceRecordId);
+        return Map(entry, displayName, serviceRecord?.Id, serviceRecord?.IsSelfApproved ?? false);
     }
 
     private async Task<IReadOnlyList<IncomeEntryView>> MapManyAsync(IReadOnlyCollection<IncomeEntry> entries, CancellationToken cancellationToken)
@@ -394,19 +394,20 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         var entryIds = entries.Select(entry => (Guid?)entry.Id).ToArray();
         var serviceRecordIds = await _dbContext.ServiceRecords
             .Where(record => entryIds.Contains(record.IncomeEntryId))
-            .Select(record => new { IncomeEntryId = record.IncomeEntryId!.Value, record.Id })
-            .ToDictionaryAsync(record => record.IncomeEntryId, record => record.Id, cancellationToken);
+            .Select(record => new { IncomeEntryId = record.IncomeEntryId!.Value, record.Id, record.IsSelfApproved })
+            .ToDictionaryAsync(record => record.IncomeEntryId, cancellationToken);
 
         return entries
             .Select(entry => Map(
                 entry,
                 entry.StaffProfileId is { } staffId ? displayNames.GetValueOrDefault(staffId, string.Empty) : null,
-                serviceRecordIds.TryGetValue(entry.Id, out var serviceRecordId) ? serviceRecordId : null))
+                serviceRecordIds.TryGetValue(entry.Id, out var serviceRecord) ? serviceRecord.Id : null,
+                serviceRecord?.IsSelfApproved ?? false))
             .ToArray();
     }
 
     /// <summary>A membership sale has no professional, so its display name is null rather than empty.</summary>
-    private static IncomeEntryView Map(IncomeEntry entry, string? staffDisplayName, Guid? serviceRecordId)
+    private static IncomeEntryView Map(IncomeEntry entry, string? staffDisplayName, Guid? serviceRecordId, bool isSelfApproved = false)
         => new(
             entry.Id,
             entry.ServiceId,
@@ -423,5 +424,6 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             entry.CreatedAt,
             entry.UpdatedAt,
             entry.Kind.ToString(),
-            serviceRecordId);
+            serviceRecordId,
+            isSelfApproved);
 }

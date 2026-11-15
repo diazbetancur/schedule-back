@@ -34,7 +34,9 @@ public sealed record ReportSummaryView(
     long MembershipSalesIncome,
     int MembershipSalesCount,
     IReadOnlyList<ReportRewardCommissionView>? RewardCommissions = null,
-    long RewardCommissionsTotal = 0);
+    long RewardCommissionsTotal = 0,
+    long SelfApprovedIncomeTotal = 0,
+    int SelfApprovedIncomeCount = 0);
 
 /// <summary>
 /// Informative (ADR-0015 R14): commissions the business covers for loyalty rewards delivered as services, by

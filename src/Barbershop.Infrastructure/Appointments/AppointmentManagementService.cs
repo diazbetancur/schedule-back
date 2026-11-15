@@ -25,6 +25,8 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 {
   private const string SlotNotAvailableMessage = "Ese horario ya no está disponible. Elige otro.";
   private const string ServiceNotOfferedMessage = "El profesional no ofrece este servicio en este momento. Elige otro servicio.";
+  internal const string CompleteFutureAppointmentMessage =
+      "Solo puedes marcar como completada una cita de hoy. Esta cita es de un día futuro.";
   private const string StaffCannotChangeDurationMessage = "Solo administración puede cambiar la duración de la cita.";
 
   private readonly AppDbContext _dbContext;
@@ -96,10 +98,12 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       Guid currentUserId, CustomerAppointmentListQuery query, CancellationToken cancellationToken)
   {
     var page = PageRequest.Create(query.Page, query.PageSize);
-    var scope = ListFilters.ParseOption(query.Scope, "scope", CustomerAppointmentScopes.Upcoming, CustomerAppointmentScopes.Past);
+    var scope = ListFilters.ParseOption(
+        query.Scope, "scope", CustomerAppointmentScopes.Upcoming, CustomerAppointmentScopes.Past, CustomerAppointmentScopes.Cancelled);
     var status = ListFilters.ParseEnumList<AppointmentStatus>(query.Status, "status");
-    // Upcoming is the queue still to attend (no default range); the rest is history (30-day windows).
-    var range = scope == CustomerAppointmentScopes.Upcoming
+    // Upcoming is the queue still to attend and Cancelled every cancellation (ADR-0018 D3): no default range. The rest
+    // is history (30-day windows).
+    var range = scope is CustomerAppointmentScopes.Upcoming or CustomerAppointmentScopes.Cancelled
         ? HistoryRange.ResolveOptional(query.From, query.To)
         : HistoryRange.Resolve(query.From, query.To, TodayInBogota());
 
@@ -118,6 +122,10 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     {
       appointments = appointments.Where(a =>
           a.StartsAt > nowUtc && (a.Status == AppointmentStatus.Pending || a.Status == AppointmentStatus.Confirmed));
+    }
+    else if (scope == CustomerAppointmentScopes.Cancelled)
+    {
+      appointments = appointments.Where(a => a.Status == AppointmentStatus.Cancelled);
     }
     else if (scope == CustomerAppointmentScopes.Past)
     {
@@ -697,6 +705,17 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       throw new ValidationProblemException(new Dictionary<string, string[]>
       {
         ["status"] = ["Esta cita ya fue cerrada (completada, cancelada o no asistida) y su estado no se puede cambiar."]
+      });
+    }
+
+    // ADR-0018 D2 (SONDA BUG-067): an appointment of a later day cannot be completed yet (Bogotá dates). Past days
+    // that were left open can still be closed. Applies to the professional and to the administration alike.
+    if (request.Status == AppointmentStatus.Completed
+        && DateOnly.FromDateTime(BogotaClock.ToLocal(appointment.StartsAt)) > TodayInBogota())
+    {
+      throw new ValidationProblemException(new Dictionary<string, string[]>
+      {
+        ["status"] = [CompleteFutureAppointmentMessage]
       });
     }
 

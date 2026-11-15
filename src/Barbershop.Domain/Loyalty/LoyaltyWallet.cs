@@ -57,7 +57,16 @@ public enum LoyaltyMovementType
   RedemptionRelease = 13,
 
   /// <summary>A delivered redemption consumes its reservation; the free balance is not touched again.</summary>
-  RedemptionConsumed = 14
+  RedemptionConsumed = 14,
+
+  /// <summary>
+  /// ADR-0018 D5: takes the still usable points of a membership's lot when its payment (income) is unlinked. Unlike the
+  /// annulment it can happen again after a new link, so it is not once per lot.
+  /// </summary>
+  MembershipUnlinkWithdrawal = 15,
+
+  /// <summary>ADR-0018 D5: gives back to the lot what an unlink withdrew, when the payment is linked again.</summary>
+  MembershipRelinkCredit = 16
 }
 
 /// <summary>Why a debt exists. Stage 4 creates none of its own: debts only move with merges and get settled.</summary>
@@ -173,6 +182,13 @@ public sealed class LoyaltyLot
   {
     DomainValidation.EnsureRange(points, 1, RemainingPoints, nameof(points));
     RemainingPoints -= points;
+  }
+
+  /// <summary>ADR-0018 D5: puts back points an unlink of the membership's payment had taken.</summary>
+  public void Restore(int points)
+  {
+    DomainValidation.EnsureRange(points, 1, int.MaxValue, nameof(points));
+    RemainingPoints += points;
   }
 
   /// <summary>Moves free points to the reservation of a redemption.</summary>
@@ -362,9 +378,10 @@ public sealed class LoyaltyMovement
   public static int LotSign(LoyaltyMovementType type) => type switch
   {
     LoyaltyMovementType.Accrual or LoyaltyMovementType.MergeTransferIn or LoyaltyMovementType.AdjustmentCredit
-        or LoyaltyMovementType.RedemptionRelease => 1,
+        or LoyaltyMovementType.RedemptionRelease or LoyaltyMovementType.MembershipRelinkCredit => 1,
     LoyaltyMovementType.Expiration or LoyaltyMovementType.MembershipAnnulmentWithdrawal or LoyaltyMovementType.AdjustmentDebit
-        or LoyaltyMovementType.MergeTransferOut or LoyaltyMovementType.DebtSettlement or LoyaltyMovementType.RedemptionHold => -1,
+        or LoyaltyMovementType.MergeTransferOut or LoyaltyMovementType.DebtSettlement or LoyaltyMovementType.RedemptionHold
+        or LoyaltyMovementType.MembershipUnlinkWithdrawal => -1,
     _ => 0
   };
 

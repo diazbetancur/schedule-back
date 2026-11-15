@@ -680,16 +680,63 @@ public sealed class ServiceRecordsServiceTests : IDisposable
   }
 
   [Fact]
-  public async Task AnAdministratorWhoIsAlsoAProfessional_CanApproveTheirOwnRecord_AndBothStepsAreAudited()
+  public async Task AnAdministratorWhoIsAlsoAProfessional_CanApproveTheirOwnRecord_MarkedSelfApproved_AndBothStepsAreAudited()
   {
     var record = (await RegisterAsync()).Single();
+    GrantRole(_barberUser, RoleNames.Admin);
 
-    // The barber's own user approves it (as an admin who also works as a professional would).
+    // ADR-0018 D1 (SONDA BUG-090): an Admin may, but the record says so in the inbox, the income and the reports.
     var approved = await _service.ApproveAsync(_barberUser.Id, record.Id, Approve(record, "Paid", chargedAmount: 25000));
 
     var stored = await _dbContext.ServiceRecords.AsNoTracking().SingleAsync();
     Assert.Equal((_barberUser.Id, _barberUser.Id), (stored.RegisteredByUserId, stored.ApprovedByUserId!.Value));
     Assert.Equal(("Alex Barbero", "Alex Barbero"), (approved.RegisteredByName!, approved.Approval!.ApprovedByName!));
+    Assert.True(stored.IsSelfApproved);
+    Assert.True(approved.Approval.IsSelfApproved);
+    Assert.True(Assert.Single((await _income.GetAsync(new IncomeListQuery(_today, _today))).Items).IsSelfApproved);
+    var summary = await new ReportsQueryService(_dbContext, TimeProvider.System).GetSummaryAsync(_today, _today);
+    Assert.Equal((25000L, 1), (summary.SelfApprovedIncomeTotal, summary.SelfApprovedIncomeCount));
+  }
+
+  /// <summary>ADR-0018 D1 (SONDA BUG-090): without the Admin role, nobody approves a service where they take part.</summary>
+  [Fact]
+  public async Task TheProfessionalWhoRegisteredIt_OrTheCustomer_CannotApproveIt_WithoutBeingAdmin()
+  {
+    var record = (await RegisterAsync()).Single();
+    GrantRole(_barberUser, RoleNames.Staff);
+
+    var professional = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+        _service.ApproveAsync(_barberUser.Id, record.Id, Approve(record, "Paid", chargedAmount: 25000)));
+    Assert.Equal(ServiceRecordsService.SelfApprovalForbiddenMessage, professional.Message);
+
+    // The customer of the service, through an account linked to the profile chosen when confirming.
+    var customer = await CreateCustomerAsync("Carla Cliente", _customerUser);
+    var asCustomer = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+        _service.ApproveAsync(_customerUser.Id, record.Id, Approve(record, "Paid", chargedAmount: 25000, customerId: customer.Id)));
+    Assert.Equal(ServiceRecordsService.SelfApprovalForbiddenMessage, asCustomer.Message);
+
+    // The professional the service is confirmed for, even if someone else registered it.
+    var otherUserId = await _dbContext.StaffProfiles.Where(staff => staff.Id == _otherBarber.Id).Select(staff => staff.UserId).SingleAsync();
+    await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+        _service.ApproveAsync(otherUserId, record.Id, Approve(record, "Paid", chargedAmount: 25000, staffId: _otherBarber.Id)));
+
+    Assert.Equal("Pending", (await _dbContext.ServiceRecords.AsNoTracking().SingleAsync()).Status.ToString());
+
+    // A third party approves it normally, without the mark.
+    var approved = await _service.ApproveAsync(_admin.Id, record.Id, Approve(record, "Paid", chargedAmount: 25000, customerId: customer.Id));
+    Assert.False(approved.Approval!.IsSelfApproved);
+  }
+
+  private void GrantRole(User user, string roleName)
+  {
+    var role = _dbContext.Roles.SingleOrDefault(candidate => candidate.Name == roleName) ?? new Role(roleName, isSystemRole: true);
+    if (_dbContext.Entry(role).State == EntityState.Detached)
+    {
+      _dbContext.Roles.Add(role);
+    }
+
+    _dbContext.UserRoles.Add(new UserRole(user.Id, role.Id, DateTime.UtcNow));
+    _dbContext.SaveChanges();
   }
 
   [Fact]

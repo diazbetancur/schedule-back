@@ -11,10 +11,10 @@ public static class AdminCustomersEndpoints
     public static RouteGroupBuilder MapAdminCustomersEndpoints(this RouteGroupBuilder api)
     {
         var adminCustomers = api.MapGroup("/admin/customers")
-            .WithTags("Admin")
-            .RequireAuthorization(AuthPolicyNames.Admin);
+            .WithTags("Admin");
 
         adminCustomers.MapGet(string.Empty, SearchAsync)
+            .RequireAuthorization(AuthPolicyNames.CustomerLoyaltyOrPaymentsAccess)
             .WithName("GetAdminCustomers")
             .Produces<PagedResult<CustomerListItem>>(StatusCodes.Status200OK)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
@@ -22,18 +22,21 @@ public static class AdminCustomersEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         adminCustomers.MapGet("/duplicates", FindDuplicatesAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("GetAdminCustomerDuplicates")
             .Produces<IReadOnlyList<CustomerDuplicateCandidate>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         adminCustomers.MapGet("/account-candidates", GetAccountCandidatesAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("GetAdminCustomerAccountCandidates")
             .Produces<IReadOnlyList<CustomerAccountCandidate>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         adminCustomers.MapGet("/{customerId:guid}", GetByIdAsync)
+            .RequireAuthorization(AuthPolicyNames.CustomerLoyaltyOrPaymentsAccess)
             .WithName("GetAdminCustomerById")
             .Produces<CustomerDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -41,6 +44,7 @@ public static class AdminCustomersEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         adminCustomers.MapPost(string.Empty, CreateAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("CreateAdminCustomer")
             .Produces<CustomerDetailView>(StatusCodes.Status201Created)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
@@ -48,6 +52,7 @@ public static class AdminCustomersEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         adminCustomers.MapPost("/from-account", CreateFromAccountAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("CreateAdminCustomerFromAccount")
             .Produces<CustomerDetailView>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -57,6 +62,7 @@ public static class AdminCustomersEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         adminCustomers.MapPut("/{customerId:guid}", UpdateAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("UpdateAdminCustomer")
             .Produces<CustomerDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -66,6 +72,7 @@ public static class AdminCustomersEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         adminCustomers.MapPost("/{customerId:guid}/link-account", LinkAccountAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("LinkAdminCustomerAccount")
             .Produces<CustomerDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -75,6 +82,7 @@ public static class AdminCustomersEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         adminCustomers.MapPost("/{customerId:guid}/unlink-account", UnlinkAccountAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("UnlinkAdminCustomerAccount")
             .Produces<CustomerDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -84,6 +92,7 @@ public static class AdminCustomersEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         adminCustomers.MapGet("/{customerId:guid}/merge-preview", GetMergePreviewAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("GetAdminCustomerMergePreview")
             .Produces<CustomerMergePreview>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -91,6 +100,7 @@ public static class AdminCustomersEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         adminCustomers.MapPost("/{customerId:guid}/merge", MergeAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("MergeAdminCustomer")
             .Produces<CustomerDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)

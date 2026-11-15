@@ -2373,6 +2373,11 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<Guid?>("IncomeEntryId")
                         .HasColumnType("uuid");
 
+                    b.Property<bool>("IsSelfApproved")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.Property<int?>("LoyaltyPointsSnapshot")
                         .HasColumnType("integer");
 

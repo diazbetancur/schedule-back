@@ -126,6 +126,14 @@ internal sealed class ReportsQueryService : IAdminReportsService
             .OrderByDescending(view => view.ProfessionalCommissionTotal)
             .ToArray();
 
+        // ADR-0018 D1 (SONDA BUG-090): incomes of service records an Admin approved for themselves, shown apart.
+        var incomeIds = incomes.Select(entry => (Guid?)entry.Id).ToArray();
+        var selfApprovedIncomeIds = await _dbContext.ServiceRecords.AsNoTracking()
+            .Where(record => record.IsSelfApproved && incomeIds.Contains(record.IncomeEntryId))
+            .Select(record => record.IncomeEntryId!.Value)
+            .ToListAsync(cancellationToken);
+        var selfApprovedIncomes = incomes.Where(entry => selfApprovedIncomeIds.Contains(entry.Id)).ToList();
+
         return new ReportSummaryView(
             rangeFrom,
             rangeTo,
@@ -143,7 +151,9 @@ internal sealed class ReportsQueryService : IAdminReportsService
             membershipSalesIncome,
             membershipSales.Count,
             rewardCommissions,
-            rewardCommissions.Sum(view => view.ProfessionalCommissionTotal));
+            rewardCommissions.Sum(view => view.ProfessionalCommissionTotal),
+            selfApprovedIncomes.Sum(entry => (long)entry.Amount),
+            selfApprovedIncomes.Count);
     }
 
     private static IReadOnlyList<ReportTrendPointView> BuildTrend(

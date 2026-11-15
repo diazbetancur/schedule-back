@@ -5,4 +5,10 @@ public static class AuthPolicyNames
   public const string Admin = "AdminPolicy";
   public const string Staff = "StaffPolicy";
   public const string Customer = "CustomerPolicy";
+
+  /// <summary>
+  /// ADR-0018 D4 (SONDA BUG-077): Admin, or a role holding loyalty.points.adjust or memberships.payments.confirm (checked
+  /// against the database). Reading customers, their wallet and their memberships is what those permissions need to act.
+  /// </summary>
+  public const string CustomerLoyaltyOrPaymentsAccess = "CustomerLoyaltyOrPaymentsAccessPolicy";
 }

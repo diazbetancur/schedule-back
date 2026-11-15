@@ -706,7 +706,7 @@ public sealed class LoyaltyRedemptionServiceTests : IDisposable
   private async Task<ServiceRecord> SeedPendingRecordAsync(Service service)
   {
     var record = new ServiceRecord(
-        Guid.NewGuid(), 0, null, _barber.Id, service.Id, service.Name, Today, null, "Carla", null, _admin.Id, _clock.GetUtcNow().UtcDateTime);
+        Guid.NewGuid(), 0, null, _barber.Id, service.Id, service.Name, Today, null, "Carla", null, _barber.UserId, _clock.GetUtcNow().UtcDateTime);
     _dbContext.ServiceRecords.Add(record);
     await _dbContext.SaveChangesAsync();
     _dbContext.ChangeTracker.Clear();

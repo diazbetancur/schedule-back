@@ -9,6 +9,7 @@ using Barbershop.Domain.Loyalty;
 using Barbershop.Domain.Memberships;
 using Barbershop.Domain.ServiceRecords;
 using Barbershop.Domain.Staff;
+using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Loyalty;
 using Barbershop.Infrastructure.Memberships;
 using Barbershop.Infrastructure.Persistence;
@@ -573,9 +574,12 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                 throw new ConflictException(StaleMessage);
             }
 
+            // ADR-0018 D1 (SONDA BUG-090): nobody approves their own service. An Admin may, and the record says so.
+            var selfApproved = await ResolveSelfApprovalAsync(currentUserId, record, request, cancellationToken);
+
             var approval = await BuildApprovalAsync(currentUserId, record, operationType, request, cancellationToken);
             var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-            record.Approve(approval, currentUserId, utcNow);
+            record.Approve(approval, currentUserId, utcNow, selfApproved);
 
             // A paid service marked to accrue credits its points in the same transaction (ADR-0014): the record id
             // is the source, so a retried approval never credits twice. Lock order: record → customer profile.
@@ -601,6 +605,38 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
         }
 
         return await GetByIdAsync(serviceRecordId, cancellationToken);
+    }
+
+    internal const string SelfApprovalForbiddenMessage =
+        "No puedes aprobar un servicio en el que tú eres el cliente o el profesional que lo registró. Pide a otra persona que lo revise.";
+
+    /// <summary>
+    /// True when the approver is the customer of the record (registered or confirmed profile linked to their account),
+    /// the professional who registered it or the professional it is confirmed for, and holds the Admin role; anyone else
+    /// in that position is refused (403).
+    /// </summary>
+    private async Task<bool> ResolveSelfApprovalAsync(
+        Guid currentUserId, ServiceRecord record, ServiceRecordApproveRequest request, CancellationToken cancellationToken)
+    {
+        var customerIds = new[] { record.CustomerId, request.CustomerId }.OfType<Guid>().Distinct().ToArray();
+        var isCustomer = customerIds.Length > 0 && await _dbContext.Customers.AsNoTracking()
+            .AnyAsync(profile => customerIds.Contains(profile.Id) && profile.UserId == currentUserId, cancellationToken);
+        var staffIds = new[] { record.StaffProfileId, request.StaffProfileId }.Distinct().ToArray();
+        var isProfessional = record.RegisteredByUserId == currentUserId
+            || await _dbContext.StaffProfiles.AsNoTracking()
+                .AnyAsync(staff => staffIds.Contains(staff.Id) && staff.UserId == currentUserId, cancellationToken);
+
+        if (!isCustomer && !isProfessional)
+        {
+            return false;
+        }
+
+        var normalizedAdmin = RoleNames.Admin.ToUpperInvariant();
+        var isAdmin = await _dbContext.Users.AsNoTracking()
+            .AnyAsync(user => user.Id == currentUserId
+                && user.UserRoles.Any(userRole => userRole.Role.NormalizedName == normalizedAdmin), cancellationToken);
+
+        return isAdmin ? true : throw new UnauthorizedAccessException(SelfApprovalForbiddenMessage);
     }
 
     public async Task<ServiceRecordView> RejectAsync(
@@ -1189,7 +1225,8 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
                     record.RewardBusinessPercentageSnapshot,
                     record.RewardProfessionalCommission,
                     record.ApprovedGeneralServiceId,
-                    record.ApprovedGeneralServiceId is { } approvedGeneral ? generalServiceNames.GetValueOrDefault(approvedGeneral) : null);
+                    record.ApprovedGeneralServiceId is { } approvedGeneral ? generalServiceNames.GetValueOrDefault(approvedGeneral) : null,
+                    record.IsSelfApproved);
             }
 
             var registeredGeneral = RegisteredGeneralServiceOf(record);

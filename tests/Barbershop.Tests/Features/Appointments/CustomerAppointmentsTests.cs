@@ -175,6 +175,35 @@ public sealed class CustomerAppointmentsTests : IDisposable
         Assert.All(history.Items, item => Assert.Equal(firstCustomer.Id, item.CustomerUserId));
     }
 
+    /// <summary>ADR-0018 D3 (SONDA BUG-023): «Canceladas» lists every cancelled appointment, whatever its date, newest first.</summary>
+    [Fact]
+    public async Task GetHistoryAsync_CancelledScope_ListsEveryCancelledAppointment_WithoutADateWindow()
+    {
+        var staff = await CreateStaffAsync("cancelled-scope-staff@example.com", "Cancelled Staff", "Cancelled Staff");
+        var customer = await CreateCustomerAsync("cancelled-scope@example.com", "Cancelled Customer", null);
+        var other = await CreateCustomerAsync("cancelled-other@example.com", "Cancelled Other", null);
+        var now = DateTime.UtcNow;
+        Appointment Add(Guid customerId, DateTime startsAt, AppointmentStatus status)
+        {
+            var appointment = new Appointment(staff.StaffProfileId, "Cliente", startsAt, startsAt.AddMinutes(30), status,
+                AppointmentSource.Manual, now.AddDays(-200), customerId);
+            _dbContext.Appointments.Add(appointment);
+            return appointment;
+        }
+
+        var future = Add(customer.Id, now.AddDays(10), AppointmentStatus.Cancelled);
+        var old = Add(customer.Id, now.AddDays(-120), AppointmentStatus.Cancelled);
+        Add(customer.Id, now.AddDays(-3), AppointmentStatus.Completed);
+        Add(customer.Id, now.AddDays(3), AppointmentStatus.Confirmed);
+        Add(other.Id, now.AddDays(-1), AppointmentStatus.Cancelled);
+        await _dbContext.SaveChangesAsync();
+
+        var cancelled = await _customerAppointmentsService.GetHistoryAsync(customer.Id, new CustomerAppointmentListQuery(Scope: "Cancelled"));
+
+        Assert.Equal([future.Id, old.Id], cancelled.Items.Select(item => item.Id));
+        Assert.Equal(2, cancelled.TotalCount);
+    }
+
     [Fact]
     public async Task CancelAsync_RejectsAppointmentsOwnedByAnotherCustomer()
     {

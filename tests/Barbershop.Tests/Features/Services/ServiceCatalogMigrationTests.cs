@@ -69,7 +69,8 @@ public sealed class ServiceCatalogMigrationTests
     {
       ["services"] = ["GeneralServiceId"],
       ["appointments"] = ["GeneralServiceId", "GeneralServiceNameSnapshot", "ReservedDurationMinutes"],
-      ["service_records"] = ["GeneralServiceId", "ApprovedGeneralServiceId"],
+      // ADR-0018 D1: a later additive migration gives every record IsSelfApproved = false.
+      ["service_records"] = ["GeneralServiceId", "ApprovedGeneralServiceId", "IsSelfApproved"],
     });
     Assert.Equal(before.Keys.Order(), after.Keys.Except(NewTables).Order());
     foreach (var (table, rows) in before)

@@ -98,8 +98,15 @@ public static class ApiFoundationServiceCollectionExtensions
             options.AddPolicy(AuthPolicyNames.Staff, policy => policy.RequireRole(AuthRoleNames.Staff));
             options.AddPolicy(AuthPolicyNames.Customer, policy => policy.RequireRole(AuthRoleNames.Customer));
             options.AddPermissionPolicies();
+            options.AddPolicy(AuthPolicyNames.CustomerLoyaltyOrPaymentsAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin,
+                    global::Barbershop.Domain.Users.PermissionCodes.LoyaltyPointsAdjust,
+                    global::Barbershop.Domain.Users.PermissionCodes.MembershipPaymentsConfirm)));
         });
         services.AddScoped<IAuthorizationHandler, CurrentPermissionAuthorizationHandler>();
+        services.AddScoped<IAuthorizationHandler, AdminOrCurrentPermissionAuthorizationHandler>();
 
         services.AddRateLimiter(ConfigureRateLimiter);
 

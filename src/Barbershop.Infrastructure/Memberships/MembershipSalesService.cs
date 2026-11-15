@@ -389,12 +389,21 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             _dbContext.MembershipEvents.Add(new MembershipEvent(
                 candidate.Id, MembershipEventType.IncomeLinked, currentUserId, utcNow, justification, income.Id));
 
-            // The first link is the payment evidence and decides the points once (ADR-0014); later links decide nothing.
-            if (candidate.DecideLoyaltyAccrual(programEnabled, utcNow) == MembershipLoyaltyDecision.Accrued)
+            // The first link is the payment evidence and decides the points (ADR-0014). ADR-0018 D5: the points follow the
+            // payment, so a later link gives back what unlinking it took.
+            var decision = candidate.DecideLoyaltyAccrual(programEnabled, utcNow);
+            if (decision == MembershipLoyaltyDecision.Accrued)
             {
                 await _wallet.AccrueInCurrentTransactionAsync(
                     candidate.CustomerId, LoyaltySourceType.Membership, candidate.Id, candidate.LoyaltyPointsSnapshot!.Value,
                     currentUserId, utcNow, cancellationToken);
+            }
+            else if (decision is null
+                && candidate.LoyaltyDecision == MembershipLoyaltyDecision.Accrued
+                && candidate.Status != MembershipStatus.Annulled)
+            {
+                await _wallet.RecreditForMembershipRelinkInCurrentTransactionAsync(
+                    candidate.Id, candidate.CustomerId, currentUserId, utcNow, cancellationToken);
             }
         }
 
@@ -416,7 +425,9 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
         }
 
         await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        // Lock order: income → customer profile (its wallet) → membership, as when linking.
         await LockIncomeAsync(incomeEntryId, cancellationToken);
+        await _wallet.LockCustomersAsync([membership.CustomerId], cancellationToken);
 
         var income = await _dbContext.IncomeEntries.SingleAsync(entry => entry.Id == incomeEntryId, cancellationToken);
         var remaining = await _dbContext.CustomerMemberships
@@ -429,9 +440,15 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             ? RequireJustificationIfMismatch(income.Amount, remaining.Sum(price => (long)price), request.DiscrepancyJustification)
             : NormalizeOptionalReason(request.DiscrepancyJustification);
 
-        // Unlinking only drops the reference: balances, gifts and history stay as they are.
+        // Unlinking drops the reference; balances, gifts and history stay. ADR-0018 D5: the points the payment earned go
+        // with it (only those still usable; an annulled membership already lost them).
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         membership.UnlinkIncome(utcNow);
+        if (membership.LoyaltyDecision == MembershipLoyaltyDecision.Accrued && membership.Status != MembershipStatus.Annulled)
+        {
+            await _wallet.WithdrawForMembershipUnlinkInCurrentTransactionAsync(
+                membership.Id, membership.CustomerId, currentUserId, utcNow, cancellationToken);
+        }
         _dbContext.MembershipEvents.Add(new MembershipEvent(
             membership.Id, MembershipEventType.IncomeUnlinked, currentUserId, utcNow, justification, incomeEntryId));
 
@@ -886,8 +903,10 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             ? 0
             : await _dbContext.LoyaltyMovements.AsNoTracking()
                 .Where(movement => movement.LotId != null && ids.Contains(movement.LotId.Value)
-                    && movement.Type == LoyaltyMovementType.MembershipAnnulmentWithdrawal)
-                .SumAsync(movement => movement.Points, cancellationToken);
+                    && (movement.Type == LoyaltyMovementType.MembershipAnnulmentWithdrawal
+                        || movement.Type == LoyaltyMovementType.MembershipUnlinkWithdrawal
+                        || movement.Type == LoyaltyMovementType.MembershipRelinkCredit))
+                .SumAsync(movement => movement.Type == LoyaltyMovementType.MembershipRelinkCredit ? -movement.Points : movement.Points, cancellationToken);
 
         return new MembershipLoyaltyView(
             membership.LoyaltyPointsSnapshot,

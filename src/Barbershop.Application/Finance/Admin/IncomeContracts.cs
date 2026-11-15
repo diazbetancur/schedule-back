@@ -20,7 +20,8 @@ public sealed record IncomeEntryView(
     DateTime CreatedAt,
     DateTime? UpdatedAt,
     string Kind,
-    Guid? ServiceRecordId = null);
+    Guid? ServiceRecordId = null,
+    bool IsSelfApproved = false);
 
 /// <summary>
 /// <c>Kind</c> is optional: clients that predate membership sales omit it and get a service income.

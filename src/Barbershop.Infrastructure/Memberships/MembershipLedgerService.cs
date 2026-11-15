@@ -1,7 +1,9 @@
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Memberships.Admin;
 using Barbershop.Domain.Common;
+using Barbershop.Application.Notifications;
 using Barbershop.Domain.Memberships;
+using Barbershop.Infrastructure.Notifications;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -28,7 +30,10 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
         _dbContext = dbContext;
         _memberships = memberships;
         _timeProvider = timeProvider;
+        _notifications = new CustomerNotificationOutbox(dbContext, timeProvider);
     }
+
+    private readonly CustomerNotificationOutbox _notifications;
 
     public async Task<CustomerMembershipDetailView> ConsumeAsync(
         Guid currentUserId,
@@ -203,7 +208,21 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
     {
         var staffExists = request.StaffProfileId is not { } staffId
             || await _dbContext.StaffProfiles.AnyAsync(staff => staff.Id == staffId, cancellationToken);
-        return Register(currentUserId, membership, request, await LoadAvailableAsync(membership, cancellationToken), staffExists);
+        var available = await LoadAvailableAsync(membership, cancellationToken);
+        var consumption = Register(currentUserId, membership, request, available, staffExists);
+
+        // ADR-0019 N1: saved with the consumption (a retried key is replayed before reaching here), with what is left of
+        // that service. Both the direct consumption and the confirmed service record go through here.
+        var remaining = membership.Allowances
+            .Where(allowance => allowance.Services.Any(service => service.ServiceId == request.ServiceId))
+            .Sum(allowance => available[allowance.Id]) - request.Quantity;
+        await _notifications.QueueForCustomerAsync(
+            membership.CustomerId,
+            UserNotificationTypes.MembershipConsumed,
+            CustomerNotificationMessages.MembershipConsumed(
+                membership.Id, membership.PlanName, consumption.ServiceNameSnapshot, request.Quantity, Math.Max(0, remaining)),
+            cancellationToken);
+        return consumption;
     }
 
     private MembershipConsumption Register(

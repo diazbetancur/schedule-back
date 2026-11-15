@@ -1,4 +1,7 @@
+using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Notifications;
+using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -86,5 +89,132 @@ internal sealed class UserNotificationsService : IUserNotificationsService
     }
 
     await _dbContext.SaveChangesAsync(cancellationToken);
+  }
+
+  internal const int HistoryDefaultPageSize = 20;
+  internal const int HistoryMaxPageSize = 50;
+
+  public async Task<UserNotificationHistoryView> GetHistoryAsync(
+      Guid currentUserId, int? page, int? pageSize, bool unreadOnly, CancellationToken cancellationToken = default)
+  {
+    var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+    if (page is < 1)
+    {
+      errors["page"] = ["La página debe ser 1 o mayor."];
+    }
+
+    if (pageSize is < 1 or > HistoryMaxPageSize)
+    {
+      errors["pageSize"] = [$"El tamaño de página debe estar entre 1 y {HistoryMaxPageSize}."];
+    }
+
+    if (errors.Count > 0)
+    {
+      throw new ValidationProblemException(errors);
+    }
+
+    var request = PageRequest.Create(page ?? 1, pageSize ?? HistoryDefaultPageSize);
+    var mine = _dbContext.UserNotifications.AsNoTracking().Where(notification => notification.UserId == currentUserId);
+    var unreadCount = await mine.CountAsync(notification => notification.ReadAt == null, cancellationToken);
+    var filtered = unreadOnly ? mine.Where(notification => notification.ReadAt == null) : mine;
+    var totalCount = unreadOnly ? unreadCount : await filtered.CountAsync(cancellationToken);
+
+    // ADR-0019 N5: a history reads in time order (newest first), unlike the bell, which puts unread first (BUG-107).
+    var items = await filtered
+        .OrderByDescending(notification => notification.CreatedAt)
+        .ThenByDescending(notification => notification.Id)
+        .Skip(request.Skip)
+        .Take(request.PageSize)
+        .Select(notification => new UserNotificationView(
+            notification.Id,
+            notification.Type,
+            notification.Title,
+            notification.Body,
+            notification.Url,
+            notification.CreatedAt,
+            notification.ReadAt))
+        .ToListAsync(cancellationToken);
+
+    return new UserNotificationHistoryView(items, request.Page, request.PageSize, totalCount, unreadCount);
+  }
+
+  public async Task<NotificationPreferencesView> GetPreferencesAsync(Guid currentUserId, CancellationToken cancellationToken = default)
+  {
+    var stored = await _dbContext.UserNotificationPreferences.AsNoTracking()
+        .Where(preference => preference.UserId == currentUserId)
+        .ToDictionaryAsync(preference => preference.Category, preference => preference.PushEnabled, StringComparer.Ordinal, cancellationToken);
+
+    // ADR-0019 N4: without a row the category is on.
+    return new NotificationPreferencesView(NotificationCategories.Optional
+        .Select(category => new NotificationPreferenceView(category, stored.GetValueOrDefault(category, true)))
+        .ToArray());
+  }
+
+  public async Task<NotificationPreferencesView> UpdatePreferencesAsync(
+      Guid currentUserId, NotificationPreferencesUpdateRequest request, CancellationToken cancellationToken = default)
+  {
+    var changes = request.Categories ?? [];
+    var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+    if (changes.Count == 0)
+    {
+      errors["categories"] = ["Indica al menos un tipo de aviso."];
+    }
+
+    for (var index = 0; index < changes.Count; index++)
+    {
+      var change = changes[index];
+      if (change?.Category is not { } category || !NotificationCategories.IsOptional(category))
+      {
+        errors[$"categories[{index}].category"] =
+            ["Tipo de aviso no válido: appointments, memberships, loyalty o campaigns. Los avisos de cuenta y seguridad no se pueden apagar."];
+      }
+
+      if (change?.PushEnabled is null)
+      {
+        errors[$"categories[{index}].pushEnabled"] = ["Indica si quieres recibir este tipo de aviso."];
+      }
+    }
+
+    if (changes.Where(change => change?.Category is not null).GroupBy(change => change!.Category).Any(group => group.Count() > 1))
+    {
+      errors["categories"] = ["Cada tipo de aviso puede aparecer una sola vez."];
+    }
+
+    if (errors.Count > 0)
+    {
+      throw new ValidationProblemException(errors);
+    }
+
+    var nowUtc = _timeProvider.GetUtcNow().UtcDateTime;
+    var categories = changes.Select(change => change!.Category!).ToArray();
+    var stored = await _dbContext.UserNotificationPreferences
+        .Where(preference => preference.UserId == currentUserId && categories.Contains(preference.Category))
+        .ToDictionaryAsync(preference => preference.Category, StringComparer.Ordinal, cancellationToken);
+
+    foreach (var change in changes)
+    {
+      if (stored.TryGetValue(change!.Category!, out var preference))
+      {
+        preference.Update(change.PushEnabled!.Value, nowUtc);
+      }
+      else
+      {
+        _dbContext.UserNotificationPreferences.Add(
+            new UserNotificationPreference(currentUserId, change.Category!, change.PushEnabled!.Value, nowUtc));
+      }
+    }
+
+    try
+    {
+      await _dbContext.SaveChangesAsync(cancellationToken);
+    }
+    catch (DbUpdateException)
+    {
+      // Two saves of the same new category at once: the other one stored it; the user can simply save again.
+      _dbContext.ChangeTracker.Clear();
+      throw new ConflictException("Tus preferencias cambiaron desde otra pestaña. Recarga e intenta de nuevo.");
+    }
+
+    return await GetPreferencesAsync(currentUserId, cancellationToken);
   }
 }

@@ -54,8 +54,50 @@ public static class NotificationsEndpoints
         .ProducesProblem(StatusCodes.Status401Unauthorized)
         .ProducesProblem(StatusCodes.Status404NotFound);
 
+    // ADR-0019 N5: the full history, newest first, paginated.
+    notifications.MapGet("/history", GetHistoryAsync)
+        .WithName("GetNotificationHistory")
+        .Produces<UserNotificationHistoryView>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
+
+    // ADR-0019 N4: which categories of notifications reach the user by push.
+    notifications.MapGet("/preferences", GetPreferencesAsync)
+        .WithName("GetNotificationPreferences")
+        .Produces<NotificationPreferencesView>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status401Unauthorized);
+
+    notifications.MapPut("/preferences", UpdatePreferencesAsync)
+        .WithName("UpdateNotificationPreferences")
+        .Produces<NotificationPreferencesView>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status409Conflict)
+        .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
+
     return api;
   }
+
+  private static Task<UserNotificationHistoryView> GetHistoryAsync(
+      ClaimsPrincipal user,
+      int? page,
+      int? pageSize,
+      bool? unreadOnly,
+      IUserNotificationsService service,
+      CancellationToken cancellationToken)
+      => service.GetHistoryAsync(user.GetRequiredUserId(), page, pageSize, unreadOnly ?? false, cancellationToken);
+
+  private static Task<NotificationPreferencesView> GetPreferencesAsync(
+      ClaimsPrincipal user,
+      IUserNotificationsService service,
+      CancellationToken cancellationToken)
+      => service.GetPreferencesAsync(user.GetRequiredUserId(), cancellationToken);
+
+  private static Task<NotificationPreferencesView> UpdatePreferencesAsync(
+      ClaimsPrincipal user,
+      NotificationPreferencesUpdateRequest request,
+      IUserNotificationsService service,
+      CancellationToken cancellationToken)
+      => service.UpdatePreferencesAsync(user.GetRequiredUserId(), request, cancellationToken);
 
   private static Task<UserNotificationInboxView> GetInboxAsync(
       ClaimsPrincipal user,

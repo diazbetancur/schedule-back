@@ -130,6 +130,7 @@ public static class DependencyInjection
         services.AddScoped<INotificationDispatcher, NotificationDispatcher>();
         services.AddScoped<NotificationDeliveryProcessor>();
         services.AddScoped<AppointmentReminderService>();
+        services.AddScoped<CustomerExpiryReminderService>();
         services.AddOptions<NotificationWorkerOptions>()
             .Bind(configuration.GetSection(NotificationWorkerOptions.SectionName));
         services.AddHostedService<NotificationBackgroundWorker>();

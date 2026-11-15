@@ -317,6 +317,9 @@ public sealed class LoyaltyRedemption
   /// <summary>True when the customer cancelled it themselves.</summary>
   public bool CancelledByCustomer { get; private set; }
 
+  /// <summary>ADR-0018 D11: an Admin approved or delivered their own redemption (allowed only to that role, and marked).</summary>
+  public bool IsSelfApproved { get; private set; }
+
   public DateTime? ExpiredAt { get; private set; }
 
   /// <summary>Mapped to PostgreSQL's xmin system column; used as an optimistic concurrency token.</summary>
@@ -337,6 +340,9 @@ public sealed class LoyaltyRedemption
 
   /// <summary>Pending and past its deadline on <paramref name="today"/> (Bogotá), even if the job has not recorded it yet.</summary>
   public bool IsPastDeadlineOn(DateOnly today) => CurrentDeadline is { } deadline && today > deadline;
+
+  /// <summary>ADR-0018 D11: the approval or delivery was made by the beneficiary (an Admin).</summary>
+  public void MarkSelfApproved() => IsSelfApproved = true;
 
   public void Approve(Guid approvedByUserId, DateTime approvedAt, DateOnly today)
   {

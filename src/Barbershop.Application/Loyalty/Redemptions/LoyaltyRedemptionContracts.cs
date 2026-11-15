@@ -117,7 +117,8 @@ public sealed record LoyaltyRedemptionView(
     DateTime? ExpiredAt,
     bool IsPastDeadline,
     IReadOnlyList<LoyaltyRedemptionAllocationView> Allocations,
-    uint Version);
+    uint Version,
+    bool IsSelfApproved = false);
 
 /// <summary><c>Version</c> is the one read; a stale one is a conflict.</summary>
 public sealed record LoyaltyRedemptionDecisionRequest(uint? Version);

@@ -6,7 +6,9 @@ using Barbershop.Domain.Customers;
 using Barbershop.Domain.Finance;
 using Barbershop.Domain.Loyalty;
 using Barbershop.Domain.Memberships;
+using Barbershop.Application.Notifications;
 using Barbershop.Infrastructure.Loyalty;
+using Barbershop.Infrastructure.Notifications;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -32,7 +34,10 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
         _dbContext = dbContext;
         _timeProvider = timeProvider;
         _wallet = new LoyaltyWalletService(dbContext, timeProvider);
+        _notifications = new CustomerNotificationOutbox(dbContext, timeProvider);
     }
+
+    private readonly CustomerNotificationOutbox _notifications;
 
     /// <summary>Newest first (registration time, then id). The status filter uses the displayed status.</summary>
     public async Task<PagedResult<CustomerMembershipSummaryView>> GetCustomerMembershipsAsync(
@@ -220,6 +225,15 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             Activate(membership, currentUserId, activationReason, utcNow);
         }
 
+        // ADR-0019 N1: one notice; a sale activated right away says both.
+        await _notifications.QueueForCustomerAsync(
+            customer.Id,
+            request.ActivateNow ? UserNotificationTypes.MembershipActivated : UserNotificationTypes.MembershipSold,
+            request.ActivateNow
+                ? CustomerNotificationMessages.MembershipActivated(membership.Id, membership.PlanName, membership.EndsOn, justSold: true)
+                : CustomerNotificationMessages.MembershipSold(membership.Id, membership.PlanName),
+            cancellationToken);
+
         // Writing the customer row makes two concurrent sales to the same customer collide on its concurrency
         // token, so a first-purchase gift can never be granted twice.
         customer.Touch(utcNow);
@@ -257,6 +271,11 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
         }
 
         Activate(membership, currentUserId, reason, _timeProvider.GetUtcNow().UtcDateTime);
+        await _notifications.QueueForCustomerAsync(
+            membership.CustomerId,
+            UserNotificationTypes.MembershipActivated,
+            CustomerNotificationMessages.MembershipActivated(membership.Id, membership.PlanName, membership.EndsOn, justSold: false),
+            cancellationToken);
         await SaveChangesAsync(cancellationToken);
         return await MapDetailAsync(membership, cancellationToken);
     }

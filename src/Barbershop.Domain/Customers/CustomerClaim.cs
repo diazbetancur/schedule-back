@@ -75,6 +75,11 @@ public sealed class CustomerClaim
   /// <summary>Mapped to PostgreSQL's xmin system column; used as an optimistic concurrency token.</summary>
   public uint Version { get; private set; }
 
+  /// <summary>ADR-0018 D11: an Admin approved a claim made from their own account (allowed only to that role, and marked).</summary>
+  public bool IsSelfApproved { get; private set; }
+
+  public void MarkSelfApproved() => IsSelfApproved = true;
+
   public void Approve(Guid customerId, Guid decidedByUserId, string? notes, DateTime decidedAt)
   {
     EnsurePending();

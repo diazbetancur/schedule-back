@@ -3,6 +3,9 @@ using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Loyalty.Redemptions;
 using Barbershop.Application.ServiceRecords;
 using Barbershop.Domain.Loyalty;
+using Barbershop.Application.Notifications;
+using Barbershop.Infrastructure.Authorization;
+using Barbershop.Infrastructure.Notifications;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -31,7 +34,10 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
         _dbContext = dbContext;
         _timeProvider = timeProvider;
         _wallet = new LoyaltyWalletService(dbContext, timeProvider);
+        _notifications = new CustomerNotificationOutbox(dbContext, timeProvider);
     }
+
+    private readonly CustomerNotificationOutbox _notifications;
 
     // ── Catalog ────────────────────────────────────────────────────────────────────────────────
 
@@ -410,7 +416,7 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
             redemptionId,
             request.Version,
             isReplay: redemption => redemption.Status == LoyaltyRedemptionStatus.Approved && redemption.ApprovedByUserId == currentUserId,
-            apply: (redemption, utcNow, today) =>
+            apply: async (redemption, utcNow, today) =>
             {
                 if (redemption.Status != LoyaltyRedemptionStatus.Requested)
                 {
@@ -419,8 +425,14 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
 
                 // Revalidated here even if the expiration job has not run yet.
                 EnsureWithinDeadline(redemption, today, "aprobar");
+                var selfApproved = await ResolveSelfApprovalAsync(currentUserId, redemption.CustomerId, cancellationToken);
                 redemption.Approve(currentUserId, utcNow, today);
-                return Task.CompletedTask;
+                if (selfApproved)
+                {
+                    redemption.MarkSelfApproved();
+                }
+
+                await NotifyApprovedAsync(redemption, cancellationToken);
             },
             cancellationToken);
         return await GetAsync(redemptionId, cancellationToken);
@@ -443,6 +455,11 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
 
                 redemption.Reject(reason, currentUserId, utcNow);
                 await _wallet.ReleaseReservationInCurrentTransactionAsync(redemption.CustomerId, redemption.Id, currentUserId, utcNow, cancellationToken);
+                await _notifications.QueueForCustomerAsync(
+                    redemption.CustomerId,
+                    UserNotificationTypes.LoyaltyRedemptionRejected,
+                    CustomerNotificationMessages.RedemptionRejected(redemption.Id, redemption.RewardNameSnapshot, redemption.PointsCost, reason),
+                    cancellationToken);
             },
             cancellationToken);
         return await GetAsync(redemptionId, cancellationToken);
@@ -490,6 +507,11 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
                 }
 
                 EnsureWithinDeadline(redemption, today, "entregar");
+                if (await ResolveSelfApprovalAsync(currentUserId, redemption.CustomerId, cancellationToken))
+                {
+                    redemption.MarkSelfApproved();
+                }
+
                 redemption.Deliver(currentUserId, utcNow, today, serviceRecordId: null);
                 await _wallet.ConsumeReservationInCurrentTransactionAsync(redemption.CustomerId, redemption.Id, currentUserId, utcNow, cancellationToken);
             },
@@ -590,6 +612,14 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
 
         var today = LoyaltyWalletService.BogotaDate(utcNow);
         EnsureWithinDeadline(redemption, today, "entregar");
+
+        // The service record's own approval already applied ADR-0018 D1 to this actor; an Admin delivering their own
+        // reward through it is marked here as well (D11).
+        if (await ResolveSelfApprovalAsync(currentUserId, live, cancellationToken))
+        {
+            redemption.MarkSelfApproved();
+        }
+
         redemption.Deliver(currentUserId, utcNow, today, serviceRecordId);
         await _wallet.ConsumeReservationInCurrentTransactionAsync(live, redemption.Id, currentUserId, utcNow, cancellationToken);
         return redemption;
@@ -731,7 +761,14 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
             await _wallet.ReserveInCurrentTransactionAsync(customerId, redemption.Id, redemption.PointsCost, currentUserId, utcNow, cancellationToken);
             if (approveNow)
             {
+                var selfApproved = await ResolveSelfApprovalAsync(currentUserId, customerId, cancellationToken);
                 redemption.Approve(currentUserId, utcNow, today);
+                if (selfApproved)
+                {
+                    redemption.MarkSelfApproved();
+                }
+
+                await NotifyApprovedAsync(redemption, cancellationToken);
             }
 
             await _dbContext.SaveChangesAsync(cancellationToken);
@@ -818,6 +855,26 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
             _dbContext.ChangeTracker.Clear();
         }
     }
+
+    /// <summary>ADR-0019 N1: saved with the approval, so a replayed approval never notifies twice.</summary>
+    private Task NotifyApprovedAsync(LoyaltyRedemption redemption, CancellationToken cancellationToken)
+        => _notifications.QueueForCustomerAsync(
+            redemption.CustomerId,
+            UserNotificationTypes.LoyaltyRedemptionApproved,
+            CustomerNotificationMessages.RedemptionApproved(redemption.Id, redemption.RewardNameSnapshot, redemption.DeliverBy),
+            cancellationToken);
+
+    internal const string SelfRedemptionForbiddenMessage =
+        "No puedes aprobar ni entregar un canje de tus propios puntos. Pide a otra persona que lo revise.";
+
+    /// <summary>ADR-0018 D11: the actor may not approve or deliver a redemption of the profile linked to their account.</summary>
+    private async Task<bool> ResolveSelfApprovalAsync(Guid currentUserId, Guid customerId, CancellationToken cancellationToken)
+        => await SelfApprovalGuard.ResolveAsync(
+            _dbContext,
+            currentUserId,
+            await SelfApprovalGuard.IsOwnCustomerProfileAsync(_dbContext, currentUserId, customerId, cancellationToken),
+            SelfRedemptionForbiddenMessage,
+            cancellationToken);
 
     private static void EnsurePending(LoyaltyRedemption redemption, string action)
     {
@@ -1028,7 +1085,8 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
                     .OrderBy(allocation => allocation.ExpiresOn)
                     .Select(allocation => new LoyaltyRedemptionAllocationView(allocation.LotId, allocation.Points, allocation.ExpiresOn))
                     .ToArray(),
-                redemption.Version))
+                redemption.Version,
+                redemption.IsSelfApproved))
             .ToArray();
     }
 

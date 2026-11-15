@@ -175,6 +175,47 @@ public sealed class CustomerClaimsServiceTests : IDisposable
     Assert.Equal([membership.Id], (await myMemberships.GetMineAsync(user.Id, new MembershipListQuery())).Items.Select(item => item.Id));
   }
 
+  // ── ADR-0018 D11: nobody approves their own claim ─────────────────────────────────────────
+
+  [Fact]
+  public async Task Approve_OwnClaimWithoutAdminRole_IsForbidden_AndTheClaimStaysPending()
+  {
+    var historical = await _customers.CreateAsync(_admin.Id, new CustomerCreateRequest("Carla", "3001234567", "carla@example.com"));
+    var user = await AddCustomerAccountAsync("Carla");
+    var claim = await _claims.GetByIdAsync((await SubmitClaimAsync(user)).Id);
+
+    var error = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+        _claims.ApproveAsync(user.Id, claim.Id, new CustomerClaimApproveRequest(claim.Version, historical.Id, true, null)));
+
+    Assert.Equal(CustomerClaimsService.SelfClaimForbiddenMessage, error.Message);
+    Assert.Equal("Pending", (await _claims.GetByIdAsync(claim.Id)).Status);
+    Assert.Null((await _dbContext.Customers.AsNoTracking().SingleAsync()).UserId);
+  }
+
+  [Fact]
+  public async Task Approve_OwnClaimByAnAdmin_IsAllowed_AndMarkedSelfApproved_WhileAThirdPartyIsNotMarked()
+  {
+    var adminRole = new Role(RoleNames.Admin, isSystemRole: true);
+    _dbContext.Roles.Add(adminRole);
+    await _dbContext.SaveChangesAsync();
+
+    var own = await _customers.CreateAsync(_admin.Id, new CustomerCreateRequest("Ana Admin", "3001112233", "ana@example.com"));
+    var adminCustomer = await AddCustomerAccountAsync("Ana Admin");
+    _dbContext.UserRoles.Add(new UserRole(adminCustomer.Id, adminRole.Id, DateTime.UtcNow));
+    await _dbContext.SaveChangesAsync();
+    var ownClaim = await _claims.GetByIdAsync((await SubmitClaimAsync(adminCustomer, phone: "3001112233")).Id);
+
+    var selfApproved = await _claims.ApproveAsync(
+        adminCustomer.Id, ownClaim.Id, new CustomerClaimApproveRequest(ownClaim.Version, own.Id, true, null));
+    Assert.Equal(("Approved", true), (selfApproved.Status, selfApproved.IsSelfApproved));
+
+    var other = await _customers.CreateAsync(_admin.Id, new CustomerCreateRequest("Carla", "3001234567", "carla@example.com"));
+    var user = await AddCustomerAccountAsync("Carla");
+    var claim = await _claims.GetByIdAsync((await SubmitClaimAsync(user)).Id);
+    var approved = await _claims.ApproveAsync(_admin.Id, claim.Id, new CustomerClaimApproveRequest(claim.Version, other.Id, true, null));
+    Assert.Equal(("Approved", false), (approved.Status, approved.IsSelfApproved));
+  }
+
   [Fact]
   public async Task AdminLinksOutsideTheClaim_AreRefusedWhileItIsPending_SoTheAccountNeverHasAProfileAndAPendingClaim()
   {

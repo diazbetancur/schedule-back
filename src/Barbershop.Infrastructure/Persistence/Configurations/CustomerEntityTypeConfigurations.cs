@@ -86,6 +86,7 @@ internal sealed class CustomerClaimConfiguration : IEntityTypeConfiguration<Cust
     });
 
     builder.HasKey(x => x.Id);
+    builder.Property(x => x.IsSelfApproved).HasDefaultValue(false);
 
     builder.Property(x => x.Id).ValueGeneratedNever();
     builder.Property(x => x.FullName).HasMaxLength(120).IsRequired();

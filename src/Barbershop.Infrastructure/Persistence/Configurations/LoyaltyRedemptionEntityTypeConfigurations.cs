@@ -143,6 +143,7 @@ internal sealed class LoyaltyRedemptionConfiguration : IEntityTypeConfiguration<
     builder.HasOne<LoyaltyReward>().WithMany().HasForeignKey(x => x.RewardId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<User>().WithMany().HasForeignKey(x => x.RequestedByUserId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<User>().WithMany().HasForeignKey(x => x.ApprovedByUserId).OnDelete(DeleteBehavior.Restrict);
+    builder.Property(x => x.IsSelfApproved).HasDefaultValue(false);
     builder.HasOne<User>().WithMany().HasForeignKey(x => x.DeliveredByUserId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<User>().WithMany().HasForeignKey(x => x.RejectedByUserId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<User>().WithMany().HasForeignKey(x => x.CancelledByUserId).OnDelete(DeleteBehavior.Restrict);

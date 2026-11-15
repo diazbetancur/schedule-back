@@ -164,6 +164,11 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<Guid>("IdempotencyKey")
                         .HasColumnType("uuid");
 
+                    b.Property<bool>("IsSelfApproved")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.Property<string>("NormalizedEmail")
                         .IsRequired()
                         .HasMaxLength(256)
@@ -1050,6 +1055,11 @@ namespace Barbershop.Infrastructure.Migrations
 
                     b.Property<bool>("InPersonVerified")
                         .HasColumnType("boolean");
+
+                    b.Property<bool>("IsSelfApproved")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
 
                     b.Property<int>("PointsCost")
                         .HasColumnType("integer");
@@ -3270,6 +3280,26 @@ namespace Barbershop.Infrastructure.Migrations
                     b.ToTable("user_notifications", "public");
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Users.UserNotificationPreference", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Category")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<bool>("PushEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("UserId", "Category");
+
+                    b.ToTable("user_notification_preferences", "public");
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Users.UserRole", b =>
                 {
                     b.Property<Guid>("UserId")
@@ -4036,6 +4066,15 @@ namespace Barbershop.Infrastructure.Migrations
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Users.UserNotification", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Users.UserNotificationPreference", b =>
                 {
                     b.HasOne("Barbershop.Domain.Users.User", null)
                         .WithMany()

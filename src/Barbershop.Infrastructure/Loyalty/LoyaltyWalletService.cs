@@ -3,9 +3,11 @@ using System.Text;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Loyalty.Wallet;
+using Barbershop.Application.Notifications;
 using Barbershop.Domain.Common;
 using Barbershop.Domain.Loyalty;
 using Barbershop.Domain.Memberships;
+using Barbershop.Infrastructure.Notifications;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -31,11 +33,13 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
 
     private readonly AppDbContext _dbContext;
     private readonly TimeProvider _timeProvider;
+    private readonly CustomerNotificationOutbox _notifications;
 
     public LoyaltyWalletService(AppDbContext dbContext, TimeProvider timeProvider)
     {
         _dbContext = dbContext;
         _timeProvider = timeProvider;
+        _notifications = new CustomerNotificationOutbox(dbContext, timeProvider);
     }
 
     // ── Merge chains (ADR-0013 D6) ─────────────────────────────────────────────────────────────
@@ -145,6 +149,15 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
             live, LoyaltyMovementType.Accrual, points, utcNow, lotId: lot.Id, performedByUserId: performedByUserId));
 
         await SettleDebtsAsync(live, performedByUserId, utcNow, cancellationToken);
+
+        // ADR-0019 N1: saved with the accrual, so a retried approval or link (which returns above) never notifies twice.
+        await _notifications.QueueForCustomerAsync(
+            live,
+            UserNotificationTypes.LoyaltyPointsEarned,
+            CustomerNotificationMessages.PointsEarned(points, sourceType == LoyaltySourceType.Membership
+                ? $"Sumaste {CustomerNotificationOutbox.Points(points)} por el pago de tu membresía."
+                : $"Sumaste {CustomerNotificationOutbox.Points(points)} por tu servicio en la barbería."),
+            cancellationToken);
         return lot;
     }
 
@@ -179,6 +192,16 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
             withdrawn += points;
         }
 
+        if (withdrawn > 0)
+        {
+            await _notifications.QueueForCustomerAsync(
+                lockedCustomerId,
+                UserNotificationTypes.LoyaltyPointsWithdrawn,
+                CustomerNotificationMessages.PointsWithdrawn(
+                    withdrawn, $"Se anuló tu membresía, así que retiramos los {CustomerNotificationOutbox.Points(withdrawn)} que aún tenías de ella."),
+                cancellationToken);
+        }
+
         return withdrawn;
     }
 
@@ -210,6 +233,17 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
                 lot.CustomerId, LoyaltyMovementType.MembershipUnlinkWithdrawal, points, utcNow,
                 lotId: lot.Id, performedByUserId: performedByUserId, reason: "Se desvinculó el pago de la membresía."));
             withdrawn += points;
+        }
+
+        if (withdrawn > 0)
+        {
+            await _notifications.QueueForCustomerAsync(
+                lockedCustomerId,
+                UserNotificationTypes.LoyaltyPointsWithdrawn,
+                CustomerNotificationMessages.PointsWithdrawn(
+                    withdrawn,
+                    $"Se desvinculó el pago de tu membresía, así que retiramos los {CustomerNotificationOutbox.Points(withdrawn)} que te había dado. Vuelven si se vincula de nuevo."),
+                cancellationToken);
         }
 
         return withdrawn;
@@ -263,6 +297,16 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
                 lot.CustomerId, LoyaltyMovementType.MembershipRelinkCredit, pending, utcNow,
                 lotId: lot.Id, performedByUserId: performedByUserId, reason: "Se volvió a vincular el pago de la membresía."));
             credited += pending;
+        }
+
+        if (credited > 0)
+        {
+            await _notifications.QueueForCustomerAsync(
+                lockedCustomerId,
+                UserNotificationTypes.LoyaltyPointsEarned,
+                CustomerNotificationMessages.PointsReturned(
+                    credited, "Se volvió a vincular el pago de tu membresía y sus puntos regresaron a tu cuenta."),
+                cancellationToken);
         }
 
         return credited;
@@ -835,6 +879,17 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
             {
                 DebitUsablePoints(customerId, adjustment, await TrackedUsableLotsAsync(customerId, utcNow, cancellationToken), utcNow);
             }
+
+            // ADR-0019 N1: the internal reason is not sent; the customer sees the movement in their points.
+            await _notifications.QueueForCustomerAsync(
+                customerId,
+                direction == LoyaltyAdjustmentDirection.Credit ? UserNotificationTypes.LoyaltyPointsEarned : UserNotificationTypes.LoyaltyPointsWithdrawn,
+                direction == LoyaltyAdjustmentDirection.Credit
+                    ? CustomerNotificationMessages.PointsEarned(
+                        request.Points, $"La barbería sumó {CustomerNotificationOutbox.Points(request.Points)} a tu cuenta.")
+                    : CustomerNotificationMessages.PointsWithdrawn(
+                        request.Points, $"La barbería descontó {CustomerNotificationOutbox.Points(request.Points)} de tu cuenta."),
+                cancellationToken);
 
             await _dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);

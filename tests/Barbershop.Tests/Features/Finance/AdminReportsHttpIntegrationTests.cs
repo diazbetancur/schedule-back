@@ -127,11 +127,12 @@ public sealed class AdminReportsHttpIntegrationTests
   private static async Task SeedIncomeAsync(IntegrationTestFactory factory, Guid staffProfileId, int amount, DateOnly occurredOn, int businessPercentage = 0)
   {
     using var scope = factory.Services.CreateScope();
-    var income = scope.ServiceProvider.GetRequiredService<IAdminIncomeService>();
-    // Income needs a service; create one first.
+    // Income needs a service; create one first. Manual service income stored before ADR-0020 Q18.
     var services = scope.ServiceProvider.GetRequiredService<IAdminServicesService>();
     var service = await services.CreateAsync(new ServiceCreateRequest("Corte", 25000, businessPercentage, GeneralServiceId: ServiceCatalogDefaults.CorteGeneralServiceId));
-    await income.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, staffProfileId, amount, false, occurredOn));
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    var createdBy = await db.Users.Select(user => user.Id).FirstAsync();
+    await ManualIncomeSeed.ServiceIncomeAsync(db, service.Id, staffProfileId, amount, occurredOn, createdBy);
   }
 
   private async Task<AuthSession> RegisterAndPromoteAdminAsync(TestHttpContext context, string label)

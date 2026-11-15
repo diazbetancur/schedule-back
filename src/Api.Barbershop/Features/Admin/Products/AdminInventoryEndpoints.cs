@@ -28,6 +28,12 @@ public static class AdminInventoryEndpoints
             .WithName("GetAdminInventorySummary")
             .Produces<InventorySummaryView>(StatusCodes.Status200OK);
 
+        inventory.MapGet("/sales", ([AsParameters] InventorySalesQuery query, IAdminInventoryService service, CancellationToken ct)
+                => service.GetSalesAsync(query, ct))
+            .WithName("GetAdminInventorySales")
+            .Produces<InventorySalesView>(StatusCodes.Status200OK)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
+
         inventory.MapGet("/{productId:guid}", (Guid productId, IAdminInventoryService service, CancellationToken ct)
                 => service.GetAsync(productId, ct))
             .WithName("GetAdminInventoryItem")

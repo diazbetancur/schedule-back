@@ -67,11 +67,29 @@ public sealed class RoleTests
     Assert.Empty(role.RolePermissions);
   }
 
-  [Fact]
-  public void RemovePermission_OnSystemRole_Throws()
+  [Theory]
+  [InlineData("Admin")]
+  [InlineData("Customer")]
+  public void RemovePermission_OnALockedSystemRole_Throws(string name)
   {
-    var role = new Role("Staff", isSystemRole: true);
+    var role = new Role(name, isSystemRole: true);
 
+    Assert.False(role.CanEditPermissions);
     Assert.Throws<InvalidOperationException>(() => role.RemovePermission(Guid.NewGuid()));
+  }
+
+  [Fact]
+  public void ThePermissionsOfStaff_CanBeEdited()
+  {
+    // ADR-0020 (BUG-091): an administrator can take bills.charge or service-records.register away from Staff.
+    var role = new Role("Staff", isSystemRole: true);
+    var permissionId = Guid.NewGuid();
+
+    role.AddPermission(permissionId, DateTime.UtcNow);
+    Assert.Single(role.RolePermissions);
+    role.RemovePermission(permissionId);
+
+    Assert.True(role.CanEditPermissions);
+    Assert.Empty(role.RolePermissions);
   }
 }

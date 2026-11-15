@@ -1037,11 +1037,29 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
                 .Where(membership => membershipIds.Contains(membership.Id))
                 .ToDictionaryAsync(membership => membership.Id, membership => membership.PlanName, cancellationToken);
 
+        // ADR-0020: a bill's service earns with the posting of its line as the source.
+        var postingIds = lots.Where(lot => lot.SourceType == LoyaltySourceType.BillLine).Select(lot => lot.SourceId).Distinct().ToArray();
+        var billLines = postingIds.Length == 0
+            ? new Dictionary<Guid, string>()
+            : (await (
+                    from posting in _dbContext.BillPostings.AsNoTracking()
+                    join line in _dbContext.BillLines.AsNoTracking() on posting.BillLineId equals line.Id
+                    join bill in _dbContext.Bills.AsNoTracking() on line.BillId equals bill.Id
+                    where postingIds.Contains(posting.Id)
+                    select new { posting.Id, line.NameSnapshot, bill.Series, bill.Number })
+                .ToListAsync(cancellationToken))
+                .ToDictionary(
+                    row => row.Id,
+                    row => row.Number is { } number
+                        ? $"{row.NameSnapshot} (cuenta {Barbershop.Domain.Bills.Bill.FormatNumber(row.Series!, number)})"
+                        : row.NameSnapshot);
+
         return lots.ToDictionary(
             lot => lot.Id,
             lot => lot.SourceType switch
             {
                 LoyaltySourceType.ServiceRecord => $"Servicio: {services.GetValueOrDefault(lot.SourceId, "servicio realizado")}",
+                LoyaltySourceType.BillLine => $"Servicio: {billLines.GetValueOrDefault(lot.SourceId, "servicio de una cuenta")}",
                 LoyaltySourceType.Membership => $"Membresía: {plans.GetValueOrDefault(lot.SourceId, "membresía")}",
                 _ => "Ajuste manual"
             });

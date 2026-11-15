@@ -45,7 +45,11 @@ internal sealed class InventoryManagementService : IAdminInventoryService
             join category in _dbContext.ProductCategories.AsNoTracking() on product.CategoryId equals category.Id
             join stockRow in _dbContext.ProductStocks.AsNoTracking() on product.Id equals stockRow.ProductId into stocks
             from stock in stocks.DefaultIfEmpty()
-            select new { Product = product, Category = category, Stock = stock };
+            select new { Product = product, Category = category, Stock = stock, Committed = _dbContext.BillLines
+                    .Where(line => line.ProductId == product.Id && _dbContext.Bills.Any(bill => bill.Id == line.BillId
+                        && (bill.Status == global::Barbershop.Domain.Bills.BillStatus.Closed
+                            || bill.Status == global::Barbershop.Domain.Bills.BillStatus.Unapproved)))
+                    .Sum(line => (int?)line.Quantity) ?? 0 };
 
         if (listQuery.CategoryId is { } categoryId)
         {
@@ -65,7 +69,7 @@ internal sealed class InventoryManagementService : IAdminInventoryService
 
         if (listQuery.LowStock == true)
         {
-            rows = rows.Where(row => row.Stock != null && row.Stock.MinStock != null && row.Stock.OnHand <= row.Stock.MinStock);
+            rows = rows.Where(row => row.Stock != null && row.Stock.MinStock != null && row.Stock.OnHand - row.Committed <= row.Stock.MinStock);
         }
 
         // Same catalog order as the product list, so both screens read alike.
@@ -78,7 +82,7 @@ internal sealed class InventoryManagementService : IAdminInventoryService
 
         return await ordered.ToPagedResultAsync(
             page,
-            row => Map(row.Product, row.Category.Name, row.Stock),
+            row => Map(row.Product, row.Category.Name, row.Stock, row.Committed),
             cancellationToken);
     }
 
@@ -94,11 +98,16 @@ internal sealed class InventoryManagementService : IAdminInventoryService
                     OnHand = stock == null ? 0 : stock.OnHand,
                     MinStock = stock == null ? null : stock.MinStock,
                     AverageUnitCost = stock == null ? null : stock.AverageUnitCost,
+                    Committed = _dbContext.BillLines
+                    .Where(line => line.ProductId == product.Id && _dbContext.Bills.Any(bill => bill.Id == line.BillId
+                        && (bill.Status == global::Barbershop.Domain.Bills.BillStatus.Closed
+                            || bill.Status == global::Barbershop.Domain.Bills.BillStatus.Unapproved)))
+                    .Sum(line => (int?)line.Quantity) ?? 0,
                 })
             .ToListAsync(cancellationToken);
 
         return new InventorySummaryView(
-            rows.Count(row => row.MinStock is { } min && row.OnHand <= min),
+            rows.Count(row => row.MinStock is { } min && row.OnHand - row.Committed <= min),
             rows.Count(row => row.OnHand < 0),
             rows.Sum(row => StockValue(row.OnHand, row.AverageUnitCost) ?? 0),
             rows.Count(row => row.AverageUnitCost is null));
@@ -364,10 +373,48 @@ internal sealed class InventoryManagementService : IAdminInventoryService
             .SingleAsync(cancellationToken);
         var stock = await _dbContext.ProductStocks.AsNoTracking()
             .SingleOrDefaultAsync(row => row.ProductId == product.Id, cancellationToken);
-        return Map(product, categoryName, stock);
+        var committed = await Barbershop.Infrastructure.Bills.BillsService.CommittedStockQuery(_dbContext)
+            .Where(row => row.ProductId == product.Id)
+            .Select(row => row.Quantity)
+            .SingleOrDefaultAsync(cancellationToken);
+        return Map(product, categoryName, stock, committed);
     }
 
-    private static InventoryItemView Map(Product product, string categoryName, ProductStock? stock)
+    public async Task<InventorySalesView> GetSalesAsync(InventorySalesQuery query, CancellationToken cancellationToken = default)
+    {
+        var (from, to) = HistoryRange.Resolve(query.From, query.To, TodayInBogota());
+        var sales = await _dbContext.IncomeEntries.AsNoTracking()
+            .Where(entry => !entry.IsDeleted && entry.Kind == IncomeKind.ProductSale && entry.OccurredOn >= from && entry.OccurredOn <= to)
+            .Select(entry => new { ProductId = entry.ProductId!.Value, entry.ProductNameSnapshot, Quantity = entry.Quantity!.Value, entry.Amount, entry.UnitCostSnapshot, entry.CreatedAt })
+            .ToListAsync(cancellationToken);
+
+        var items = sales
+            .GroupBy(sale => sale.ProductId)
+            .Select(group =>
+            {
+                var withCost = group.Where(sale => sale.UnitCostSnapshot is not null).ToList();
+                var cost = (long)Math.Round(withCost.Sum(sale => sale.Quantity * sale.UnitCostSnapshot!.Value), 0, MidpointRounding.AwayFromZero);
+                var revenueWithCost = withCost.Sum(sale => (long)sale.Amount);
+                var profit = revenueWithCost - cost;
+                return new InventorySalesItemView(
+                    group.Key,
+                    group.OrderByDescending(sale => sale.CreatedAt).First().ProductNameSnapshot!,
+                    group.Sum(sale => sale.Quantity),
+                    group.Sum(sale => (long)sale.Amount),
+                    cost,
+                    profit,
+                    revenueWithCost > 0 ? Math.Round(profit * 100m / revenueWithCost, 1, MidpointRounding.AwayFromZero) : null,
+                    group.Where(sale => sale.UnitCostSnapshot is null).Sum(sale => sale.Quantity));
+            })
+            .OrderByDescending(item => item.Revenue).ThenBy(item => item.Name, StringComparer.CurrentCulture)
+            .ToArray();
+
+        return new InventorySalesView(
+            from, to, items, items.Sum(item => item.Units), items.Sum(item => item.Revenue), items.Sum(item => item.Cost),
+            items.Sum(item => item.Profit), items.Sum(item => item.UnitsWithoutCost));
+    }
+
+    private static InventoryItemView Map(Product product, string categoryName, ProductStock? stock, int committed = 0)
     {
         var onHand = stock?.OnHand ?? 0;
         var cost = stock?.AverageUnitCost;
@@ -385,11 +432,13 @@ internal sealed class InventoryManagementService : IAdminInventoryService
             onHand,
             cost,
             stock?.MinStock,
-            stock?.IsLow ?? false,
+            stock?.MinStock is { } min && onHand - committed <= min,
             unitProfit,
             margin,
             StockValue(onHand, cost),
-            stock?.UpdatedAt);
+            stock?.UpdatedAt,
+            committed,
+            onHand - committed);
     }
 
     private static long? StockValue(int onHand, decimal? averageUnitCost)

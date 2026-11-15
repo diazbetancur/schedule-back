@@ -228,13 +228,13 @@ public sealed class CustomerNotificationsTests : IDisposable
   {
     var defaults = await _inbox.GetPreferencesAsync(_customerUser.Id);
     Assert.Equal(
-        [("appointments", true), ("memberships", true), ("loyalty", true), ("campaigns", true)],
+        [("appointments", true), ("memberships", true), ("loyalty", true), ("purchases", true), ("campaigns", true)],
         defaults.Categories.Select(item => (item.Category, item.PushEnabled)));
 
     await _inbox.UpdatePreferencesAsync(_customerUser.Id, new NotificationPreferencesUpdateRequest([new("loyalty", false), new("campaigns", false)]));
     var updated = await _inbox.UpdatePreferencesAsync(_customerUser.Id, new NotificationPreferencesUpdateRequest([new("campaigns", true)]));
     Assert.Equal(
-        [("appointments", true), ("memberships", true), ("loyalty", false), ("campaigns", true)],
+        [("appointments", true), ("memberships", true), ("loyalty", false), ("purchases", true), ("campaigns", true)],
         updated.Categories.Select(item => (item.Category, item.PushEnabled)));
     Assert.All((await _inbox.GetPreferencesAsync(_admin.Id)).Categories, item => Assert.True(item.PushEnabled));
 

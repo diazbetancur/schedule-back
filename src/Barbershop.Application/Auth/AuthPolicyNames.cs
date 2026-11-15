@@ -17,4 +17,13 @@ public static class AuthPolicyNames
   /// stock and its card is what receiving and adjusting need to act.
   /// </summary>
   public const string InventoryAccess = "InventoryAccessPolicy";
+
+  /// <summary>ADR-0020: Admin, or any permission that works with bills (each action checks its own permission again).</summary>
+  public const string BillsAccess = "BillsAccessPolicy";
+
+  /// <summary>ADR-0020: Admin, or bills.approve still granted in the database (critical).</summary>
+  public const string BillsApproveAccess = "BillsApproveAccessPolicy";
+
+  /// <summary>ADR-0020: Admin, or bills.void still granted in the database (critical).</summary>
+  public const string BillsVoidAccess = "BillsVoidAccessPolicy";
 }

@@ -8,6 +8,7 @@ using Barbershop.Domain.Common;
 using Barbershop.Domain.Staff;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Availability;
+using Barbershop.Infrastructure.Bills;
 using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.Staff;
 using Microsoft.EntityFrameworkCore;
@@ -352,7 +353,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
             cancellationToken)
         ?? throw new KeyNotFoundException("No encontramos la cita.");
 
-    return await UpdateStatusCoreAsync(appointment, staffProfile, request, cancellationToken);
+    return await UpdateStatusCoreAsync(appointment, staffProfile, request, currentUserId, cancellationToken);
   }
 
   async Task<PagedResult<AppointmentView>> IAdminAppointmentsService.GetAsync(
@@ -446,6 +447,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
   async Task<AppointmentView> IAdminAppointmentsService.UpdateStatusAsync(
       Guid appointmentId,
       AppointmentStatusUpdateRequest request,
+      Guid actingUserId,
       CancellationToken cancellationToken)
   {
     var appointment = await _dbContext.Appointments
@@ -456,7 +458,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     // (the customer is notified as usual), so the profile is loaded whatever its state.
     var staffProfile = await LoadStaffProfileAnyStateAsync(appointment.StaffProfileId, cancellationToken);
 
-    return await UpdateStatusCoreAsync(appointment, staffProfile, request, cancellationToken);
+    return await UpdateStatusCoreAsync(appointment, staffProfile, request, actingUserId, cancellationToken);
   }
 
   private async Task<StaffProfile> LoadStaffProfileAnyStateAsync(Guid staffProfileId, CancellationToken cancellationToken)
@@ -677,6 +679,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       Appointment appointment,
       StaffProfile staffProfile,
       AppointmentStatusUpdateRequest request,
+      Guid actingUserId,
       CancellationToken cancellationToken)
   {
     var allowedStatuses = new[]
@@ -719,7 +722,15 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       });
     }
 
-    appointment.UpdateStatus(request.Status, _timeProvider.GetUtcNow().UtcDateTime);
+    var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+    appointment.UpdateStatus(request.Status, utcNow);
+    if (request.Status == AppointmentStatus.Completed)
+    {
+      // ADR-0020 BUG-092: completing an appointment opens its bill (unless it already has one or older service records),
+      // saved together with the new status, so a completed appointment is never left without anything to charge.
+      await BillsService.OpenForCompletedAppointmentAsync(_dbContext, appointment, actingUserId, utcNow, cancellationToken);
+    }
+
     await _dbContext.SaveChangesAsync(cancellationToken);
 
     if (request.Status == AppointmentStatus.Cancelled)

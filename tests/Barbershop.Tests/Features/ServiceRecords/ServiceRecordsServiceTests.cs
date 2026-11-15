@@ -472,9 +472,9 @@ public sealed class ServiceRecordsServiceTests : IDisposable
     await Assert.ThrowsAsync<ConflictException>(() => _income.SoftDeleteAsync(incomeId));
     Assert.Equal(25000, (await _dbContext.IncomeEntries.SingleAsync()).Amount);
 
-    // A manual income behaves as before.
-    var manual = await _income.CreateAsync(_admin.Id, new IncomeEntryCreateRequest(_haircut.Id, _barber.Id, 20000, false, _today));
-    Assert.Null(manual.ServiceRecordId);
+    // A manual income stored before the bills behaves as before.
+    var manual = await ManualIncomeSeed.ServiceIncomeAsync(_dbContext, _haircut.Id, _barber.Id, 20000, _today, _admin.Id);
+    Assert.Null((await _income.GetAsync(new IncomeListQuery(_today, _today))).Items.Single(item => item.Id == manual.Id).ServiceRecordId);
     await _income.UpdateAsync(manual.Id, new IncomeEntryUpdateRequest(_haircut.Id, _barber.Id, 21000, false, _today));
     await _income.SoftDeleteAsync(manual.Id);
   }

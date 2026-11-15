@@ -51,7 +51,7 @@ public sealed class NotificationPreferencesHttpIntegrationTests
 
     var defaults = await client.GetFromJsonAsync<NotificationPreferencesView>("/api/v1/notifications/preferences");
     Assert.All(defaults!.Categories, item => Assert.True(item.PushEnabled));
-    Assert.Equal(["appointments", "memberships", "loyalty", "campaigns"], defaults.Categories.Select(item => item.Category));
+    Assert.Equal(["appointments", "memberships", "loyalty", "purchases", "campaigns"], defaults.Categories.Select(item => item.Category));
 
     using (var saved = await client.PutAsJsonAsync(
         "/api/v1/notifications/preferences",

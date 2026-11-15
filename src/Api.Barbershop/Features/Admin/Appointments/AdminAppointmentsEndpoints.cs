@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Appointments;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Common.Paging;
@@ -87,7 +89,8 @@ public static class AdminAppointmentsEndpoints
   private static Task<AppointmentView> UpdateStatusAsync(
       Guid appointmentId,
       AppointmentStatusUpdateRequest request,
+      ClaimsPrincipal user,
       IAdminAppointmentsService service,
       CancellationToken cancellationToken)
-      => service.UpdateStatusAsync(appointmentId, request, cancellationToken);
+      => service.UpdateStatusAsync(appointmentId, request, user.GetRequiredUserId(), cancellationToken);
 }

@@ -498,7 +498,7 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
                 {
                     // No direct delivery can skip the service record (ADR-0015 R13).
                     throw new ConflictException(
-                        "Esta recompensa es un servicio: se entrega al confirmar el servicio realizado con el tipo Recompensa.");
+                        "Esta recompensa es un servicio: se entrega al aprobar la cuenta en la que se agrega el canje.");
                 }
 
                 if (redemption.Status != LoyaltyRedemptionStatus.Approved)
@@ -621,6 +621,48 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
         }
 
         redemption.Deliver(currentUserId, utcNow, today, serviceRecordId);
+        await _wallet.ConsumeReservationInCurrentTransactionAsync(live, redemption.Id, currentUserId, utcNow, cancellationToken);
+        return redemption;
+    }
+
+    /// <summary>
+    /// ADR-0020 (C8): delivers an approved redemption through the approval of a bill, inside the caller's transaction,
+    /// which already holds the bill's lock: then the live customer profile and the redemption are locked (the order of
+    /// R13), the redemption is checked against the bill's customer, the service of the line (service rewards) and its
+    /// deadline, and its reserved points are consumed. ADR-0018 D11 was applied by the bill's own approval; an Admin
+    /// delivering their own reward is marked here as well.
+    /// </summary>
+    internal async Task<LoyaltyRedemption> DeliverForBillInCurrentTransactionAsync(
+        Guid redemptionId, Guid customerId, Guid? serviceId, Guid billLineId, Guid currentUserId, DateTime utcNow,
+        CancellationToken cancellationToken)
+    {
+        var live = await _wallet.LockLiveCustomerAsync(customerId, cancellationToken);
+        await LockRedemptionAsync(redemptionId, cancellationToken);
+        var redemption = await _dbContext.LoyaltyRedemptions.SingleOrDefaultAsync(candidate => candidate.Id == redemptionId, cancellationToken);
+
+        if (redemption is null || redemption.CustomerId != live)
+        {
+            throw new ConflictException("El canje de la cuenta ya no es del cliente (por ejemplo, por una fusión). Revisa la línea del canje.");
+        }
+
+        if (redemption.RewardKindSnapshot == LoyaltyRewardKind.Service && redemption.ServiceIdSnapshot != serviceId)
+        {
+            throw new ConflictException($"La recompensa es el servicio «{redemption.ServiceNameSnapshot}»: revisa la línea del canje.");
+        }
+
+        if (redemption.Status != LoyaltyRedemptionStatus.Approved)
+        {
+            throw new ConflictException(NotInStatusMessage(redemption, "entregar"));
+        }
+
+        var today = LoyaltyWalletService.BogotaDate(utcNow);
+        EnsureWithinDeadline(redemption, today, "entregar");
+        if (await ResolveSelfApprovalAsync(currentUserId, live, cancellationToken))
+        {
+            redemption.MarkSelfApproved();
+        }
+
+        redemption.Deliver(currentUserId, utcNow, today, serviceRecordId: null, billLineId);
         await _wallet.ConsumeReservationInCurrentTransactionAsync(live, redemption.Id, currentUserId, utcNow, cancellationToken);
         return redemption;
     }

@@ -511,7 +511,7 @@ public sealed class LoyaltyRedemptionServiceTests : IDisposable
 
     var direct = await Assert.ThrowsAsync<ConflictException>(() =>
         _redemptions.DeliverAsync(_admin.Id, requested.Id, new LoyaltyRedemptionDecisionRequest(approved.Version)));
-    Assert.Contains("servicio realizado", direct.Message);
+    Assert.Contains("aprobar la cuenta", direct.Message);
 
     var stranger = new User("Otra Persona", "otra@example.com", "hash", DateTime.UtcNow);
     _dbContext.Users.Add(stranger);

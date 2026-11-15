@@ -71,10 +71,10 @@ public sealed class StaffOfferingsMigrationTests
 
         // Every existing table keeps its rows byte for byte, apart from the new columns (the product tables come from B5).
         var after = await SnapshotAllTablesAsync(db, exclude: ComparisonExclusions);
-        Assert.Equal(before.Keys.Order(), after.Keys.Except(["staff_service_offerings", "product_categories", "products", "user_notification_preferences", "product_stock", "inventory_movements"]).Order());
+        Assert.Equal(before.Keys.Order(), after.Keys.Except(["staff_service_offerings", "product_categories", "products", "user_notification_preferences"]).Except(MigrationSnapshot.LaterTables).Order());
         foreach (var (table, rows) in before)
         {
-            Assert.True(rows.SequenceEqual(after[table]), $"{table} changed");
+            Assert.True(MigrationSnapshot.SameRows(rows, after[table]), $"{table} changed");
         }
 
         // The new columns are empty on every existing row: appointments and records are not backfilled.

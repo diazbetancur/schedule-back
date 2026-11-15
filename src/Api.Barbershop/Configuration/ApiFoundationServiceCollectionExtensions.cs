@@ -111,6 +111,23 @@ public static class ApiFoundationServiceCollectionExtensions
                     global::Barbershop.Domain.Users.PermissionCodes.InventoryView,
                     global::Barbershop.Domain.Users.PermissionCodes.InventoryReceive,
                     global::Barbershop.Domain.Users.PermissionCodes.InventoryAdjust)));
+            options.AddPolicy(AuthPolicyNames.BillsAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin,
+                    global::Barbershop.Domain.Users.PermissionCodes.BillsOpen,
+                    global::Barbershop.Domain.Users.PermissionCodes.BillsClose,
+                    global::Barbershop.Domain.Users.PermissionCodes.BillsManage,
+                    global::Barbershop.Domain.Users.PermissionCodes.BillsApprove,
+                    global::Barbershop.Domain.Users.PermissionCodes.BillsVoid)));
+            options.AddPolicy(AuthPolicyNames.BillsApproveAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin, global::Barbershop.Domain.Users.PermissionCodes.BillsApprove)));
+            options.AddPolicy(AuthPolicyNames.BillsVoidAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin, global::Barbershop.Domain.Users.PermissionCodes.BillsVoid)));
         });
         services.AddScoped<IAuthorizationHandler, CurrentPermissionAuthorizationHandler>();
         services.AddScoped<IAuthorizationHandler, AdminOrCurrentPermissionAuthorizationHandler>();

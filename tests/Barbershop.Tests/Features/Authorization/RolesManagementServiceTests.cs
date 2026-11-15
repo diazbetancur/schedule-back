@@ -24,7 +24,7 @@ public sealed class RolesManagementServiceTests : IDisposable
 
   public void Dispose() => _dbContext.Dispose();
 
-  private async Task<Permission> SeedPermissionAsync(string code = "sales.register", string description = "Registrar ventas")
+  private async Task<Permission> SeedPermissionAsync(string code = "inventory.view", string description = "Ver existencias, costos y ganancia de productos")
   {
     var permission = new Permission(code, description, DateTime.UtcNow);
     _dbContext.Permissions.Add(permission);
@@ -76,8 +76,8 @@ public sealed class RolesManagementServiceTests : IDisposable
   [Fact]
   public async Task UpdateAsync_RenamesRole_AndReplacesPermissions()
   {
-    var firstPermission = await SeedPermissionAsync("sales.register", "Registrar ventas");
-    var secondPermission = await SeedPermissionAsync("sales.report", "Ver reportes de ventas");
+    var firstPermission = await SeedPermissionAsync("inventory.view", "Ver existencias, costos y ganancia de productos");
+    var secondPermission = await SeedPermissionAsync("bills.open", "Abrir cuentas y editar las propias mientras están abiertas");
     var created = await _service.CreateAsync(new RoleCreateRequest("Vendedor", [firstPermission.Id]));
 
     var updated = await _service.UpdateAsync(created.Id, new RoleUpdateRequest("Vendedor Senior", [secondPermission.Id]));
@@ -96,6 +96,48 @@ public sealed class RolesManagementServiceTests : IDisposable
 
     await Assert.ThrowsAsync<ConflictException>(() =>
         _service.UpdateAsync(systemRole.Id, new RoleUpdateRequest("Administrador", [])));
+  }
+
+  [Fact]
+  public async Task UpdateAsync_TheStaffRole_ChangesOnlyItsPermissions()
+  {
+    // ADR-0020 (BUG-091): an administrator can take a default permission away from Staff; its name stays.
+    var charge = await SeedPermissionAsync("bills.charge", "Registrar el cobro de una cuenta");
+    var open = await SeedPermissionAsync("bills.open", "Abrir cuentas y editar las propias mientras están abiertas");
+    var staff = new Role("Staff", isSystemRole: true);
+    _dbContext.Roles.Add(staff);
+    staff.AddPermission(charge.Id, DateTime.UtcNow);
+    staff.AddPermission(open.Id, DateTime.UtcNow);
+    await _dbContext.SaveChangesAsync();
+
+    var updated = await _service.UpdateAsync(staff.Id, new RoleUpdateRequest("staff", [open.Id]));
+
+    Assert.Equal("Staff", updated.Name);
+    Assert.True(updated.CanEditPermissions);
+    Assert.Equal(["bills.open"], updated.Permissions.Select(permission => permission.Code));
+    await Assert.ThrowsAsync<ConflictException>(() => _service.UpdateAsync(staff.Id, new RoleUpdateRequest("Barberos", [open.Id])));
+  }
+
+  [Fact]
+  public async Task ARetiredPermission_IsNeitherListedNorOffered_AndSavingTheRoleKeepsItsRow()
+  {
+    // ADR-0020 Q16: sales.register leaves the catalog without deleting anything.
+    var retired = await SeedPermissionAsync("sales.register", "Registrar ventas");
+    var view = await SeedPermissionAsync("inventory.view", "Ver existencias, costos y ganancia de productos");
+    var role = new Role("Vendedor");
+    role.AddPermission(retired.Id, DateTime.UtcNow);
+    role.AddPermission(view.Id, DateTime.UtcNow);
+    _dbContext.Roles.Add(role);
+    await _dbContext.SaveChangesAsync();
+
+    Assert.DoesNotContain(await _service.GetAllPermissionsAsync(), permission => permission.Code == "sales.register");
+    Assert.Equal(["inventory.view"], (await _service.GetAllAsync()).Single(candidate => candidate.Id == role.Id).Permissions.Select(permission => permission.Code));
+    await Assert.ThrowsAsync<ValidationProblemException>(() => _service.UpdateAsync(role.Id, new RoleUpdateRequest("Vendedor", [retired.Id])));
+
+    var updated = await _service.UpdateAsync(role.Id, new RoleUpdateRequest("Vendedor", []));
+
+    Assert.Empty(updated.Permissions);
+    Assert.Single(await _dbContext.Set<RolePermission>().Where(rolePermission => rolePermission.RoleId == role.Id).ToListAsync());
   }
 
   [Fact]
@@ -126,11 +168,11 @@ public sealed class RolesManagementServiceTests : IDisposable
   [Fact]
   public async Task GetAllPermissionsAsync_ReturnsCatalog()
   {
-    await SeedPermissionAsync("sales.register", "Registrar ventas");
+    await SeedPermissionAsync("inventory.view", "Ver existencias, costos y ganancia de productos");
 
     var permissions = await _service.GetAllPermissionsAsync();
 
     Assert.Single(permissions);
-    Assert.Equal("sales.register", permissions[0].Code);
+    Assert.Equal("inventory.view", permissions[0].Code);
   }
 }

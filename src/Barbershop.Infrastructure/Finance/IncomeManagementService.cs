@@ -74,6 +74,22 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         IncomeEntry entry;
 
+        // ADR-0020 Q18: services, products and tips are charged with the bills; a new manual service income would be
+        // the main source of duplicates. Existing ones are still edited and deleted as before; membership sales stay.
+        if (kind == IncomeKind.Service)
+        {
+            throw new ConflictException(
+                "Los ingresos de servicios ahora se registran con las cuentas. Abre la cuenta del servicio en «Cuentas».");
+        }
+
+        if (kind is IncomeKind.ProductSale or IncomeKind.Tip)
+        {
+            throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["kind"] = ["Las ventas de productos y las propinas llegan solo por las cuentas aprobadas."],
+            });
+        }
+
         if (kind == IncomeKind.MembershipSale)
         {
             ValidateMembershipSaleShape(request.ServiceId, request.StaffProfileId, request.IsPromo);
@@ -237,7 +253,7 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         return name is null
             ? throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
             {
-                ["kind"] = ["El tipo de ingreso debe ser Servicio o Venta de membresía."],
+                ["kind"] = ["El tipo de ingreso debe ser Servicio, Venta de membresía, Venta de producto o Propina."],
             })
             : Enum.Parse<IncomeKind>(name);
     }
@@ -335,8 +351,8 @@ internal sealed class IncomeManagementService : IAdminIncomeService
     }
 
     /// <summary>
-    /// An income created by confirming a service record belongs to that record: editing or deleting it here would
-    /// silently change a confirmed operation. How a confirmed record is corrected is still to be decided.
+    /// An income created by confirming a service record belongs to that record, and one posted by an approved bill
+    /// belongs to that bill (ADR-0020 §3): editing or deleting it here would silently change a confirmed operation.
     /// </summary>
     private async Task EnsureNotFromServiceRecordAsync(Guid incomeEntryId, CancellationToken cancellationToken)
     {
@@ -344,6 +360,16 @@ internal sealed class IncomeManagementService : IAdminIncomeService
         {
             throw new ConflictException(
                 "Este ingreso proviene de un servicio realizado confirmado; no se puede editar ni eliminar desde Ingresos.");
+        }
+
+        var bill = await _dbContext.IncomeEntries.AsNoTracking()
+            .Where(entry => entry.Id == incomeEntryId && entry.BillId != null)
+            .Join(_dbContext.Bills.AsNoTracking(), entry => entry.BillId, candidate => candidate.Id, (_, candidate) => new { candidate.Series, candidate.Number })
+            .FirstOrDefaultAsync(cancellationToken);
+        if (bill is not null)
+        {
+            throw new ConflictException(
+                $"Este ingreso proviene de la cuenta {Barbershop.Domain.Bills.Bill.FormatNumber(bill.Series!, bill.Number!.Value)}; no se puede editar ni eliminar desde Ingresos.");
         }
     }
 
@@ -369,7 +395,9 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             .Where(record => record.IncomeEntryId == entry.Id)
             .Select(record => new { record.Id, record.IsSelfApproved })
             .FirstOrDefaultAsync(cancellationToken);
-        return Map(entry, displayName, serviceRecord?.Id, serviceRecord?.IsSelfApproved ?? false);
+        var bills = await LoadBillsAsync([entry], cancellationToken);
+        var bill = entry.BillId is { } billId ? bills.GetValueOrDefault(billId) : null;
+        return Map(entry, displayName, serviceRecord?.Id, (serviceRecord?.IsSelfApproved ?? false) || (bill?.IsSelfApproved ?? false), bill?.Number);
     }
 
     private async Task<IReadOnlyList<IncomeEntryView>> MapManyAsync(IReadOnlyCollection<IncomeEntry> entries, CancellationToken cancellationToken)
@@ -397,17 +425,45 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             .Select(record => new { IncomeEntryId = record.IncomeEntryId!.Value, record.Id, record.IsSelfApproved })
             .ToDictionaryAsync(record => record.IncomeEntryId, cancellationToken);
 
+        var bills = await LoadBillsAsync(entries, cancellationToken);
         return entries
-            .Select(entry => Map(
-                entry,
-                entry.StaffProfileId is { } staffId ? displayNames.GetValueOrDefault(staffId, string.Empty) : null,
-                serviceRecordIds.TryGetValue(entry.Id, out var serviceRecord) ? serviceRecord.Id : null,
-                serviceRecord?.IsSelfApproved ?? false))
+            .Select(entry =>
+            {
+                var bill = entry.BillId is { } billId ? bills.GetValueOrDefault(billId) : null;
+                var fromRecord = serviceRecordIds.TryGetValue(entry.Id, out var serviceRecord);
+                return Map(
+                    entry,
+                    entry.StaffProfileId is { } staffId ? displayNames.GetValueOrDefault(staffId, string.Empty) : null,
+                    fromRecord ? serviceRecord!.Id : null,
+                    (fromRecord && serviceRecord!.IsSelfApproved) || (bill?.IsSelfApproved ?? false),
+                    bill?.Number);
+            })
             .ToArray();
     }
 
+    private sealed record BillInfo(string Number, bool IsSelfApproved);
+
+    /// <summary>The number of the bill that posted each income and whether its approval was a self-approval.</summary>
+    private async Task<Dictionary<Guid, BillInfo>> LoadBillsAsync(IReadOnlyCollection<IncomeEntry> entries, CancellationToken cancellationToken)
+    {
+        var billIds = entries.Where(entry => entry.BillId is not null).Select(entry => entry.BillId!.Value).Distinct().ToArray();
+        if (billIds.Length == 0)
+        {
+            return [];
+        }
+
+        return (await _dbContext.Bills.AsNoTracking()
+                .Where(bill => billIds.Contains(bill.Id) && bill.Number != null)
+                .Select(bill => new { bill.Id, bill.Series, bill.Number, bill.IsSelfApproved })
+                .ToListAsync(cancellationToken))
+            .ToDictionary(
+                bill => bill.Id,
+                bill => new BillInfo(Barbershop.Domain.Bills.Bill.FormatNumber(bill.Series!, bill.Number!.Value), bill.IsSelfApproved));
+    }
+
     /// <summary>A membership sale has no professional, so its display name is null rather than empty.</summary>
-    private static IncomeEntryView Map(IncomeEntry entry, string? staffDisplayName, Guid? serviceRecordId, bool isSelfApproved = false)
+    private static IncomeEntryView Map(
+        IncomeEntry entry, string? staffDisplayName, Guid? serviceRecordId, bool isSelfApproved = false, string? billNumber = null)
         => new(
             entry.Id,
             entry.ServiceId,
@@ -425,5 +481,10 @@ internal sealed class IncomeManagementService : IAdminIncomeService
             entry.UpdatedAt,
             entry.Kind.ToString(),
             serviceRecordId,
-            isSelfApproved);
+            isSelfApproved,
+            entry.BillId,
+            billNumber,
+            entry.ProductNameSnapshot,
+            entry.Quantity,
+            entry.CommissionBaseAmount);
 }

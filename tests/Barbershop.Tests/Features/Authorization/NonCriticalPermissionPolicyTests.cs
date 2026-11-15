@@ -6,39 +6,39 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Barbershop.Tests.Features.Authorization;
 
-public sealed class SalesRegisterPolicyTests
+public sealed class NonCriticalPermissionPolicyTests
 {
   private static IAuthorizationService BuildAuthorizationService()
   {
     var services = new ServiceCollection();
     services.AddAuthorization(options =>
     {
-      options.AddPolicy(PermissionPolicyNames.SalesRegister,
-          policy => policy.RequireClaim(PermissionClaimTypes.Permission, PermissionCodes.SalesRegister));
+      options.AddPolicy(PermissionPolicyNames.InventoryView,
+          policy => policy.RequireClaim(PermissionClaimTypes.Permission, PermissionCodes.InventoryView));
     });
     services.AddLogging();
     return services.BuildServiceProvider().GetRequiredService<IAuthorizationService>();
   }
 
   [Fact]
-  public async Task SalesRegisterPolicy_Succeeds_ForPrincipalWithClaim()
+  public async Task NonCriticalPolicy_Succeeds_ForPrincipalWithClaim()
   {
     var authorizationService = BuildAuthorizationService();
     var principal = new ClaimsPrincipal(new ClaimsIdentity(
-        [new Claim(PermissionClaimTypes.Permission, PermissionCodes.SalesRegister)], "TestAuth"));
+        [new Claim(PermissionClaimTypes.Permission, PermissionCodes.InventoryView)], "TestAuth"));
 
-    var result = await authorizationService.AuthorizeAsync(principal, PermissionPolicyNames.SalesRegister);
+    var result = await authorizationService.AuthorizeAsync(principal, PermissionPolicyNames.InventoryView);
 
     Assert.True(result.Succeeded);
   }
 
   [Fact]
-  public async Task SalesRegisterPolicy_Fails_ForPrincipalWithoutClaim()
+  public async Task NonCriticalPolicy_Fails_ForPrincipalWithoutClaim()
   {
     var authorizationService = BuildAuthorizationService();
     var principal = new ClaimsPrincipal(new ClaimsIdentity([], "TestAuth"));
 
-    var result = await authorizationService.AuthorizeAsync(principal, PermissionPolicyNames.SalesRegister);
+    var result = await authorizationService.AuthorizeAsync(principal, PermissionPolicyNames.InventoryView);
 
     Assert.False(result.Succeeded);
   }

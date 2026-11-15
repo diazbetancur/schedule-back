@@ -47,7 +47,7 @@ public sealed class CriticalPermissionHttpIntegrationTests
     var admin = await RegisterAdminAsync(context, "revoke-permission");
     var permissions = await GetPermissionsAsync(context.Client, admin.AccessToken);
     var role = await CreateRoleAsync(
-        context.Client, admin.AccessToken, "Aprobador", permissions[PermissionCodes.LoyaltyRedemptionsApprove], permissions[PermissionCodes.SalesRegister]);
+        context.Client, admin.AccessToken, "Aprobador", permissions[PermissionCodes.LoyaltyRedemptionsApprove], permissions[PermissionCodes.InventoryView]);
     var approver = await CreateUserWithRolesAsync(context, admin.AccessToken, "approver", role.Id);
 
     Assert.Equal(HttpStatusCode.OK, await ProbeAsync(context.Client, approver.AccessToken, PermissionCodes.LoyaltyRedemptionsApprove));
@@ -56,7 +56,7 @@ public sealed class CriticalPermissionHttpIntegrationTests
 
     AuthenticateAs(context.Client, admin.AccessToken);
     using (var update = await context.Client.PutAsJsonAsync(
-        $"/api/v1/admin/roles/{role.Id}", new RoleUpdateRequest("Aprobador", [permissions[PermissionCodes.SalesRegister]])))
+        $"/api/v1/admin/roles/{role.Id}", new RoleUpdateRequest("Aprobador", [permissions[PermissionCodes.InventoryView]])))
     {
       Assert.Equal(HttpStatusCode.OK, update.StatusCode);
     }
@@ -65,7 +65,7 @@ public sealed class CriticalPermissionHttpIntegrationTests
     Assert.Contains(ReadPermissionClaims(approver.AccessToken), code => code == PermissionCodes.LoyaltyRedemptionsApprove);
     Assert.Equal(HttpStatusCode.Forbidden, await ProbeAsync(context.Client, approver.AccessToken, PermissionCodes.LoyaltyRedemptionsApprove));
     // The permission the role kept, a non-critical one, keeps working as before.
-    Assert.Equal(HttpStatusCode.OK, await ProbeAsync(context.Client, approver.AccessToken, PermissionCodes.SalesRegister));
+    Assert.Equal(HttpStatusCode.OK, await ProbeAsync(context.Client, approver.AccessToken, PermissionCodes.InventoryView));
   }
 
   [Fact]

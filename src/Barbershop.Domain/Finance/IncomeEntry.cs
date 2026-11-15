@@ -3,9 +3,10 @@ using Barbershop.Domain.Common;
 namespace Barbershop.Domain.Finance;
 
 /// <summary>
-/// Money received, recorded by hand. A <see cref="IncomeKind.Service"/> entry is a service a professional
-/// performed and is split with them by percentage; a <see cref="IncomeKind.MembershipSale"/> entry is the
-/// sale of one or more memberships and belongs entirely to the business.
+/// Money received, recorded by hand or posted by an approved bill (ADR-0020). A <see cref="IncomeKind.Service"/> entry is a
+/// service a professional performed and is split with them by percentage; a <see cref="IncomeKind.MembershipSale"/> entry
+/// is the sale of one or more memberships and a <see cref="IncomeKind.ProductSale"/> the sale of products, both entirely
+/// of the business; a <see cref="IncomeKind.Tip"/> is entirely of the professional.
 /// </summary>
 public sealed class IncomeEntry
 {
@@ -64,16 +65,106 @@ public sealed class IncomeEntry
   public DateTime CreatedAt { get; private set; }
   public DateTime? UpdatedAt { get; private set; }
 
-  /// <summary>Truncated business share; the remainder always goes to <see cref="ProfessionalAmount"/> so the two sum to <see cref="Amount"/> exactly.</summary>
-  public int BusinessAmount => BusinessShare(Amount, BusinessPercentageSnapshot);
+  /// <summary>
+  /// ADR-0020 P7: the value before discounts of an income posted by a bill (service or product). The professional's
+  /// commission is computed on it, so a discount is borne by the business. Null on every other income, whose commission
+  /// is computed on <see cref="Amount"/> as before.
+  /// </summary>
+  public int? CommissionBaseAmount { get; private set; }
 
-  public int ProfessionalAmount => Amount - BusinessAmount;
+  /// <summary>The bill and the line that posted this income; such an income is managed from the bill only.</summary>
+  public Guid? BillId { get; private set; }
+  public Guid? BillLineId { get; private set; }
+
+  // A product sale (ADR-0020): the product, the units and the average unit cost copied when it was posted.
+  public Guid? ProductId { get; private set; }
+  public string? ProductNameSnapshot { get; private set; }
+  public int? Quantity { get; private set; }
+  public decimal? UnitCostSnapshot { get; private set; }
+
+  /// <summary>
+  /// The professional's share: the commission computed on <see cref="CommissionBaseAmount"/> when there is one (P7),
+  /// otherwise on <see cref="Amount"/>. The business keeps the rest, so the two always sum to <see cref="Amount"/> (the
+  /// business share of a discounted service can be smaller than the commission, even negative: the business bears it).
+  /// </summary>
+  public int ProfessionalAmount
+  {
+    get
+    {
+      var commissionBase = CommissionBaseAmount ?? Amount;
+      return commissionBase - BusinessShare(commissionBase, BusinessPercentageSnapshot);
+    }
+  }
+
+  /// <summary>Truncated business share; for incomes without a commission base it is the share of <see cref="Amount"/>.</summary>
+  public int BusinessAmount => Amount - ProfessionalAmount;
 
   /// <summary>
   /// The split rule of every service amount: the business share is truncated and the professional gets the rest.
   /// Also used for the commission the business covers on a loyalty reward (ADR-0015 R14).
   /// </summary>
   public static int BusinessShare(int amount, int businessPercentage) => (int)((long)amount * businessPercentage / 100);
+
+  /// <summary>ADR-0020: a service of an approved bill. Amount is net of its discounts; the commission uses the full price.</summary>
+  public static IncomeEntry CreateBillService(
+      Guid serviceId, string serviceNameSnapshot, int basePriceSnapshot, int businessPercentageSnapshot, Guid staffProfileId,
+      int amount, int commissionBaseAmount, DateOnly occurredOn, Guid billId, Guid billLineId, Guid createdByUserId, DateTime createdAt)
+  {
+    var entry = new IncomeEntry(
+        serviceId, serviceNameSnapshot, basePriceSnapshot, staffProfileId, amount, isPromo: false, occurredOn, createdByUserId,
+        createdAt, businessPercentageSnapshot);
+    entry.CommissionBaseAmount = DomainValidation.EnsureRange(commissionBaseAmount, amount, int.MaxValue, nameof(commissionBaseAmount));
+    entry.BillId = billId;
+    entry.BillLineId = billLineId;
+    return entry;
+  }
+
+  /// <summary>ADR-0020 Q11: a product sold on an approved bill, 100 % of the business, with its unit cost copied.</summary>
+  public static IncomeEntry CreateProductSale(
+      Guid productId, string productNameSnapshot, int quantity, int unitPrice, decimal? unitCostSnapshot, int amount,
+      DateOnly occurredOn, Guid billId, Guid billLineId, Guid createdByUserId, DateTime createdAt)
+  {
+    var gross = checked(quantity * unitPrice);
+    return new IncomeEntry
+    {
+      Kind = IncomeKind.ProductSale,
+      ProductId = productId,
+      ProductNameSnapshot = DomainValidation.Required(productNameSnapshot, nameof(productNameSnapshot), 120, 1),
+      Quantity = DomainValidation.EnsureRange(quantity, 1, int.MaxValue, nameof(quantity)),
+      BasePriceSnapshot = DomainValidation.EnsureRange(unitPrice, 0, int.MaxValue, nameof(unitPrice)),
+      // Null when the product never had a receipt with cost: its profit is shown as "sin costo registrado".
+      UnitCostSnapshot = unitCostSnapshot is null or >= 0 ? unitCostSnapshot : throw new ArgumentOutOfRangeException(nameof(unitCostSnapshot)),
+      BusinessPercentageSnapshot = 100,
+      Amount = DomainValidation.EnsureRange(amount, 0, gross, nameof(amount)),
+      CommissionBaseAmount = gross,
+      IsPromo = false,
+      OccurredOn = occurredOn,
+      BillId = billId,
+      BillLineId = billLineId,
+      CreatedByUserId = createdByUserId,
+      CreatedAt = DomainValidation.EnsureUtc(createdAt, nameof(createdAt)),
+      IsDeleted = false,
+    };
+  }
+
+  /// <summary>ADR-0020 Q3: a tip charged with an approved bill, 100 % of the professional.</summary>
+  public static IncomeEntry CreateTip(
+      Guid staffProfileId, int amount, DateOnly occurredOn, Guid billId, Guid billLineId, Guid createdByUserId, DateTime createdAt)
+      => new()
+      {
+        Kind = IncomeKind.Tip,
+        StaffProfileId = staffProfileId,
+        BasePriceSnapshot = 0,
+        BusinessPercentageSnapshot = 0,
+        Amount = DomainValidation.EnsureRange(amount, 1, int.MaxValue, nameof(amount)),
+        IsPromo = false,
+        OccurredOn = occurredOn,
+        BillId = billId,
+        BillLineId = billLineId,
+        CreatedByUserId = createdByUserId,
+        CreatedAt = DomainValidation.EnsureUtc(createdAt, nameof(createdAt)),
+        IsDeleted = false,
+      };
 
   public static IncomeEntry CreateMembershipSale(int amount, DateOnly occurredOn, Guid createdByUserId, DateTime createdAt)
   {
@@ -143,5 +234,11 @@ public enum IncomeKind
   Service = 1,
 
   /// <summary>The sale of one or more memberships; 100% business, no professional.</summary>
-  MembershipSale = 2
+  MembershipSale = 2,
+
+  /// <summary>ADR-0020: products sold on an approved bill; 100% business (Q11).</summary>
+  ProductSale = 3,
+
+  /// <summary>ADR-0020: a tip charged with an approved bill; 100% of the professional (Q3).</summary>
+  Tip = 4
 }

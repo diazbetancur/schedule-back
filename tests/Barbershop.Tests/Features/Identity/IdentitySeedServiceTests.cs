@@ -72,7 +72,11 @@ public sealed class IdentitySeedServiceTests : IDisposable
   {
     await _seedService.EnsureSeededAsync();
 
-    Assert.Equal([PermissionCodes.ServiceRecordsRegister], await GrantedCodesAsync(RoleNames.Staff));
+    // ADR-0020 Q16: Staff opens, closes and charges bills; no discounts (Q2).
+    Assert.Equal(
+        new[] { PermissionCodes.BillsCharge, PermissionCodes.BillsClose, PermissionCodes.BillsOpen, PermissionCodes.ServiceRecordsRegister }
+            .Order(StringComparer.Ordinal),
+        (await GrantedCodesAsync(RoleNames.Staff)).Order(StringComparer.Ordinal));
   }
 
   [Fact]
@@ -90,7 +94,12 @@ public sealed class IdentitySeedServiceTests : IDisposable
       PermissionCodes.LoyaltyPointsAdjust,
       PermissionCodes.MembershipPaymentsConfirm,
       PermissionCodes.CustomerClaimsApprove,
-      PermissionCodes.SalesRegister,
+      PermissionCodes.BillsDiscount,
+      PermissionCodes.BillsManage,
+      PermissionCodes.BillsApprove,
+      PermissionCodes.BillsUnapprove,
+      PermissionCodes.BillsVoid,
+      PermissionCodes.InventoryView,
     ];
 
     Assert.Empty((await GrantedCodesAsync(RoleNames.Staff)).Intersect(administrative));
@@ -103,7 +112,9 @@ public sealed class IdentitySeedServiceTests : IDisposable
     await _seedService.EnsureSeededAsync();
     await _seedService.EnsureSeededAsync();
 
-    Assert.Equal([PermissionCodes.ServiceRecordsRegister], await GrantedCodesAsync(RoleNames.Staff));
+    Assert.Equal(
+        new[] { PermissionCodes.BillsCharge, PermissionCodes.BillsClose, PermissionCodes.BillsOpen, PermissionCodes.ServiceRecordsRegister }.Order(StringComparer.Ordinal),
+        (await GrantedCodesAsync(RoleNames.Staff)).Order(StringComparer.Ordinal));
     Assert.Equal(PermissionCodes.All.Count, (await GrantedCodesAsync(RoleNames.Admin)).Length);
   }
 
@@ -112,10 +123,11 @@ public sealed class IdentitySeedServiceTests : IDisposable
   {
     await _seedService.EnsureSeededAsync();
     await RevokeAsync(RoleNames.Staff, PermissionCodes.ServiceRecordsRegister);
+    await RevokeAsync(RoleNames.Staff, PermissionCodes.BillsCharge);
 
     await _seedService.EnsureSeededAsync();
 
-    Assert.Empty(await GrantedCodesAsync(RoleNames.Staff));
+    Assert.Equal([PermissionCodes.BillsClose, PermissionCodes.BillsOpen], (await GrantedCodesAsync(RoleNames.Staff)).Order(StringComparer.Ordinal));
   }
 
   [Fact]
@@ -141,14 +153,14 @@ public sealed class IdentitySeedServiceTests : IDisposable
     var newCode = PermissionCodes.ServiceRecordsRegister;
     _dbContext.Permissions.Remove(await _dbContext.Permissions.SingleAsync(p => p.Code == newCode));
     await _dbContext.SaveChangesAsync();
-    Assert.Empty(await GrantedCodesAsync(RoleNames.Staff));
+    Assert.DoesNotContain(newCode, await GrantedCodesAsync(RoleNames.Staff));
 
     await _seedService.EnsureSeededAsync();
 
     var adminCodes = await GrantedCodesAsync(RoleNames.Admin);
     Assert.Contains(newCode, adminCodes);
     Assert.DoesNotContain(PermissionCodes.LoyaltyPointsAdjust, adminCodes);
-    Assert.Equal([newCode], await GrantedCodesAsync(RoleNames.Staff));
+    Assert.Contains(newCode, await GrantedCodesAsync(RoleNames.Staff));
   }
 
   [Fact]
@@ -161,7 +173,7 @@ public sealed class IdentitySeedServiceTests : IDisposable
 
     await _seedService.EnsureSeededAsync();
 
-    Assert.Equal([PermissionCodes.ServiceRecordsRegister], await GrantedCodesAsync(RoleNames.Staff));
+    Assert.Equal(new[] { PermissionCodes.BillsCharge, PermissionCodes.BillsClose, PermissionCodes.BillsOpen, PermissionCodes.ServiceRecordsRegister }.Order(StringComparer.Ordinal), (await GrantedCodesAsync(RoleNames.Staff)).Order(StringComparer.Ordinal));
   }
 
   [Fact]

@@ -33,6 +33,7 @@ using Api.Barbershop.Features.Staff.Appointments;
 using Api.Barbershop.Features.Staff.Availability;
 using Api.Barbershop.Features.Staff.Profile;
 using Api.Barbershop.Features.Staff.ServiceRecords;
+using Api.Barbershop.Features.Bills;
 using Api.Barbershop.Middleware;
 using Barbershop.Application;
 using Barbershop.Infrastructure;
@@ -140,6 +141,8 @@ api.MapStaffAppointmentsEndpoints();
 api.MapStaffAvailabilityEndpoints();
 api.MapStaffProfileEndpoints();
 api.MapStaffServiceRecordsEndpoints();
+api.MapBillsEndpoints();
+api.MapAdminPaymentMethodsEndpoints();
 
 app.MapGet("/", (HttpContext httpContext) => Results.Ok(new
 {

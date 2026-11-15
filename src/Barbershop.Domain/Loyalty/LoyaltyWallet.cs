@@ -7,7 +7,10 @@ public enum LoyaltySourceType
 {
   ServiceRecord = 1,
   Membership = 2,
-  Adjustment = 3
+  Adjustment = 3,
+
+  /// <summary>ADR-0020: a service of an approved bill; the source id is the posting of that line in that approval.</summary>
+  BillLine = 4
 }
 
 /// <summary>

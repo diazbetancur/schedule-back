@@ -3,6 +3,7 @@ using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Auth;
 using Barbershop.Application.ServiceRecords;
 using Barbershop.Application.Common.Paging;
+using Barbershop.Application.Common.Exceptions;
 
 namespace Api.Barbershop.Features.Staff.ServiceRecords;
 
@@ -42,12 +43,11 @@ public static class StaffServiceRecordsEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
-        serviceRecords.MapPost(string.Empty, RegisterAsync)
+        // ADR-0020 Q6: registering new services performed was replaced by the bills. The list of what was registered
+        // stays (read only) and the administration still reviews the pending records.
+        serviceRecords.MapPost(string.Empty, RegisterRetired)
             .WithName("RegisterStaffServiceRecords")
-            .Produces<IReadOnlyList<ServiceRecordView>>(StatusCodes.Status200OK)
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status409Conflict)
-            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
+            .ProducesProblem(StatusCodes.Status410Gone)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
@@ -71,8 +71,9 @@ public static class StaffServiceRecordsEndpoints
         ClaimsPrincipal user, [AsParameters] PageQuery query, IStaffServiceRecordsService service, CancellationToken cancellationToken)
         => service.GetMineAsync(user.GetRequiredUserId(), query, cancellationToken);
 
-    // 200 rather than 201: a retried registration returns the records already stored.
-    private static Task<IReadOnlyList<ServiceRecordView>> RegisterAsync(
-        ServiceRecordRegisterRequest request, ClaimsPrincipal user, IStaffServiceRecordsService service, CancellationToken cancellationToken)
-        => service.RegisterAsync(user.GetRequiredUserId(), request, cancellationToken);
+    internal const string RegisterRetiredMessage =
+        "El registro de servicios realizados se reemplazó por las cuentas. Abre la cuenta del servicio en «Cuentas».";
+
+    private static IResult RegisterRetired()
+        => throw new GoneException(RegisterRetiredMessage);
 }

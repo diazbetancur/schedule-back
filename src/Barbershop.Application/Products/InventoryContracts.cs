@@ -3,13 +3,15 @@ using Barbershop.Application.Common.Paging;
 namespace Barbershop.Application.Products;
 
 // ADR-0020 stage 1: product inventory. Stock, an append-only stock card, receipts with cost (and an optional purchase
-// expense), weighted average cost, manual adjustments with a reason and a low stock threshold. Sales arrive with the
-// bill (stage 3); until then the profit shown is the unit profit at the current price and average cost.
+// expense), weighted average cost, manual adjustments with a reason and a low stock threshold. Since stage 3 the
+// approved bills sell (Sale movements) and the profit by product comes from those real sales.
 
 /// <param name="AverageUnitCost">Weighted average in pesos (4 decimals); null when no receipt has given it a cost.</param>
 /// <param name="UnitProfit">Price minus average cost; null without a cost.</param>
 /// <param name="MarginPercent">Unit profit over the price, in percent (1 decimal); null without a cost or with price 0.</param>
 /// <param name="StockValue">Units on hand (if positive) times the average cost, rounded to pesos; null without a cost.</param>
+/// <param name="Committed">ADR-0020 §6: units of closed bills not approved yet (they left the shop, not the stock yet).</param>
+/// <param name="Available">On hand minus committed; the low stock alert compares it with the minimum.</param>
 public sealed record InventoryItemView(
     Guid ProductId,
     string Name,
@@ -24,7 +26,9 @@ public sealed record InventoryItemView(
     decimal? UnitProfit,
     decimal? MarginPercent,
     long? StockValue,
-    DateTime? UpdatedAt);
+    DateTime? UpdatedAt,
+    int Committed = 0,
+    int Available = 0);
 
 public sealed record InventorySummaryView(int LowStockCount, int NegativeStockCount, long StockValue, int ProductsWithoutCost);
 
@@ -82,8 +86,35 @@ public sealed record InventoryMinStockRequest(int? MinStock);
 /// <summary>The stock line and the movement just recorded (or the one a retried request already stored).</summary>
 public sealed record InventoryMovementResultView(InventoryItemView Item, InventoryMovementView Movement);
 
+/// <summary>Real sales of one product in the range, from the incomes of approved bills (ADR-0020 stage 3).</summary>
+/// <param name="Cost">Units times the average cost copied at each sale; only units with a registered cost count.</param>
+/// <param name="UnitsWithoutCost">Units sold when the product had no cost registered: their profit cannot be known.</param>
+public sealed record InventorySalesItemView(
+    Guid ProductId,
+    string Name,
+    int Units,
+    long Revenue,
+    long Cost,
+    long Profit,
+    decimal? MarginPercent,
+    int UnitsWithoutCost);
+
+public sealed record InventorySalesView(
+    DateOnly From,
+    DateOnly To,
+    IReadOnlyList<InventorySalesItemView> Items,
+    int Units,
+    long Revenue,
+    long Cost,
+    long Profit,
+    int UnitsWithoutCost);
+
+public sealed record InventorySalesQuery(DateOnly? From = null, DateOnly? To = null);
+
 public interface IAdminInventoryService
 {
+    Task<InventorySalesView> GetSalesAsync(InventorySalesQuery query, CancellationToken cancellationToken = default);
+
     Task<PagedResult<InventoryItemView>> ListAsync(InventoryListQuery query, CancellationToken cancellationToken = default);
 
     Task<InventorySummaryView> GetSummaryAsync(CancellationToken cancellationToken = default);

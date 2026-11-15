@@ -306,6 +306,12 @@ public sealed class LoyaltyRedemption
   /// <summary>For a service reward: the confirmed service record that delivered it.</summary>
   public Guid? ServiceRecordId { get; private set; }
 
+  /// <summary>
+  /// ADR-0020: the bill line that delivered this redemption, when an approved bill delivered it. A service reward is
+  /// delivered by a service record (before bills) or by a bill line, never both.
+  /// </summary>
+  public Guid? BillLineId { get; private set; }
+
   public Guid? RejectedByUserId { get; private set; }
   public DateTime? RejectedAt { get; private set; }
   public string? RejectionReason { get; private set; }
@@ -394,20 +400,29 @@ public sealed class LoyaltyRedemption
   /// A service reward is delivered only through its confirmed service record (<paramref name="serviceRecordId"/>);
   /// any other reward without one.
   /// </summary>
-  public void Deliver(Guid deliveredByUserId, DateTime deliveredAt, DateOnly today, Guid? serviceRecordId)
+  public void Deliver(Guid deliveredByUserId, DateTime deliveredAt, DateOnly today, Guid? serviceRecordId, Guid? billLineId = null)
   {
     EnsureTransition(LoyaltyRedemptionStatus.Delivered);
-    if ((RewardKindSnapshot == LoyaltyRewardKind.Service) != (serviceRecordId is not null))
+    if (serviceRecordId is not null && billLineId is not null)
     {
-      throw new InvalidOperationException(RewardKindSnapshot == LoyaltyRewardKind.Service
-          ? "A service reward is delivered only by confirming its service record."
-          : "Only a service reward is delivered through a service record.");
+      throw new InvalidOperationException("A redemption is delivered by a service record or by a bill line, not both.");
+    }
+
+    if ((RewardKindSnapshot == LoyaltyRewardKind.Service) && serviceRecordId is null && billLineId is null)
+    {
+      throw new InvalidOperationException("A service reward is delivered only by confirming its service record or approving its bill.");
+    }
+
+    if (RewardKindSnapshot != LoyaltyRewardKind.Service && serviceRecordId is not null)
+    {
+      throw new InvalidOperationException("Only a service reward is delivered through a service record.");
     }
 
     EnsureWithinDeadline(today);
     DeliveredByUserId = deliveredByUserId;
     DeliveredAt = DomainValidation.EnsureUtc(deliveredAt, nameof(deliveredAt));
     ServiceRecordId = serviceRecordId;
+    BillLineId = billLineId;
     Status = LoyaltyRedemptionStatus.Delivered;
   }
 

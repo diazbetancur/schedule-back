@@ -162,7 +162,7 @@ public sealed class AuthServiceTests : IDisposable
     {
         var registration = await _authService.RegisterAsync(new RegisterRequest("Vendedor User", "vendedor@example.com", "Secret123!", null));
 
-        var salesPermission = await _dbContext.Permissions.SingleAsync(p => p.Code == PermissionCodes.SalesRegister);
+        var salesPermission = await _dbContext.Permissions.SingleAsync(p => p.Code == PermissionCodes.InventoryView);
         var sellerRole = new Role("Vendedor");
         sellerRole.AddPermission(salesPermission.Id, DateTime.UtcNow);
         _dbContext.Roles.Add(sellerRole);
@@ -173,7 +173,7 @@ public sealed class AuthServiceTests : IDisposable
 
         var jwt = new JwtSecurityTokenHandler().ReadJwtToken(login.AccessToken);
         var permissionClaims = jwt.Claims.Where(c => c.Type == PermissionClaimTypes.Permission).Select(c => c.Value).ToList();
-        Assert.Contains(PermissionCodes.SalesRegister, permissionClaims);
+        Assert.Contains(PermissionCodes.InventoryView, permissionClaims);
     }
 
     [Fact]
@@ -325,7 +325,7 @@ public sealed class AuthServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Login_StaffUser_GetsOnlyServiceRecordRegistration()
+    public async Task Login_StaffUser_GetsTheBillDefaultsAndServiceRecordRegistration()
     {
         var registration = await _authService.RegisterAsync(new RegisterRequest("Barbero", "barbero-perms@example.com", "Secret123!", null));
 
@@ -339,8 +339,10 @@ public sealed class AuthServiceTests : IDisposable
             .Where(c => c.Type == PermissionClaimTypes.Permission)
             .Select(c => c.Value)
             .ToArray();
-        Assert.Equal([PermissionCodes.ServiceRecordsRegister], tokenPermissions);
-        Assert.Equal([PermissionCodes.ServiceRecordsRegister], login.User.Permissions);
+        // ADR-0020 Q16: Staff opens, closes and charges bills by default; never discounts (Q2).
+        string[] expected = [PermissionCodes.BillsCharge, PermissionCodes.BillsClose, PermissionCodes.BillsOpen, PermissionCodes.ServiceRecordsRegister];
+        Assert.Equal(expected, tokenPermissions);
+        Assert.Equal(expected, login.User.Permissions);
     }
 
     private async Task<Guid> RegisterAndDeactivateAsync(string fullName, string email, string password, string? phone = null)

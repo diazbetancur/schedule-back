@@ -2,6 +2,7 @@ using System.Globalization;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Finance.Admin;
 using Barbershop.Domain.Finance;
+using Barbershop.Domain.Bills;
 using Barbershop.Domain.ServiceRecords;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -52,6 +53,9 @@ internal sealed class ReportsQueryService : IAdminReportsService
         // entry is a service entry, so reports over past periods are unchanged.
         var serviceIncomes = incomes.Where(entry => entry.Kind == IncomeKind.Service).ToList();
         var membershipSales = incomes.Where(entry => entry.Kind == IncomeKind.MembershipSale).ToList();
+        // ADR-0020: products and tips come only from approved bills; they are money in, not services performed.
+        var productSales = incomes.Where(entry => entry.Kind == IncomeKind.ProductSale).ToList();
+        var tips = incomes.Where(entry => entry.Kind == IncomeKind.Tip).ToList();
 
         var totalIncome = incomes.Sum(entry => (long)entry.Amount);
         var serviceIncome = serviceIncomes.Sum(entry => (long)entry.Amount);
@@ -69,6 +73,19 @@ internal sealed class ReportsQueryService : IAdminReportsService
                 .Select(staff => new { staff.Id, staff.DisplayName })
                 .ToDictionaryAsync(staff => staff.Id, staff => staff.DisplayName, cancellationToken);
 
+        var tipStaffIds = tips.Select(entry => entry.StaffProfileId!.Value).Where(id => !names.ContainsKey(id)).Distinct().ToArray();
+        foreach (var staff in tipStaffIds.Length == 0
+                     ? []
+                     : await _dbContext.StaffProfiles.AsNoTracking()
+                         .Where(staff => tipStaffIds.Contains(staff.Id))
+                         .Select(staff => new { staff.Id, staff.DisplayName })
+                         .ToListAsync(cancellationToken))
+        {
+            names[staff.Id] = staff.DisplayName;
+        }
+
+        var tipsByProfessional = tips.GroupBy(entry => entry.StaffProfileId!.Value)
+            .ToDictionary(group => group.Key, group => group.Sum(entry => (long)entry.Amount));
         var byProfessional = serviceIncomes
             .GroupBy(entry => entry.StaffProfileId!.Value)
             .Select(group => new ReportProfessionalIncomeView(
@@ -77,8 +94,13 @@ internal sealed class ReportsQueryService : IAdminReportsService
                 group.Sum(entry => (long)entry.Amount),
                 group.Count(),
                 group.Sum(entry => (long)entry.BusinessAmount),
-                group.Sum(entry => (long)entry.ProfessionalAmount)))
-            .OrderByDescending(view => view.IncomeTotal)
+                group.Sum(entry => (long)entry.ProfessionalAmount),
+                tipsByProfessional.GetValueOrDefault(group.Key)))
+            .Concat(tipsByProfessional.Keys
+                .Where(staffId => serviceIncomes.All(entry => entry.StaffProfileId != staffId))
+                .Select(staffId => new ReportProfessionalIncomeView(
+                    staffId, names.GetValueOrDefault(staffId, string.Empty), 0, 0, 0, 0, tipsByProfessional[staffId])))
+            .OrderByDescending(view => view.IncomeTotal).ThenByDescending(view => view.TipTotal)
             .ToArray();
 
         var byExpenseConcept = expenses
@@ -102,6 +124,21 @@ internal sealed class ReportsQueryService : IAdminReportsService
                 Commission = record.RewardProfessionalCommission!.Value
             })
             .ToListAsync(cancellationToken);
+        // ADR-0020: service rewards delivered by approved bills, from the snapshots copied on their lines.
+        var rewardLines = await (
+                from line in _dbContext.BillLines.AsNoTracking()
+                join bill in _dbContext.Bills.AsNoTracking() on line.BillId equals bill.Id
+                where bill.Status == BillStatus.Approved && line.Type == BillLineType.Redemption && line.ServiceId != null
+                    && bill.ServiceDate >= rangeFrom && bill.ServiceDate <= rangeTo
+                select new { StaffProfileId = line.StaffProfileId!.Value, BasePrice = line.UnitPrice, Percentage = line.BusinessPercentageSnapshot!.Value })
+            .ToListAsync(cancellationToken);
+        rewardRecords.AddRange(rewardLines.Select(line => new
+        {
+            line.StaffProfileId,
+            line.BasePrice,
+            Commission = line.BasePrice - IncomeEntry.BusinessShare(line.BasePrice, line.Percentage)
+        }));
+
         var rewardStaffIds = rewardRecords.Select(record => record.StaffProfileId).Distinct().Where(id => !names.ContainsKey(id)).ToArray();
         if (rewardStaffIds.Length > 0)
         {
@@ -132,7 +169,17 @@ internal sealed class ReportsQueryService : IAdminReportsService
             .Where(record => record.IsSelfApproved && incomeIds.Contains(record.IncomeEntryId))
             .Select(record => record.IncomeEntryId!.Value)
             .ToListAsync(cancellationToken);
-        var selfApprovedIncomes = incomes.Where(entry => selfApprovedIncomeIds.Contains(entry.Id)).ToList();
+        // ADR-0020 P4: incomes of bills an Admin approved for themselves.
+        var billIds = incomes.Where(entry => entry.BillId is not null).Select(entry => entry.BillId!.Value).Distinct().ToArray();
+        var selfApprovedBillIds = billIds.Length == 0
+            ? []
+            : await _dbContext.Bills.AsNoTracking()
+                .Where(bill => billIds.Contains(bill.Id) && bill.IsSelfApproved)
+                .Select(bill => bill.Id)
+                .ToListAsync(cancellationToken);
+        var selfApprovedIncomes = incomes
+            .Where(entry => selfApprovedIncomeIds.Contains(entry.Id) || (entry.BillId is { } billId && selfApprovedBillIds.Contains(billId)))
+            .ToList();
 
         return new ReportSummaryView(
             rangeFrom,
@@ -153,7 +200,12 @@ internal sealed class ReportsQueryService : IAdminReportsService
             rewardCommissions,
             rewardCommissions.Sum(view => view.ProfessionalCommissionTotal),
             selfApprovedIncomes.Sum(entry => (long)entry.Amount),
-            selfApprovedIncomes.Count);
+            selfApprovedIncomes.Count,
+            productSales.Sum(entry => (long)entry.Amount),
+            productSales.Sum(entry => entry.Quantity ?? 0),
+            tips.Sum(entry => (long)entry.Amount),
+            tips.Count,
+            incomes.Where(entry => entry.CommissionBaseAmount is not null).Sum(entry => (long)(entry.CommissionBaseAmount!.Value - entry.Amount)));
     }
 
     private static IReadOnlyList<ReportTrendPointView> BuildTrend(

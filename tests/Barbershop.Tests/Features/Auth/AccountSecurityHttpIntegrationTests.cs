@@ -143,7 +143,7 @@ public sealed class AccountSecurityHttpIntegrationTests
   }
 
   [Fact]
-  public async Task Seed_GrantsAdminEverything_StaffOnlyServiceRegistration_AndCustomerNothing()
+  public async Task Seed_GrantsAdminEverything_StaffTheBillDefaults_AndCustomerNothing()
   {
     using var context = await CreateContextAsync();
     if (context is null) return;
@@ -162,9 +162,11 @@ public sealed class AccountSecurityHttpIntegrationTests
     Assert.Equal(
         PermissionCodes.All.OrderBy(code => code, StringComparer.Ordinal),
         admin.RolePermissions.Select(rp => rp.Permission.Code).OrderBy(code => code, StringComparer.Ordinal));
+    // ADR-0020 Q16: Staff also opens, closes and charges bills by default (never discounts, Q2).
     Assert.Equal(
-        [PermissionCodes.ServiceRecordsRegister],
-        roles.Single(role => role.Name == RoleNames.Staff).RolePermissions.Select(rp => rp.Permission.Code));
+        new[] { PermissionCodes.BillsCharge, PermissionCodes.BillsClose, PermissionCodes.BillsOpen, PermissionCodes.ServiceRecordsRegister }
+            .OrderBy(code => code, StringComparer.Ordinal),
+        roles.Single(role => role.Name == RoleNames.Staff).RolePermissions.Select(rp => rp.Permission.Code).OrderBy(code => code, StringComparer.Ordinal));
     Assert.Empty(roles.Single(role => role.Name == RoleNames.Customer).RolePermissions);
   }
 

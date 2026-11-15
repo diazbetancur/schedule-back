@@ -152,7 +152,7 @@ public sealed class StaffAppointmentsTests : IDisposable
         await _adminStaffService.UpdateStatusAsync(staff.StaffProfileId, new StaffStatusUpdateRequest(false));
 
         var cancelled = await _adminAppointmentsService.UpdateStatusAsync(
-            created.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Cancelled));
+            created.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Cancelled), Guid.NewGuid());
 
         Assert.Equal(AppointmentStatus.Cancelled, cancelled.Status);
         Assert.Equal(1, _notifications.CustomerCancellations);
@@ -169,11 +169,11 @@ public sealed class StaffAppointmentsTests : IDisposable
             staff.StaffProfileId, ToUtc(nextDay, 9, 0), Corte, "Cliente Futuro", "futuro@example.com", "+573001234568", null));
 
         var refused = await Assert.ThrowsAsync<ValidationProblemException>(() => _adminAppointmentsService.UpdateStatusAsync(
-            created.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Completed)));
+            created.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Completed), Guid.NewGuid()));
         Assert.Equal(AppointmentManagementService.CompleteFutureAppointmentMessage, Assert.Single(refused.Errors["status"]));
 
         Assert.Equal(AppointmentStatus.Cancelled, (await _adminAppointmentsService.UpdateStatusAsync(
-            created.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Cancelled))).Status);
+            created.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Cancelled), Guid.NewGuid())).Status);
     }
 
     /// <summary>ADR-0018 D2: an appointment of today (Bogotá) is completed as before.</summary>
@@ -189,7 +189,7 @@ public sealed class StaffAppointmentsTests : IDisposable
         await _dbContext.SaveChangesAsync();
 
         Assert.Equal(AppointmentStatus.Completed, (await _adminAppointmentsService.UpdateStatusAsync(
-            appointment.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Completed))).Status);
+            appointment.Id, new AppointmentStatusUpdateRequest(AppointmentStatus.Completed), Guid.NewGuid())).Status);
     }
 
     [Fact]
@@ -220,7 +220,7 @@ public sealed class StaffAppointmentsTests : IDisposable
 
         var statusUpdated = await _adminAppointmentsService.UpdateStatusAsync(
             created.Id,
-            new AppointmentStatusUpdateRequest(AppointmentStatus.NoShow));
+            new AppointmentStatusUpdateRequest(AppointmentStatus.NoShow), Guid.NewGuid());
 
         Assert.Equal("Updated Name", updated.CustomerName);
         Assert.Equal("updated@example.com", updated.CustomerEmail);

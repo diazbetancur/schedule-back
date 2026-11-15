@@ -23,6 +23,9 @@ public static class UserNotificationTypes
   public const string LoyaltyRedemptionApproved = "loyalty.redemption_approved";
   public const string LoyaltyRedemptionRejected = "loyalty.redemption_rejected";
   public const string LoyaltyPointsExpiring = "loyalty.points_expiring";
+
+  // ADR-0020 Q19: category «Compras» (purchases).
+  public const string BillClosed = "bill.closed";
 }
 
 /// <summary>
@@ -35,10 +38,13 @@ public static class NotificationCategories
   public const string Memberships = "memberships";
   public const string Loyalty = "loyalty";
   public const string Campaigns = "campaigns";
+
+  /// <summary>ADR-0020 Q19: receipts of the customer's bills; optional, only the push can be switched off.</summary>
+  public const string Purchases = "purchases";
   public const string Account = "account";
 
   /// <summary>The categories the user may switch off, in the order the settings screen shows them.</summary>
-  public static IReadOnlyList<string> Optional { get; } = [Appointments, Memberships, Loyalty, Campaigns];
+  public static IReadOnlyList<string> Optional { get; } = [Appointments, Memberships, Loyalty, Purchases, Campaigns];
 
   public static string ForType(string type)
   {
@@ -55,6 +61,11 @@ public static class NotificationCategories
     if (type.StartsWith("loyalty.", StringComparison.Ordinal))
     {
       return Loyalty;
+    }
+
+    if (type.StartsWith("bill.", StringComparison.Ordinal))
+    {
+      return Purchases;
     }
 
     return type == UserNotificationTypes.Campaign ? Campaigns : Account;

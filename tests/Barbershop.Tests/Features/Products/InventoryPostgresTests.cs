@@ -62,10 +62,10 @@ public sealed class InventoryPostgresTests
     await db.GetService<IMigrator>().MigrateAsync();
 
     var after = await SnapshotAllTablesAsync(db);
-    Assert.Equal(before.Keys.Order(), after.Keys.Except(NewTables).Order());
+    Assert.Equal(before.Keys.Order(), after.Keys.Except(NewTables).Except(MigrationSnapshot.LaterTables.Except(before.Keys)).Order());
     foreach (var (table, rows) in before)
     {
-      Assert.True(rows.SequenceEqual(after[table]), $"{table} changed");
+      Assert.True(MigrationSnapshot.SameRows(rows, after[table]), $"{table} changed");
     }
 
     // Nothing is made up: the existing product has no stock row (0 units, no cost) and the card is empty.

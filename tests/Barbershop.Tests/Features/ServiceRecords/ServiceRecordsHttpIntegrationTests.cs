@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -63,8 +64,8 @@ public sealed class ServiceRecordsHttpIntegrationTests
       Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
     }
 
-    var first = await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.GeneralServiceId));
-    var second = await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.GeneralServiceId));
+    var first = await RegisterRecordsAsync(context, staff.User.Id, RegisterRequest(haircut.GeneralServiceId));
+    var second = await RegisterRecordsAsync(context, staff.User.Id, RegisterRequest(haircut.GeneralServiceId));
 
     // The professional cannot confirm their own registration through the admin routes.
     Assert.Equal(HttpStatusCode.Forbidden,
@@ -82,8 +83,8 @@ public sealed class ServiceRecordsHttpIntegrationTests
         await PostStatusAsync(context.Client, admin.AccessToken, $"{AdminUrl}/{second[0].Id}/approve", Courtesy(second[0], haircut.Id)));
     Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(context.Client, admin.AccessToken, AdminUrl));
 
-    // Registering is a separate permission and keeps working.
-    Assert.Equal(HttpStatusCode.OK, await PostStatusAsync(context.Client, staff.AccessToken, StaffUrl, RegisterRequest(haircut.GeneralServiceId)));
+    // ADR-0020 Q6: registering new services was replaced by the bills (410); the pending ones above were seeded before.
+    Assert.Equal(HttpStatusCode.Gone, await PostStatusAsync(context.Client, staff.AccessToken, StaffUrl, RegisterRequest(haircut.GeneralServiceId)));
   }
 
   [Fact]
@@ -95,8 +96,8 @@ public sealed class ServiceRecordsHttpIntegrationTests
     var admin = await RegisterAdminAsync(context, "concurrency");
     var staff = await RegisterStaffAsync(context, "concurrency");
     var haircut = await CreateServiceAsync(context.Client, admin.AccessToken, "Corte");
-    var same = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.GeneralServiceId)))[0];
-    var different = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.GeneralServiceId)))[0];
+    var same = (await RegisterRecordsAsync(context, staff.User.Id, RegisterRequest(haircut.GeneralServiceId)))[0];
+    var different = (await RegisterRecordsAsync(context, staff.User.Id, RegisterRequest(haircut.GeneralServiceId)))[0];
 
     AuthenticateAs(context.Client, admin.AccessToken);
     var sameStatuses = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ => PostAsync(context.Client, $"{AdminUrl}/{same.Id}/approve", Paid(same, haircut.Id, 25000))));
@@ -125,7 +126,7 @@ public sealed class ServiceRecordsHttpIntegrationTests
     var staff = await RegisterStaffAsync(context, "membership");
     var haircut = await CreateServiceAsync(context.Client, admin.AccessToken, "Corte");
     var (customerId, membershipId) = await SellActiveMembershipAsync(context.Client, admin.AccessToken, haircut.Id);
-    var record = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.GeneralServiceId)))[0];
+    var record = (await RegisterRecordsAsync(context, staff.User.Id, RegisterRequest(haircut.GeneralServiceId)))[0];
     var request = new ServiceRecordApproveRequest(
         record.Version, "MembershipConsumption", haircut.Id, record.StaffProfileId, customerId, record.PerformedOn, null, membershipId, false, null);
 
@@ -152,7 +153,7 @@ public sealed class ServiceRecordsHttpIntegrationTests
     var staff = await RegisterStaffAsync(context, "general");
     var haircut = await CreateServiceAsync(context.Client, admin.AccessToken, "Corte");
     var beard = await CreateServiceAsync(context.Client, admin.AccessToken, "Barba", await CreateGeneralServiceAsync(context.Client, admin.AccessToken, "Barba"));
-    var record = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(haircut.GeneralServiceId)))[0];
+    var record = (await RegisterRecordsAsync(context, staff.User.Id, RegisterRequest(haircut.GeneralServiceId)))[0];
     Assert.Equal((ServiceCatalogDefaults.CorteGeneralServiceId, (Guid?)null), (record.GeneralServiceId!.Value, record.ServiceId));
 
     AuthenticateAs(context.Client, admin.AccessToken);
@@ -170,7 +171,7 @@ public sealed class ServiceRecordsHttpIntegrationTests
   }
 
   [Fact]
-  public async Task ConcurrentRegistrations_SameKeyStoreOnce_AndTheSameAppointmentServiceOnlyOnce()
+  public async Task Registering_IsRetired_With410ThatPointsToTheBills_AndTheOwnListStaysReadable()
   {
     using var context = await CreateContextAsync();
     if (context is null) return;
@@ -178,22 +179,19 @@ public sealed class ServiceRecordsHttpIntegrationTests
     var admin = await RegisterAdminAsync(context, "registration");
     var staff = await RegisterStaffAsync(context, "registration");
     var haircut = await CreateServiceAsync(context.Client, admin.AccessToken, "Corte");
-    var beard = await CreateServiceAsync(context.Client, admin.AccessToken, "Barba", await CreateGeneralServiceAsync(context.Client, admin.AccessToken, "Barba"));
+    var seeded = await RegisterRecordsAsync(context, staff.User.Id, RegisterRequest(haircut.GeneralServiceId));
 
     AuthenticateAs(context.Client, staff.AccessToken);
-    var sameKey = RegisterRequest(haircut.GeneralServiceId, beard.GeneralServiceId);
-    var retried = await Task.WhenAll(Enumerable.Range(0, 5).Select(_ => PostAsync(context.Client, StaffUrl, sameKey)));
-    Assert.All(retried, status => Assert.Equal(HttpStatusCode.OK, status));
+    using var response = await context.Client.PostAsJsonAsync(StaffUrl, RegisterRequest(haircut.GeneralServiceId));
+    Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+    var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+    Assert.Contains("«Cuentas»", problem.GetProperty("detail").GetString());
 
-    var appointmentId = await CreateAppointmentAsync(context, staff.User.Id);
-    var racing = await Task.WhenAll(Enumerable.Range(0, 5).Select(_ =>
-        PostAsync(context.Client, StaffUrl, new ServiceRecordRegisterRequest(appointmentId, null, null, [haircut.GeneralServiceId], null, Guid.NewGuid()))));
-    Assert.Single(racing, status => status == HttpStatusCode.OK);
-    Assert.All(racing.Where(status => status != HttpStatusCode.OK), status => Assert.Equal(HttpStatusCode.Conflict, status));
-
+    // What was registered before stays visible and pending for the administration.
     var mine = await context.Client.GetPageItemsAsync<ServiceRecordView>(StaffUrl);
-    Assert.Equal(3, mine!.Count);
-    Assert.Single(mine, record => record.AppointmentId == appointmentId);
+    Assert.Equal(seeded[0].Id, Assert.Single(mine!).Id);
+    AuthenticateAs(context.Client, admin.AccessToken);
+    Assert.Single((await context.Client.GetPageItemsAsync<ServiceRecordView>(AdminUrl))!);
   }
 
   [Fact]
@@ -205,7 +203,7 @@ public sealed class ServiceRecordsHttpIntegrationTests
     var staff = await RegisterStaffAsync(context, "customer");
     var approver = await RegisterWithCustomRoleAsync(context, "approver", PermissionCodes.ServiceRecordsApprove);
     var serviceId = await AddServiceAsync(context, "Corte");
-    var record = (await RegisterRecordsAsync(context.Client, staff.AccessToken, RegisterRequest(ServiceCatalogDefaults.CorteGeneralServiceId)))[0];
+    var record = (await RegisterRecordsAsync(context, staff.User.Id, RegisterRequest(ServiceCatalogDefaults.CorteGeneralServiceId)))[0];
 
     AuthenticateAs(context.Client, approver.AccessToken);
     var newEmail = UniqueEmail("nuevo");
@@ -275,7 +273,7 @@ public sealed class ServiceRecordsHttpIntegrationTests
     AuthenticateAs(context.Client, admin.AccessToken);
     var before = await context.Client.GetFromJsonAsync<ServiceRecordEligibilityView>($"{StaffUrl}/eligibility");
     Assert.False(before!.HasStaffProfile);
-    Assert.Equal(HttpStatusCode.Forbidden, await PostStatusAsync(context.Client, admin.AccessToken, StaffUrl, RegisterRequest(ServiceCatalogDefaults.CorteGeneralServiceId)));
+    Assert.Equal(HttpStatusCode.Gone, await PostStatusAsync(context.Client, admin.AccessToken, StaffUrl, RegisterRequest(ServiceCatalogDefaults.CorteGeneralServiceId)));
 
     using (var scope = context.Factory.Services.CreateScope())
     {
@@ -286,7 +284,7 @@ public sealed class ServiceRecordsHttpIntegrationTests
 
     Assert.True((await context.Client.GetFromJsonAsync<ServiceRecordEligibilityView>($"{StaffUrl}/eligibility"))!.HasStaffProfile);
     Assert.Equal(HttpStatusCode.OK, await GetStatusAsync(context.Client, admin.AccessToken, $"{StaffUrl}/appointments"));
-    var records = await RegisterRecordsAsync(context.Client, admin.AccessToken, RegisterRequest(ServiceCatalogDefaults.CorteGeneralServiceId));
+    var records = await RegisterRecordsAsync(context, admin.User.Id, RegisterRequest(ServiceCatalogDefaults.CorteGeneralServiceId));
     Assert.Equal("Admin Barbero", records[0].StaffName);
     // The Staff-only agenda stays as it was.
     Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(context.Client, admin.AccessToken, "/api/v1/staff/appointments"));
@@ -319,12 +317,15 @@ public sealed class ServiceRecordsHttpIntegrationTests
     return new TestHttpContext(factory, factory.CreateClient());
   }
 
-  private static async Task<IReadOnlyList<ServiceRecordView>> RegisterRecordsAsync(HttpClient client, string token, ServiceRecordRegisterRequest request)
+  /// <summary>
+  /// ADR-0020 Q6: the API no longer registers (410), but the review of pending records must keep working; the pending
+  /// records of these tests are seeded through the service, as they were stored before the bills.
+  /// </summary>
+  private static async Task<IReadOnlyList<ServiceRecordView>> RegisterRecordsAsync(
+      TestHttpContext context, Guid userId, ServiceRecordRegisterRequest request)
   {
-    AuthenticateAs(client, token);
-    using var response = await client.PostAsJsonAsync(StaffUrl, request);
-    Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    return (await response.Content.ReadFromJsonAsync<List<ServiceRecordView>>())!;
+    using var scope = context.Factory.Services.CreateScope();
+    return await scope.ServiceProvider.GetRequiredService<IStaffServiceRecordsService>().RegisterAsync(userId, request);
   }
 
   private static async Task<HttpStatusCode> PostAsync(HttpClient client, string url, object body)

@@ -313,7 +313,7 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
         return consumption;
     }
 
-    private async Task<IReadOnlyDictionary<Guid, int>> LoadAvailableAsync(CustomerMembership membership, CancellationToken cancellationToken)
+    internal async Task<IReadOnlyDictionary<Guid, int>> LoadAvailableAsync(CustomerMembership membership, CancellationToken cancellationToken)
     {
         var used = await _dbContext.MembershipMovements
             .Where(movement => movement.CustomerMembershipId == membership.Id)

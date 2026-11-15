@@ -510,6 +510,8 @@ internal sealed class AuthService : IAuthService
     private static IReadOnlyList<string> GetPermissionCodes(User user)
         => user.UserRoles
             .SelectMany(userRole => userRole.Role.RolePermissions.Select(rolePermission => rolePermission.Permission.Code))
+            // Retired codes (ADR-0020 Q16) keep their rows but are never issued.
+            .Where(PermissionCodes.IsInCatalog)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(code => code, StringComparer.Ordinal)
             .ToArray();

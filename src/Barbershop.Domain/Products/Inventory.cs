@@ -90,6 +90,20 @@ public sealed class ProductStock
         supplier: null, reference: null, expenseEntryId: null, idempotencyKey, performedByUserId, utcNow);
   }
 
+  /// <summary>
+  /// ADR-0020 P10: the units of an approved bill leave at the current average cost, which does not change. The stock may
+  /// end below zero (a bill can be closed without enough stock); the next receipt covers the shortfall first.
+  /// </summary>
+  public InventoryMovement Sell(int quantity, DateOnly occurredOn, Guid idempotencyKey, Guid performedByUserId, DateTime utcNow)
+  {
+    EnsureQuantity(quantity);
+    OnHand = checked(OnHand - quantity);
+    Touch(utcNow);
+    return new InventoryMovement(
+        ProductId, InventoryMovementType.Sale, quantity, AverageUnitCost, OnHand, AverageUnitCost, occurredOn, reason: null,
+        supplier: null, reference: null, expenseEntryId: null, idempotencyKey, performedByUserId, utcNow);
+  }
+
   public void SetMinStock(int? minStock, DateTime utcNow)
   {
     MinStock = minStock is { } value ? DomainValidation.EnsureRange(value, 0, MaxQuantity, nameof(minStock)) : null;

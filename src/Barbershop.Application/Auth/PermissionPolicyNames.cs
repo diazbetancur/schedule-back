@@ -9,7 +9,6 @@ namespace Barbershop.Application.Auth;
 /// </summary>
 public static class PermissionPolicyNames
 {
-    public const string SalesRegister = "SalesRegisterPolicy";
     public const string ServiceRecordsRegister = "ServiceRecordsRegisterPolicy";
     public const string ServiceRecordsApprove = "ServiceRecordsApprovePolicy";
     public const string LoyaltySettingsManage = "LoyaltySettingsManagePolicy";
@@ -22,11 +21,18 @@ public static class PermissionPolicyNames
     public const string InventoryView = "InventoryViewPolicy";
     public const string InventoryReceive = "InventoryReceivePolicy";
     public const string InventoryAdjust = "InventoryAdjustPolicy";
+    public const string BillsOpen = "BillsOpenPolicy";
+    public const string BillsClose = "BillsClosePolicy";
+    public const string BillsCharge = "BillsChargePolicy";
+    public const string BillsDiscount = "BillsDiscountPolicy";
+    public const string BillsManage = "BillsManagePolicy";
+    public const string BillsApprove = "BillsApprovePolicy";
+    public const string BillsUnapprove = "BillsUnapprovePolicy";
+    public const string BillsVoid = "BillsVoidPolicy";
 
     private static readonly IReadOnlyDictionary<string, string> ByPermissionCode =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            [PermissionCodes.SalesRegister] = SalesRegister,
             [PermissionCodes.ServiceRecordsRegister] = ServiceRecordsRegister,
             [PermissionCodes.ServiceRecordsApprove] = ServiceRecordsApprove,
             [PermissionCodes.LoyaltySettingsManage] = LoyaltySettingsManage,
@@ -39,6 +45,14 @@ public static class PermissionPolicyNames
             [PermissionCodes.InventoryView] = InventoryView,
             [PermissionCodes.InventoryReceive] = InventoryReceive,
             [PermissionCodes.InventoryAdjust] = InventoryAdjust,
+            [PermissionCodes.BillsOpen] = BillsOpen,
+            [PermissionCodes.BillsClose] = BillsClose,
+            [PermissionCodes.BillsCharge] = BillsCharge,
+            [PermissionCodes.BillsDiscount] = BillsDiscount,
+            [PermissionCodes.BillsManage] = BillsManage,
+            [PermissionCodes.BillsApprove] = BillsApprove,
+            [PermissionCodes.BillsUnapprove] = BillsUnapprove,
+            [PermissionCodes.BillsVoid] = BillsVoid,
         };
 
     public static string For(string permissionCode)

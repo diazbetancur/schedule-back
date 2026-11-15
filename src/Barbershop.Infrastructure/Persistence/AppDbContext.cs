@@ -38,6 +38,8 @@ public sealed class AppDbContext(DbContextOptions<AppDbContext> options) : DbCon
     public DbSet<GeneralService> GeneralServices => Set<GeneralService>();
     public DbSet<ProductCategory> ProductCategories => Set<ProductCategory>();
     public DbSet<Product> Products => Set<Product>();
+    public DbSet<ProductStock> ProductStocks => Set<ProductStock>();
+    public DbSet<InventoryMovement> InventoryMovements => Set<InventoryMovement>();
     public DbSet<IncomeEntry> IncomeEntries => Set<IncomeEntry>();
     public DbSet<FixedExpense> FixedExpenses => Set<FixedExpense>();
     public DbSet<ExpenseEntry> ExpenseEntries => Set<ExpenseEntry>();

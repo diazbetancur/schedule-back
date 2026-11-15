@@ -155,6 +155,7 @@ public static class DependencyInjection
         services.AddScoped<IAdminServiceCatalogService, ServiceCatalogManagementService>();
         services.AddScoped<IAdminProductCatalogService, ProductCatalogManagementService>();
         services.AddScoped<IPublicProductCatalogService, PublicProductCatalogService>();
+        services.AddScoped<IAdminInventoryService, InventoryManagementService>();
         services.AddScoped<CustomerManagementService>();
         services.AddScoped<IAdminCustomersService>(serviceProvider => serviceProvider.GetRequiredService<CustomerManagementService>());
         services.AddScoped<CustomerClaimsService>();

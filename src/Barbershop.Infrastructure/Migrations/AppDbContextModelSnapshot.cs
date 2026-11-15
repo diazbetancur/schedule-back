@@ -2140,6 +2140,83 @@ namespace Barbershop.Infrastructure.Migrations
                         });
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Products.InventoryMovement", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("AverageUnitCostAfter")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ExpenseEntryId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("IdempotencyKey")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateOnly>("OccurredOn")
+                        .HasColumnType("date");
+
+                    b.Property<int>("OnHandAfter")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("PerformedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Reference")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("Supplier")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)");
+
+                    b.Property<decimal?>("UnitCost")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpenseEntryId")
+                        .IsUnique()
+                        .HasFilter("\"ExpenseEntryId\" IS NOT NULL");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("PerformedByUserId");
+
+                    b.HasIndex("ProductId", "CreatedAt");
+
+                    b.ToTable("inventory_movements", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_inventory_movements_quantity_positive", "\"Quantity\" > 0");
+
+                            t.HasCheckConstraint("ck_inventory_movements_shape", "(\"Type\" = 'Receipt' AND \"UnitCost\" IS NOT NULL AND \"Reason\" IS NULL) OR (\"Type\" IN ('AdjustmentIn', 'AdjustmentOut') AND \"Reason\" IS NOT NULL AND \"ExpenseEntryId\" IS NULL) OR (\"Type\" IN ('Sale', 'SaleReversal') AND \"ExpenseEntryId\" IS NULL)");
+
+                            t.HasCheckConstraint("ck_inventory_movements_unit_cost_non_negative", "\"UnitCost\" IS NULL OR \"UnitCost\" >= 0");
+                        });
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Products.Product", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2260,6 +2337,37 @@ namespace Barbershop.Infrastructure.Migrations
                             t.HasCheckConstraint("ck_product_categories_public_code_format", "\"PublicCode\" ~ '^[a-z0-9]{4,16}$'");
 
                             t.HasCheckConstraint("ck_product_categories_sort_order_range", "\"SortOrder\" >= 0 AND \"SortOrder\" <= 9999");
+                        });
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Products.ProductStock", b =>
+                {
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("AverageUnitCost")
+                        .HasPrecision(18, 4)
+                        .HasColumnType("numeric(18,4)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int?>("MinStock")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("OnHand")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("ProductId");
+
+                    b.ToTable("product_stock", "public", t =>
+                        {
+                            t.HasCheckConstraint("ck_product_stock_average_cost_non_negative", "\"AverageUnitCost\" IS NULL OR \"AverageUnitCost\" >= 0");
+
+                            t.HasCheckConstraint("ck_product_stock_min_stock_range", "\"MinStock\" IS NULL OR (\"MinStock\" >= 0 AND \"MinStock\" <= 100000)");
                         });
                 });
 
@@ -3816,6 +3924,26 @@ namespace Barbershop.Infrastructure.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Barbershop.Domain.Products.InventoryMovement", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Finance.ExpenseEntry", null)
+                        .WithMany()
+                        .HasForeignKey("ExpenseEntryId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Barbershop.Domain.Users.User", null)
+                        .WithMany()
+                        .HasForeignKey("PerformedByUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Barbershop.Domain.Products.Product", null)
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Barbershop.Domain.Products.Product", b =>
                 {
                     b.HasOne("Barbershop.Domain.Products.ProductCategory", null)
@@ -3828,6 +3956,15 @@ namespace Barbershop.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("ImageMediaAssetId")
                         .OnDelete(DeleteBehavior.SetNull);
+                });
+
+            modelBuilder.Entity("Barbershop.Domain.Products.ProductStock", b =>
+                {
+                    b.HasOne("Barbershop.Domain.Products.Product", null)
+                        .WithOne()
+                        .HasForeignKey("Barbershop.Domain.Products.ProductStock", "ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("Barbershop.Domain.Scheduling.StaffAvailabilityRule", b =>

@@ -29,7 +29,10 @@ internal sealed class IdentitySeedService : IIdentitySeedService
         [PermissionCodes.LoyaltyRedemptionsDeliver] = "Confirmar la entrega de redenciones de puntos",
         [PermissionCodes.LoyaltyPointsAdjust] = "Ajustar puntos de clientes",
         [PermissionCodes.MembershipPaymentsConfirm] = "Confirmar el pago de membresías",
-        [PermissionCodes.CustomerClaimsApprove] = "Aprobar reclamaciones de perfiles de cliente"
+        [PermissionCodes.CustomerClaimsApprove] = "Aprobar reclamaciones de perfiles de cliente",
+        [PermissionCodes.InventoryView] = "Ver existencias, costos y ganancia de productos",
+        [PermissionCodes.InventoryReceive] = "Registrar entradas de mercancía y el stock mínimo",
+        [PermissionCodes.InventoryAdjust] = "Ajustar existencias de productos"
       };
 
   // Professionals register the services they performed; every administrative permission stays out of Staff.

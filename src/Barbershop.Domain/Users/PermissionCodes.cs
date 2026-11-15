@@ -34,6 +34,15 @@ public static class PermissionCodes
   public const string MembershipPaymentsConfirm = "memberships.payments.confirm";
   public const string CustomerClaimsApprove = "customers.claims.approve";
 
+  /// <summary>ADR-0020: sees stock, costs, the stock card and the unit profit of the products.</summary>
+  public const string InventoryView = "inventory.view";
+
+  /// <summary>ADR-0020: records merchandise receipts with their cost (and the purchase expense) and sets the minimum stock.</summary>
+  public const string InventoryReceive = "inventory.receive";
+
+  /// <summary>ADR-0020: corrects the stock by hand, with a reason.</summary>
+  public const string InventoryAdjust = "inventory.adjust";
+
   public static IReadOnlyCollection<string> All { get; } =
   [
     SalesRegister,
@@ -46,6 +55,9 @@ public static class PermissionCodes
     LoyaltyPointsAdjust,
     MembershipPaymentsConfirm,
     CustomerClaimsApprove,
+    InventoryView,
+    InventoryReceive,
+    InventoryAdjust,
   ];
 
   /// <summary>
@@ -61,5 +73,6 @@ public static class PermissionCodes
     LoyaltyPointsAdjust,
     MembershipPaymentsConfirm,
     CustomerClaimsApprove,
+    InventoryAdjust,
   ];
 }

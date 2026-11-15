@@ -11,4 +11,10 @@ public static class AuthPolicyNames
   /// against the database). Reading customers, their wallet and their memberships is what those permissions need to act.
   /// </summary>
   public const string CustomerLoyaltyOrPaymentsAccess = "CustomerLoyaltyOrPaymentsAccessPolicy";
+
+  /// <summary>
+  /// ADR-0020 stage 1: Admin, or a role holding any inventory permission (checked against the database). Reading the
+  /// stock and its card is what receiving and adjusting need to act.
+  /// </summary>
+  public const string InventoryAccess = "InventoryAccessPolicy";
 }

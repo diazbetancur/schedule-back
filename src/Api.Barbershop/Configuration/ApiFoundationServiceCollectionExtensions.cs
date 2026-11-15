@@ -104,6 +104,13 @@ public static class ApiFoundationServiceCollectionExtensions
                     AuthRoleNames.Admin,
                     global::Barbershop.Domain.Users.PermissionCodes.LoyaltyPointsAdjust,
                     global::Barbershop.Domain.Users.PermissionCodes.MembershipPaymentsConfirm)));
+            options.AddPolicy(AuthPolicyNames.InventoryAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin,
+                    global::Barbershop.Domain.Users.PermissionCodes.InventoryView,
+                    global::Barbershop.Domain.Users.PermissionCodes.InventoryReceive,
+                    global::Barbershop.Domain.Users.PermissionCodes.InventoryAdjust)));
         });
         services.AddScoped<IAuthorizationHandler, CurrentPermissionAuthorizationHandler>();
         services.AddScoped<IAuthorizationHandler, AdminOrCurrentPermissionAuthorizationHandler>();

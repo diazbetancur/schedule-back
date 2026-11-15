@@ -109,6 +109,7 @@ api.MapAdminStaffEndpoints();
 api.MapAdminServicesEndpoints();
 api.MapAdminServiceCatalogEndpoints();
 api.MapAdminProductCatalogEndpoints();
+api.MapAdminInventoryEndpoints();
 api.MapAdminCustomersEndpoints();
 api.MapAdminCustomerClaimsEndpoints();
 api.MapAdminCustomerLoyaltyEndpoints();

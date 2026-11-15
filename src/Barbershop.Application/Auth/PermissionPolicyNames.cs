@@ -19,6 +19,9 @@ public static class PermissionPolicyNames
     public const string LoyaltyPointsAdjust = "LoyaltyPointsAdjustPolicy";
     public const string MembershipPaymentsConfirm = "MembershipPaymentsConfirmPolicy";
     public const string CustomerClaimsApprove = "CustomerClaimsApprovePolicy";
+    public const string InventoryView = "InventoryViewPolicy";
+    public const string InventoryReceive = "InventoryReceivePolicy";
+    public const string InventoryAdjust = "InventoryAdjustPolicy";
 
     private static readonly IReadOnlyDictionary<string, string> ByPermissionCode =
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -33,6 +36,9 @@ public static class PermissionPolicyNames
             [PermissionCodes.LoyaltyPointsAdjust] = LoyaltyPointsAdjust,
             [PermissionCodes.MembershipPaymentsConfirm] = MembershipPaymentsConfirm,
             [PermissionCodes.CustomerClaimsApprove] = CustomerClaimsApprove,
+            [PermissionCodes.InventoryView] = InventoryView,
+            [PermissionCodes.InventoryReceive] = InventoryReceive,
+            [PermissionCodes.InventoryAdjust] = InventoryAdjust,
         };
 
     public static string For(string permissionCode)

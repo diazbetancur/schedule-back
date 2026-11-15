@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using Api.Barbershop.Configuration;
 using Barbershop.Application.Auth;
 using Barbershop.Domain.Users;
@@ -44,6 +44,9 @@ public sealed class PermissionPoliciesTests
       PermissionCodes.LoyaltyPointsAdjust,
       PermissionCodes.MembershipPaymentsConfirm,
       PermissionCodes.CustomerClaimsApprove,
+      PermissionCodes.InventoryView,
+      PermissionCodes.InventoryReceive,
+      PermissionCodes.InventoryAdjust,
     ];
 
     Assert.Equal(expected.OrderBy(code => code, StringComparer.Ordinal), PermissionCodes.All.OrderBy(code => code, StringComparer.Ordinal));
@@ -62,6 +65,7 @@ public sealed class PermissionPoliciesTests
       PermissionCodes.LoyaltyPointsAdjust,
       PermissionCodes.MembershipPaymentsConfirm,
       PermissionCodes.CustomerClaimsApprove,
+      PermissionCodes.InventoryAdjust,
     ];
 
     Assert.Equal(expected.OrderBy(code => code, StringComparer.Ordinal), PermissionCodes.Critical.OrderBy(code => code, StringComparer.Ordinal));
@@ -70,6 +74,8 @@ public sealed class PermissionPoliciesTests
     Assert.DoesNotContain(PermissionCodes.SalesRegister, PermissionCodes.Critical);
     Assert.DoesNotContain(PermissionCodes.ServiceRecordsRegister, PermissionCodes.Critical);
     Assert.DoesNotContain(PermissionCodes.LoyaltyRewardsManage, PermissionCodes.Critical);
+    Assert.DoesNotContain(PermissionCodes.InventoryView, PermissionCodes.Critical);
+    Assert.DoesNotContain(PermissionCodes.InventoryReceive, PermissionCodes.Critical);
   }
 
   [Fact]

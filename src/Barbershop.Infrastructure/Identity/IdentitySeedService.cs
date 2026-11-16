@@ -43,15 +43,19 @@ internal sealed class IdentitySeedService : IIdentitySeedService
       };
 
   // Professionals build, close and charge the bills of their services (ADR-0020 Q16); discounts and every administrative
-  // permission stay out of Staff (Q2). service-records.register leaves Staff at stage 6. Like every default grant, these
-  // are given only when the permission or the role is created (ADR-0008).
+  // permission stay out of Staff (Q2). Since stage 6 the old registration of services performed (service-records.register)
+  // is no longer a default of anyone. Like every default grant, these are given only when the permission or the role is
+  // created (ADR-0008).
   private static readonly IReadOnlyCollection<string> StaffPermissionCodes =
   [
-    PermissionCodes.ServiceRecordsRegister,
     PermissionCodes.BillsOpen,
     PermissionCodes.BillsClose,
     PermissionCodes.BillsCharge,
   ];
+
+  /// <summary>Every permission of the catalog except the retired registration of services performed (ADR-0020 stage 6).</summary>
+  internal static readonly IReadOnlyCollection<string> AdminPermissionCodes =
+      PermissionCodes.All.Where(code => code != PermissionCodes.ServiceRecordsRegister).ToArray();
 
   private readonly AppDbContext _dbContext;
   private readonly IPasswordHasher<object> _passwordHasher;
@@ -174,7 +178,7 @@ internal sealed class IdentitySeedService : IIdentitySeedService
       changed = true;
     }
 
-    changed |= GrantDefaults(RoleNames.Admin, PermissionCodes.All);
+    changed |= GrantDefaults(RoleNames.Admin, AdminPermissionCodes);
     changed |= GrantDefaults(RoleNames.Staff, StaffPermissionCodes);
     return changed;
 

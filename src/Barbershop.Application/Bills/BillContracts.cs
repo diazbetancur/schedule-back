@@ -160,6 +160,10 @@ public sealed record BillRedemptionOption(
 public sealed record BillEventView(
     Guid Id, string Type, string StatusAtEvent, string? UserName, DateTime CreatedAt, string? Reason, string? Before, string? After);
 
+/// <summary>
+/// Filters of the bills list. <c>CustomerId</c> includes the profiles merged into it (ADR-0013); <c>Q</c> matches the number
+/// or the customer's name; dates are the service date (at most 30 days).
+/// </summary>
 public sealed record BillListQuery(
     string? Status = null,
     Guid? StaffProfileId = null,
@@ -167,7 +171,9 @@ public sealed record BillListQuery(
     DateOnly? To = null,
     string? Q = null,
     int? Page = null,
-    int? PageSize = null);
+    int? PageSize = null,
+    Guid? CustomerId = null,
+    Guid? PaymentMethodId = null);
 
 public sealed record BillOpenRequest(
     Guid IdempotencyKey,
@@ -299,4 +305,64 @@ public interface IPaymentMethodsService
   Task<PaymentMethodView> CreateAsync(PaymentMethodUpsertRequest request, CancellationToken cancellationToken = default);
 
   Task<PaymentMethodView> UpdateAsync(Guid paymentMethodId, PaymentMethodUpsertRequest request, CancellationToken cancellationToken = default);
+}
+
+// ── ADR-0020 stage 5: the customer's receipts (Q23) and the cash closing ─────────────────────────
+
+/// <summary>Status the customer sees: Issued (closed or approved), UnderReview (unapproved, being corrected) or Voided.</summary>
+public sealed record MyBillSummaryView(
+    Guid Id, string Number, string Status, DateOnly ServiceDate, DateTime ClosedAt, int Total, string? PaymentMethodName);
+
+/// <summary>A line as the customer sees it: no commissions, costs or internal reasons.</summary>
+public sealed record MyBillLineView(
+    string Type, string Name, int Quantity, int UnitPrice, int Amount, bool IsCourtesy, string? StaffName, string? TipPaymentMode);
+
+public sealed record MyBillView(
+    Guid Id,
+    string Number,
+    string Status,
+    DateOnly ServiceDate,
+    DateTime ClosedAt,
+    string CustomerName,
+    IReadOnlyList<MyBillLineView> Lines,
+    int Subtotal,
+    int DiscountTotal,
+    int TipTotal,
+    int DirectTipTotal,
+    int Total,
+    string? PaymentMethodName);
+
+public sealed record MyBillListQuery(int? Page = null, int? PageSize = null);
+
+public sealed record CashClosingMethodView(Guid PaymentMethodId, string Name, int BillCount, long Total);
+
+public sealed record CashClosingDayView(DateOnly Day, IReadOnlyList<CashClosingMethodView> Methods, int BillCount, long Total);
+
+/// <summary>
+/// ADR-0020 stage 5: what was charged, by the Bogotá day the bill was closed and its payment method (P6). Money the
+/// customer paid: a later unapproval corrects the incomes, not the cash, so it does not change this. Voided bills
+/// that had been charged are shown apart.
+/// </summary>
+public sealed record CashClosingView(
+    DateOnly From,
+    DateOnly To,
+    IReadOnlyList<CashClosingDayView> Days,
+    IReadOnlyList<CashClosingMethodView> Methods,
+    int BillCount,
+    long Total,
+    int VoidedCount,
+    long VoidedTotal);
+
+public sealed record CashClosingQuery(DateOnly? From = null, DateOnly? To = null);
+
+public interface IMyBillsService
+{
+  Task<PagedResult<MyBillSummaryView>> GetMineAsync(Guid currentUserId, MyBillListQuery query, CancellationToken cancellationToken = default);
+
+  Task<MyBillView> GetMineByIdAsync(Guid currentUserId, Guid billId, CancellationToken cancellationToken = default);
+}
+
+public interface IBillReportsService
+{
+  Task<CashClosingView> GetCashClosingAsync(CashClosingQuery query, CancellationToken cancellationToken = default);
 }

@@ -397,25 +397,57 @@ internal sealed class InventoryManagementService : IAdminInventoryService
             })
             .ToListAsync(cancellationToken);
 
-        var items = sales
-            .GroupBy(sale => sale.ProductId)
-            .Select(group =>
+        // ADR-0020 stage 5 (rotation, decided 2026-11-15): every active product, sold or not, with its net units, the daily
+        // average of the range, what is available now (on hand minus committed) and how many days that covers.
+        var days = to.DayNumber - from.DayNumber + 1;
+        var products = await (
+                from product in _dbContext.Products.AsNoTracking()
+                where !product.IsDeleted
+                join stockRow in _dbContext.ProductStocks.AsNoTracking() on product.Id equals stockRow.ProductId into stocks
+                from stock in stocks.DefaultIfEmpty()
+                select new
+                {
+                    product.Id,
+                    product.Name,
+                    product.IsActive,
+                    OnHand = stock == null ? 0 : stock.OnHand,
+                    MinStock = stock == null ? null : stock.MinStock,
+                    Committed = _dbContext.BillLines
+                        .Where(line => line.ProductId == product.Id && _dbContext.Bills.Any(bill => bill.Id == line.BillId
+                            && (bill.Status == global::Barbershop.Domain.Bills.BillStatus.Closed
+                                || bill.Status == global::Barbershop.Domain.Bills.BillStatus.Unapproved)))
+                        .Sum(line => (int?)line.Quantity) ?? 0,
+                })
+            .ToListAsync(cancellationToken);
+        var soldIds = sales.Select(sale => sale.ProductId).ToHashSet();
+
+        var items = products
+            .Where(product => product.IsActive || soldIds.Contains(product.Id))
+            .Select(product =>
             {
+                var group = sales.Where(sale => sale.ProductId == product.Id).ToList();
                 var withCost = group.Where(sale => sale.UnitCostSnapshot is not null).ToList();
                 var cost = (long)Math.Round(withCost.Sum(sale => sale.Quantity * sale.UnitCostSnapshot!.Value), 0, MidpointRounding.AwayFromZero);
                 var revenueWithCost = withCost.Sum(sale => (long)sale.Amount);
                 var profit = revenueWithCost - cost;
+                var units = group.Sum(sale => sale.Quantity);
+                var available = product.OnHand - product.Committed;
+                decimal? daily = units > 0 ? Math.Round((decimal)units / days, 2, MidpointRounding.AwayFromZero) : null;
                 return new InventorySalesItemView(
-                    group.Key,
-                    group.OrderByDescending(sale => sale.CreatedAt).First().ProductNameSnapshot!,
-                    group.Sum(sale => sale.Quantity),
+                    product.Id,
+                    product.Name,
+                    units,
                     group.Sum(sale => (long)sale.Amount),
                     cost,
                     profit,
                     revenueWithCost > 0 ? Math.Round(profit * 100m / revenueWithCost, 1, MidpointRounding.AwayFromZero) : null,
-                    group.Where(sale => sale.UnitCostSnapshot is null).Sum(sale => sale.Quantity));
+                    group.Where(sale => sale.UnitCostSnapshot is null).Sum(sale => sale.Quantity),
+                    available,
+                    daily,
+                    daily is { } perDay ? Math.Round(Math.Max(available, 0) / perDay, 1, MidpointRounding.AwayFromZero) : null,
+                    product.MinStock is { } min && available <= min);
             })
-            .OrderByDescending(item => item.Revenue).ThenBy(item => item.Name, StringComparer.CurrentCulture)
+            .OrderByDescending(item => item.Revenue).ThenByDescending(item => item.Units).ThenBy(item => item.Name, StringComparer.CurrentCulture)
             .ToArray();
 
         return new InventorySalesView(

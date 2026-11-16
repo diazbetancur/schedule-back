@@ -179,6 +179,8 @@ public static class DependencyInjection
         services.AddScoped<IBillsService>(serviceProvider => serviceProvider.GetRequiredService<BillsService>());
         services.AddScoped<IBillApprovalService>(serviceProvider => serviceProvider.GetRequiredService<BillsService>());
         services.AddScoped<IPaymentMethodsService>(serviceProvider => serviceProvider.GetRequiredService<BillsService>());
+        services.AddScoped<IMyBillsService>(serviceProvider => serviceProvider.GetRequiredService<BillsService>());
+        services.AddScoped<IBillReportsService>(serviceProvider => serviceProvider.GetRequiredService<BillsService>());
         services.AddScoped<ServiceRecordsService>();
         services.AddScoped<IStaffServiceRecordsService>(serviceProvider => serviceProvider.GetRequiredService<ServiceRecordsService>());
         services.AddScoped<IAdminServiceRecordsService>(serviceProvider => serviceProvider.GetRequiredService<ServiceRecordsService>());

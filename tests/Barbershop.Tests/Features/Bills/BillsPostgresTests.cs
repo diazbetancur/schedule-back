@@ -27,6 +27,7 @@ public sealed class BillsPostgresTests
 {
   private const string MigrationBeforeBills = "20261115124512_AddInventory";
   private const string MigrationBeforeReversals = "20261115155934_AddBillsAndApprovals";
+  private const string MigrationBeforeRetirement = "20261116021013_AddBillHistoryIndexes";
 
   private static readonly string[] NewTables =
       ["bills", "bill_lines", "bill_events", "bill_approvals", "bill_postings", "payment_methods", "bill_number_series"];
@@ -255,6 +256,49 @@ public sealed class BillsPostgresTests
       Assert.True(rows.SequenceEqual(rolledBack[table]), $"{table} changed after the rollback");
     }
 
+    await db.GetService<IMigrator>().MigrateAsync();
+  }
+
+  [Fact]
+  public async Task TheRetirementMigration_RemovesOnlyTheGrantsOfTheOldRegistration_AndKeepsThePermissionAndEveryOtherRow()
+  {
+    if (!_postgres.IsAvailable) return;
+    await ResetAndSeedAsync();
+    await using var db = CreateContext();
+    await db.GetService<IMigrator>().MigrateAsync(MigrationBeforeRetirement);
+
+    // An installation of before stage 6: Staff and a custom role hold the old registration besides other permissions.
+    var now = DateTime.UtcNow;
+    var register = new Permission(PermissionCodes.ServiceRecordsRegister, "Registrar servicios", now);
+    var open = new Permission(PermissionCodes.BillsOpen, "Abrir cuentas", now);
+    db.Permissions.AddRange(register, open);
+    var staffRole = new Role(RoleNames.Staff, isSystemRole: true);
+    var custom = new Role("Recepción");
+    db.Roles.AddRange(staffRole, custom);
+    db.RolePermissions.AddRange(
+        new RolePermission(staffRole.Id, register.Id, now),
+        new RolePermission(staffRole.Id, open.Id, now),
+        new RolePermission(custom.Id, register.Id, now));
+    await db.SaveChangesAsync();
+    var before = await MigrationSnapshotReader.ReadAsync(db);
+
+    await db.GetService<IMigrator>().MigrateAsync();
+
+    var after = await MigrationSnapshotReader.ReadAsync(db);
+    foreach (var (table, rows) in before.Where(entry => entry.Key != "role_permissions"))
+    {
+      Assert.True(MigrationSnapshot.SameRows(rows, after[table]), $"{table} changed");
+    }
+
+    db.ChangeTracker.Clear();
+    var grants = await db.RolePermissions.AsNoTracking().ToListAsync();
+    var remaining = Assert.Single(grants);
+    Assert.Equal((staffRole.Id, open.Id), (remaining.RoleId, remaining.PermissionId));
+    Assert.True(await db.Permissions.AnyAsync(permission => permission.Code == PermissionCodes.ServiceRecordsRegister));
+
+    // Down does not give the grants back (documented in the migration); going down and up again is harmless.
+    await db.GetService<IMigrator>().MigrateAsync(MigrationBeforeRetirement);
+    Assert.Single(await db.RolePermissions.AsNoTracking().ToListAsync());
     await db.GetService<IMigrator>().MigrateAsync();
   }
 

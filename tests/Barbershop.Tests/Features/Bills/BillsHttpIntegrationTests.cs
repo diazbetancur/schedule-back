@@ -76,6 +76,20 @@ public sealed class BillsHttpIntegrationTests
     var report = await client.GetFromJsonAsync<Barbershop.Application.Finance.Admin.ReportSummaryView>("/api/v1/admin/reports/summary");
     Assert.Equal(25000, report!.TotalIncome);
 
+    // Stage 5: the cash closing is for the administration; the receipts are the customer's own (none linked here).
+    var cash = await client.GetFromJsonAsync<CashClosingView>("/api/v1/admin/reports/cash");
+    Assert.Equal((1, 25000L), (cash!.BillCount, cash.Total));
+    // Every account is also a customer: the admin only sees their own receipts (none) and never someone else's.
+    Assert.Empty((await client.GetPageItemsAsync<MyBillSummaryView>("/api/v1/customer/bills"))!);
+    Assert.Equal(HttpStatusCode.NotFound, await StatusAsync(client.GetAsync($"/api/v1/customer/bills/{bill.Id}")));
+    AuthenticateAs(client, customer.AccessToken);
+    Assert.Equal(HttpStatusCode.Forbidden, await StatusAsync(client.GetAsync("/api/v1/admin/reports/cash")));
+    Assert.Empty((await client.GetPageItemsAsync<MyBillSummaryView>("/api/v1/customer/bills"))!);
+    Assert.Equal(HttpStatusCode.NotFound, await StatusAsync(client.GetAsync($"/api/v1/customer/bills/{bill.Id}")));
+    AuthenticateAs(client, staff.AccessToken);
+    Assert.Equal(HttpStatusCode.Forbidden, await StatusAsync(client.GetAsync("/api/v1/admin/reports/cash")));
+    AuthenticateAs(client, admin.AccessToken);
+
     // Stage 4: bills.unapprove is critical and Staff does not hold it; the reason is required.
     AuthenticateAs(client, staff.AccessToken);
     Assert.Equal(HttpStatusCode.Forbidden, await StatusAsync(client.PostAsJsonAsync(

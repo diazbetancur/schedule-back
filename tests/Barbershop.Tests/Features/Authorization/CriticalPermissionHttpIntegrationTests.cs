@@ -144,7 +144,9 @@ public sealed class CriticalPermissionHttpIntegrationTests
 
     foreach (var code in PermissionCodes.All)
     {
-      Assert.Equal(HttpStatusCode.OK, await ProbeAsync(context.Client, admin.AccessToken, code));
+      // ADR-0020 stage 6: the retired registration of services performed is no longer granted to Admin either.
+      var expected = code == PermissionCodes.ServiceRecordsRegister ? HttpStatusCode.Forbidden : HttpStatusCode.OK;
+      Assert.Equal(expected, await ProbeAsync(context.Client, admin.AccessToken, code));
       Assert.Equal(HttpStatusCode.Forbidden, await ProbeAsync(context.Client, customer.AccessToken, code));
     }
 

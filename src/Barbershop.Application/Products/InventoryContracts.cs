@@ -86,7 +86,11 @@ public sealed record InventoryMinStockRequest(int? MinStock);
 /// <summary>The stock line and the movement just recorded (or the one a retried request already stored).</summary>
 public sealed record InventoryMovementResultView(InventoryItemView Item, InventoryMovementView Movement);
 
-/// <summary>Real sales of one product in the range, from the incomes of approved bills (ADR-0020 stage 3).</summary>
+/// <summary>
+/// Real sales of one product in the range, from the incomes of approved bills (ADR-0020 stage 3), and its rotation (stage
+/// 5): units available now, daily average sold in the range and days of coverage (available ÷ daily average; null when
+/// nothing sold).
+/// </summary>
 /// <param name="Cost">Units times the average cost copied at each sale; only units with a registered cost count.</param>
 /// <param name="UnitsWithoutCost">Units sold when the product had no cost registered: their profit cannot be known.</param>
 public sealed record InventorySalesItemView(
@@ -97,7 +101,11 @@ public sealed record InventorySalesItemView(
     long Cost,
     long Profit,
     decimal? MarginPercent,
-    int UnitsWithoutCost);
+    int UnitsWithoutCost,
+    int Available = 0,
+    decimal? DailyUnits = null,
+    decimal? CoverageDays = null,
+    bool IsLowStock = false);
 
 public sealed record InventorySalesView(
     DateOnly From,

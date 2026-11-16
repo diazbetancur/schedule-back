@@ -145,6 +145,17 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             bills = bills.Where(bill => bill.StaffProfileId == staffId || bill.Lines.Any(line => line.StaffProfileId == staffId));
         }
 
+        if (query.CustomerId is { } customerId)
+        {
+            var family = await ProfileFamilyAsync(_dbContext, customerId, cancellationToken);
+            bills = bills.Where(bill => bill.CustomerId != null && family.Contains(bill.CustomerId.Value));
+        }
+
+        if (query.PaymentMethodId is { } paymentMethodId)
+        {
+            bills = bills.Where(bill => bill.PaymentMethodId == paymentMethodId);
+        }
+
         if (!string.IsNullOrWhiteSpace(query.Q))
         {
             var term = query.Q.Trim();
@@ -1758,7 +1769,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             bill.Total > 0
                 ? $"Registramos tu cuenta {bill.DisplayNumber} por {total}, pagada con {bill.PaymentMethodNameSnapshot}. Gracias por tu visita."
                 : $"Registramos tu cuenta {bill.DisplayNumber}. Gracias por tu visita.",
-            null,
+            $"/customer/bills/{bill.Id}",
             $"bill-{bill.Id:N}",
             IsTimeSensitive: false);
     }
@@ -1769,7 +1780,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             bill.Total > 0
                 ? $"Tu cuenta {bill.DisplayNumber} quedó corregida por $ {bill.Total.ToString("N0", DisplayCulture)}."
                 : $"Tu cuenta {bill.DisplayNumber} quedó corregida.",
-            null,
+            $"/customer/bills/{bill.Id}",
             $"bill-{bill.Id:N}",
             IsTimeSensitive: false);
 
@@ -1777,7 +1788,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         => new(
             $"Anulamos tu comprobante {bill.DisplayNumber}",
             $"La cuenta {bill.DisplayNumber} quedó anulada. Si tienes dudas, pregúntanos en la barbería.",
-            null,
+            $"/customer/bills/{bill.Id}",
             $"bill-{bill.Id:N}",
             IsTimeSensitive: false);
 

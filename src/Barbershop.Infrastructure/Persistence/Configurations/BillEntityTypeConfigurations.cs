@@ -83,6 +83,9 @@ internal sealed class BillConfiguration : IEntityTypeConfiguration<Bill>
     builder.HasIndex(x => new { x.StaffProfileId, x.Status });
     builder.HasIndex(x => x.CustomerId);
     builder.HasIndex(x => x.ServiceDate);
+    // ADR-0020 stage 5: the cash closing reads by closing day; the history filters by payment method.
+    builder.HasIndex(x => x.ClosedAt);
+    builder.HasIndex(x => x.PaymentMethodId);
   }
 }
 

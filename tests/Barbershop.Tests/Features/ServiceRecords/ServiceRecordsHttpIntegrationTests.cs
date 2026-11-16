@@ -83,8 +83,8 @@ public sealed class ServiceRecordsHttpIntegrationTests
         await PostStatusAsync(context.Client, admin.AccessToken, $"{AdminUrl}/{second[0].Id}/approve", Courtesy(second[0], haircut.Id)));
     Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(context.Client, admin.AccessToken, AdminUrl));
 
-    // ADR-0020 Q6: registering new services was replaced by the bills (410); the pending ones above were seeded before.
-    Assert.Equal(HttpStatusCode.Gone, await PostStatusAsync(context.Client, staff.AccessToken, StaffUrl, RegisterRequest(haircut.GeneralServiceId)));
+    // ADR-0020 stage 6: no role holds service-records.register any more; the pending ones above were seeded before.
+    Assert.Equal(HttpStatusCode.Forbidden, await PostStatusAsync(context.Client, staff.AccessToken, StaffUrl, RegisterRequest(haircut.GeneralServiceId)));
   }
 
   [Fact]
@@ -171,7 +171,7 @@ public sealed class ServiceRecordsHttpIntegrationTests
   }
 
   [Fact]
-  public async Task Registering_IsRetired_With410ThatPointsToTheBills_AndTheOwnListStaysReadable()
+  public async Task Registering_IsRetired_TheStaffRoutesAreClosed_AndThePendingOnesStayInTheAdminTray()
   {
     using var context = await CreateContextAsync();
     if (context is null) return;
@@ -181,17 +181,23 @@ public sealed class ServiceRecordsHttpIntegrationTests
     var haircut = await CreateServiceAsync(context.Client, admin.AccessToken, "Corte");
     var seeded = await RegisterRecordsAsync(context, staff.User.Id, RegisterRequest(haircut.GeneralServiceId));
 
-    AuthenticateAs(context.Client, staff.AccessToken);
-    using var response = await context.Client.PostAsJsonAsync(StaffUrl, RegisterRequest(haircut.GeneralServiceId));
-    Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
-    var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
-    Assert.Contains("«Cuentas»", problem.GetProperty("detail").GetString());
+    // ADR-0020 stage 6: Staff no longer holds service-records.register, so every route of the old page is closed.
+    Assert.Equal(HttpStatusCode.Forbidden, await PostStatusAsync(context.Client, staff.AccessToken, StaffUrl, RegisterRequest(haircut.GeneralServiceId)));
+    Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(context.Client, staff.AccessToken, StaffUrl));
+    Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(context.Client, staff.AccessToken, $"{StaffUrl}/eligibility"));
 
-    // What was registered before stays visible and pending for the administration.
-    var mine = await context.Client.GetPageItemsAsync<ServiceRecordView>(StaffUrl);
-    Assert.Equal(seeded[0].Id, Assert.Single(mine!).Id);
+    // What was registered before stays pending for the administration, and the tray tells how many remain.
     AuthenticateAs(context.Client, admin.AccessToken);
-    Assert.Single((await context.Client.GetPageItemsAsync<ServiceRecordView>(AdminUrl))!);
+    Assert.Equal(seeded[0].Id, Assert.Single((await context.Client.GetPageItemsAsync<ServiceRecordView>(AdminUrl))!).Id);
+    Assert.Equal(1, (await context.Client.GetFromJsonAsync<JsonElement>($"{AdminUrl}/pending-count")).GetProperty("count").GetInt32());
+    Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(context.Client, staff.AccessToken, $"{AdminUrl}/pending-count"));
+
+    AuthenticateAs(context.Client, admin.AccessToken);
+    Assert.Equal(HttpStatusCode.OK, await PostAsync(context.Client, $"{AdminUrl}/{seeded[0].Id}/approve", Courtesy(seeded[0], haircut.Id)));
+    Assert.Equal(0, (await context.Client.GetFromJsonAsync<JsonElement>($"{AdminUrl}/pending-count")).GetProperty("count").GetInt32());
+    // The reviewed record stays readable (read only) for the administration.
+    var approved = await context.Client.GetPageItemsAsync<ServiceRecordView>($"{AdminUrl}?status=Approved");
+    Assert.Equal(seeded[0].Id, Assert.Single(approved!).Id);
   }
 
   [Fact]
@@ -262,19 +268,12 @@ public sealed class ServiceRecordsHttpIntegrationTests
   }
 
   [Fact]
-  public async Task AnAdministratorWithAProfessionalProfile_RegistersWithoutTheStaffRole()
+  public async Task AnAdministratorWithAProfessionalProfile_NoLongerReachesTheOldRegistration()
   {
     using var context = await CreateContextAsync();
     if (context is null) return;
 
     var admin = await RegisterAdminAsync(context, "professional");
-    var serviceId = await AddServiceAsync(context, "Corte");
-
-    AuthenticateAs(context.Client, admin.AccessToken);
-    var before = await context.Client.GetFromJsonAsync<ServiceRecordEligibilityView>($"{StaffUrl}/eligibility");
-    Assert.False(before!.HasStaffProfile);
-    Assert.Equal(HttpStatusCode.Gone, await PostStatusAsync(context.Client, admin.AccessToken, StaffUrl, RegisterRequest(ServiceCatalogDefaults.CorteGeneralServiceId)));
-
     using (var scope = context.Factory.Services.CreateScope())
     {
       var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -282,12 +281,19 @@ public sealed class ServiceRecordsHttpIntegrationTests
       await db.SaveChangesAsync();
     }
 
-    Assert.True((await context.Client.GetFromJsonAsync<ServiceRecordEligibilityView>($"{StaffUrl}/eligibility"))!.HasStaffProfile);
-    Assert.Equal(HttpStatusCode.OK, await GetStatusAsync(context.Client, admin.AccessToken, $"{StaffUrl}/appointments"));
-    var records = await RegisterRecordsAsync(context, admin.User.Id, RegisterRequest(ServiceCatalogDefaults.CorteGeneralServiceId));
-    Assert.Equal("Admin Barbero", records[0].StaffName);
-    // The Staff-only agenda stays as it was.
-    Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(context.Client, admin.AccessToken, "/api/v1/staff/appointments"));
+    // ADR-0020 stage 6: Admin no longer gets service-records.register either (it builds bills instead).
+    Assert.DoesNotContain(PermissionCodes.ServiceRecordsRegister, admin.User.Permissions);
+    Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(context.Client, admin.AccessToken, $"{StaffUrl}/eligibility"));
+    Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(context.Client, admin.AccessToken, $"{StaffUrl}/appointments"));
+    Assert.Equal(HttpStatusCode.Forbidden, await PostStatusAsync(context.Client, admin.AccessToken, StaffUrl, RegisterRequest(ServiceCatalogDefaults.CorteGeneralServiceId)));
+    Assert.Equal(HttpStatusCode.OK, await GetStatusAsync(context.Client, admin.AccessToken, AdminUrl));
+    // A role that still holds the permission (granted again by hand) cannot register either: 410 points to the bills.
+    var legacy = await RegisterWithCustomRoleAsync(context, "legacy", PermissionCodes.ServiceRecordsRegister);
+    AuthenticateAs(context.Client, legacy.AccessToken);
+    using var response = await context.Client.PostAsJsonAsync(StaffUrl, RegisterRequest(ServiceCatalogDefaults.CorteGeneralServiceId));
+    Assert.Equal(HttpStatusCode.Gone, response.StatusCode);
+    var problem = await response.Content.ReadFromJsonAsync<JsonElement>();
+    Assert.Contains("«Cuentas»", problem.GetProperty("detail").GetString());
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────────────────────

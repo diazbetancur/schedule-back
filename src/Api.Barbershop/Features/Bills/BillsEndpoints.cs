@@ -168,6 +168,39 @@ public static class BillsEndpoints
         return api;
     }
 
+    /// <summary>
+    /// ADR-0020 stage 5 (P8, Q23): the customer's receipts, read only. The owner is always the signed-in user's linked
+    /// profile, with the profiles merged into it.
+    /// </summary>
+    public static RouteGroupBuilder MapCustomerBillsEndpoints(this RouteGroupBuilder api)
+    {
+        var mine = api.MapGroup("/customer/bills")
+            .WithTags("Customer")
+            .RequireAuthorization(AuthPolicyNames.Customer);
+
+        mine.MapGet(string.Empty, ([AsParameters] MyBillListQuery query, ClaimsPrincipal user, IMyBillsService service, CancellationToken ct)
+                => service.GetMineAsync(user.GetRequiredUserId(), query, ct))
+            .WithName("GetCustomerBills")
+            .Produces<PagedResult<MyBillSummaryView>>(StatusCodes.Status200OK);
+
+        mine.MapGet("/{billId:guid}", (Guid billId, ClaimsPrincipal user, IMyBillsService service, CancellationToken ct)
+                => service.GetMineByIdAsync(user.GetRequiredUserId(), billId, ct))
+            .WithName("GetCustomerBill")
+            .Produces<MyBillView>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status404NotFound);
+
+        // ADR-0020 stage 5: what was charged by day and payment method (Admin, with the other reports).
+        api.MapGet("/admin/reports/cash", ([AsParameters] CashClosingQuery query, IBillReportsService service, CancellationToken ct)
+                => service.GetCashClosingAsync(query, ct))
+            .WithTags("Admin")
+            .RequireAuthorization(AuthPolicyNames.Admin)
+            .WithName("GetAdminCashClosing")
+            .Produces<CashClosingView>(StatusCodes.Status200OK)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
+
+        return api;
+    }
+
     /// <summary>Q1: the payment methods, kept by the administration; deactivated instead of deleted.</summary>
     public static RouteGroupBuilder MapAdminPaymentMethodsEndpoints(this RouteGroupBuilder api)
     {

@@ -53,14 +53,13 @@ public sealed class PermissionRevocationPersistenceHttpIntegrationTests
       Assert.Contains(PermissionCodes.LoyaltySettingsManage, admin.User.Permissions);
 
       await RevokeAsync(factory, RoleNames.Admin, PermissionCodes.LoyaltySettingsManage);
-      await RevokeAsync(factory, RoleNames.Staff, PermissionCodes.ServiceRecordsRegister);
 
       // Login: no longer restores it.
       var afterLogin = await LoginAsync(client, email);
       AssertLacksLoyaltyPermission(afterLogin);
       Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(client, afterLogin.AccessToken, LoyaltySettingsUrl));
       // The rest of the Admin role is untouched.
-      Assert.Equal(PermissionCodes.All.Count - 1, afterLogin.User.Permissions.Count);
+      Assert.Equal(PermissionDefaults.Admin.Length - 1, afterLogin.User.Permissions.Count);
       Assert.Equal(HttpStatusCode.OK, await GetStatusAsync(client, afterLogin.AccessToken, "/api/v1/admin/services"));
 
       // Refresh: same.

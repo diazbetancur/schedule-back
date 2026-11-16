@@ -401,6 +401,9 @@ internal sealed class ServiceRecordsService : IStaffServiceRecordsService, IAdmi
         return await query.ToPagedResultAsync(page, MapAsync, cancellationToken);
     }
 
+    public Task<int> GetPendingCountAsync(CancellationToken cancellationToken = default)
+        => _dbContext.ServiceRecords.CountAsync(record => record.Status == ServiceRecordStatus.Pending, cancellationToken);
+
     public async Task<ServiceRecordView> GetByIdAsync(Guid serviceRecordId, CancellationToken cancellationToken = default)
     {
         var record = await _dbContext.ServiceRecords.AsNoTracking()

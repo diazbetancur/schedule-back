@@ -12,7 +12,10 @@ namespace Barbershop.Domain.Users;
 /// </summary>
 public static class PermissionCodes
 {
-  /// <summary>A professional registers a service they actually performed.</summary>
+  /// <summary>
+  /// A professional registered a service they performed. Retired by the bills (ADR-0020 stages 2 and 6): the API answers
+  /// 410 and no role holds it any more; it stays in the catalog while records registered before wait for review.
+  /// </summary>
   public const string ServiceRecordsRegister = "service-records.register";
 
   /// <summary>Reviews, corrects and confirms registered services. An admin who is also a professional may confirm

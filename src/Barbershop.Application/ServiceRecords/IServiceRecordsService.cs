@@ -31,6 +31,9 @@ public interface IAdminServiceRecordsService
     /// </summary>
     Task<PagedResult<ServiceRecordView>> ListAsync(ServiceRecordListQuery query, CancellationToken cancellationToken = default);
 
+    /// <summary>ADR-0020 stage 6: how many records still wait for review (the old tray is shown only while there are some).</summary>
+    Task<int> GetPendingCountAsync(CancellationToken cancellationToken = default);
+
     Task<ServiceRecordView> GetByIdAsync(Guid serviceRecordId, CancellationToken cancellationToken = default);
 
     Task<ServiceRecordOptionsView> GetOptionsAsync(CancellationToken cancellationToken = default);

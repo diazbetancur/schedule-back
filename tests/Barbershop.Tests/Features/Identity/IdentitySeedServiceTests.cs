@@ -1,3 +1,4 @@
+using Barbershop.Tests.Infrastructure;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Configuration;
 using Barbershop.Infrastructure.Identity;
@@ -50,7 +51,7 @@ public sealed class IdentitySeedServiceTests : IDisposable
         .Include(r => r.RolePermissions)
         .SingleAsync(r => r.NormalizedName == RoleNames.Admin.ToUpperInvariant());
 
-    Assert.Equal(PermissionCodes.All.Count, adminRole.RolePermissions.Count);
+    Assert.Equal(PermissionDefaults.Admin.Length, adminRole.RolePermissions.Count);
   }
 
   [Fact]
@@ -64,17 +65,17 @@ public sealed class IdentitySeedServiceTests : IDisposable
     var adminRole = await _dbContext.Roles
         .Include(r => r.RolePermissions)
         .SingleAsync(r => r.NormalizedName == RoleNames.Admin.ToUpperInvariant());
-    Assert.Equal(PermissionCodes.All.Count, adminRole.RolePermissions.Count);
+    Assert.Equal(PermissionDefaults.Admin.Length, adminRole.RolePermissions.Count);
   }
 
   [Fact]
-  public async Task EnsureSeededAsync_GrantsStaffRole_OnlyServiceRecordRegistration()
+  public async Task EnsureSeededAsync_GrantsStaffRole_OnlyTheBillDefaults()
   {
     await _seedService.EnsureSeededAsync();
 
     // ADR-0020 Q16: Staff opens, closes and charges bills; no discounts (Q2).
     Assert.Equal(
-        new[] { PermissionCodes.BillsCharge, PermissionCodes.BillsClose, PermissionCodes.BillsOpen, PermissionCodes.ServiceRecordsRegister }
+        PermissionDefaults.Staff
             .Order(StringComparer.Ordinal),
         (await GrantedCodesAsync(RoleNames.Staff)).Order(StringComparer.Ordinal));
   }
@@ -113,16 +114,15 @@ public sealed class IdentitySeedServiceTests : IDisposable
     await _seedService.EnsureSeededAsync();
 
     Assert.Equal(
-        new[] { PermissionCodes.BillsCharge, PermissionCodes.BillsClose, PermissionCodes.BillsOpen, PermissionCodes.ServiceRecordsRegister }.Order(StringComparer.Ordinal),
+        PermissionDefaults.Staff.Order(StringComparer.Ordinal),
         (await GrantedCodesAsync(RoleNames.Staff)).Order(StringComparer.Ordinal));
-    Assert.Equal(PermissionCodes.All.Count, (await GrantedCodesAsync(RoleNames.Admin)).Length);
+    Assert.Equal(PermissionDefaults.Admin.Length, (await GrantedCodesAsync(RoleNames.Admin)).Length);
   }
 
   [Fact]
   public async Task EnsureSeededAsync_DoesNotRestoreAStaffGrantRevokedLater()
   {
     await _seedService.EnsureSeededAsync();
-    await RevokeAsync(RoleNames.Staff, PermissionCodes.ServiceRecordsRegister);
     await RevokeAsync(RoleNames.Staff, PermissionCodes.BillsCharge);
 
     await _seedService.EnsureSeededAsync();
@@ -141,7 +141,7 @@ public sealed class IdentitySeedServiceTests : IDisposable
 
     var adminCodes = await GrantedCodesAsync(RoleNames.Admin);
     Assert.DoesNotContain(PermissionCodes.LoyaltySettingsManage, adminCodes);
-    Assert.Equal(PermissionCodes.All.Count - 1, adminCodes.Length);
+    Assert.Equal(PermissionDefaults.Admin.Length - 1, adminCodes.Length);
   }
 
   [Fact]
@@ -150,7 +150,7 @@ public sealed class IdentitySeedServiceTests : IDisposable
     await _seedService.EnsureSeededAsync();
     await RevokeAsync(RoleNames.Admin, PermissionCodes.LoyaltyPointsAdjust);
     // An existing installation that predates a catalog code: the permission row does not exist yet.
-    var newCode = PermissionCodes.ServiceRecordsRegister;
+    var newCode = PermissionCodes.BillsOpen;
     _dbContext.Permissions.Remove(await _dbContext.Permissions.SingleAsync(p => p.Code == newCode));
     await _dbContext.SaveChangesAsync();
     Assert.DoesNotContain(newCode, await GrantedCodesAsync(RoleNames.Staff));
@@ -173,7 +173,7 @@ public sealed class IdentitySeedServiceTests : IDisposable
 
     await _seedService.EnsureSeededAsync();
 
-    Assert.Equal(new[] { PermissionCodes.BillsCharge, PermissionCodes.BillsClose, PermissionCodes.BillsOpen, PermissionCodes.ServiceRecordsRegister }.Order(StringComparer.Ordinal), (await GrantedCodesAsync(RoleNames.Staff)).Order(StringComparer.Ordinal));
+    Assert.Equal(PermissionDefaults.Staff.Order(StringComparer.Ordinal), (await GrantedCodesAsync(RoleNames.Staff)).Order(StringComparer.Ordinal));
   }
 
   [Fact]
@@ -196,7 +196,7 @@ public sealed class IdentitySeedServiceTests : IDisposable
     var adminRole = Assert.Single(admin.UserRoles).Role;
     Assert.Equal(RoleNames.Admin, adminRole.Name);
     var granted = await dbContext.RolePermissions.Where(rp => rp.RoleId == adminRole.Id).Select(rp => rp.Permission.Code).ToListAsync();
-    Assert.Equal(PermissionCodes.All.Order(), granted.Order());
+    Assert.Equal(PermissionDefaults.Admin.Order(), granted.Order());
   }
 
   private async Task RevokeAsync(string roleName, string permissionCode)

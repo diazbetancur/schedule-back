@@ -250,6 +250,8 @@ namespace Barbershop.Infrastructure.Migrations
 
                     b.HasIndex("ApprovedByUserId");
 
+                    b.HasIndex("ClosedAt");
+
                     b.HasIndex("ClosedByUserId");
 
                     b.HasIndex("CustomerId");

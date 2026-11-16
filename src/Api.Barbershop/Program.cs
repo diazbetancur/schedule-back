@@ -143,6 +143,7 @@ api.MapStaffProfileEndpoints();
 api.MapStaffServiceRecordsEndpoints();
 api.MapBillsEndpoints();
 api.MapAdminPaymentMethodsEndpoints();
+api.MapCustomerBillsEndpoints();
 
 app.MapGet("/", (HttpContext httpContext) => Results.Ok(new
 {

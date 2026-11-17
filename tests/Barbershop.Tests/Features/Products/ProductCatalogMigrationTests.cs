@@ -56,10 +56,12 @@ public sealed class ProductCatalogMigrationTests
     await db.GetService<IMigrator>().MigrateAsync();
 
     var after = await SnapshotAllTablesAsync(db);
-    Assert.Equal(before.Keys.Order(), after.Keys.Except(NewTables).Order());
+    // ADR-0019 and ADR-0020: later additive migrations create user_notification_preferences, product_stock and
+    // inventory_movements (empty here).
+    Assert.Equal(before.Keys.Order(), after.Keys.Except(NewTables).Except(MigrationSnapshot.LaterTables).Order());
     foreach (var (table, rows) in before)
     {
-      Assert.True(rows.SequenceEqual(after[table]), $"{table} changed");
+      Assert.True(MigrationSnapshot.SameRows(rows, after[table]), $"{table} changed");
     }
 
     // The new tables start empty: nothing is inferred from services or anything else.

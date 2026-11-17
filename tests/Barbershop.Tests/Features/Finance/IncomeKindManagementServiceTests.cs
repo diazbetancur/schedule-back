@@ -1,3 +1,4 @@
+using Barbershop.Domain.Finance;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Finance.Admin;
 using Barbershop.Domain.Services;
@@ -28,13 +29,16 @@ public sealed class IncomeKindManagementServiceTests : IDisposable
   public void Dispose() => _dbContext.Dispose();
 
   [Fact]
-  public async Task CreateAsync_WithoutKind_IsServiceIncome_LikeOlderClientsExpect()
+  public async Task CreateAsync_WithoutKind_IsAServiceIncome_WhichTheBillsNowPost()
   {
     var service = await AddServiceAsync("Corte", 25000, businessPercentage: 40);
     var staff = await AddStaffAsync("Alex");
 
-    var view = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, staff.Id, 20000, false, Today));
+    // Older clients omit the kind: it is still read as a service income, which is no longer created by hand (Q18).
+    await Assert.ThrowsAsync<ConflictException>(() =>
+        _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, staff.Id, 20000, false, Today)));
 
+    var view = await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, staff.Id, 20000, false, Today));
     Assert.Equal("Service", view.Kind);
     Assert.Equal("Corte", view.ServiceName);
     Assert.Equal("Alex", view.StaffDisplayName);
@@ -81,18 +85,12 @@ public sealed class IncomeKindManagementServiceTests : IDisposable
   }
 
   [Fact]
-  public async Task CreateAsync_ServiceIncome_StillRequiresServiceAndProfessional()
+  public async Task CreateAsync_ServiceIncome_IsRefusedWhateverItCarries()
   {
-    var service = await AddServiceAsync("Corte", 25000);
     var staff = await AddStaffAsync("Alex");
 
-    var missingService = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+    await Assert.ThrowsAsync<ConflictException>(() =>
         _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(null, staff.Id, 20000, false, Today, "Service")));
-    Assert.Contains("serviceId", missingService.Errors.Keys);
-
-    var missingStaff = await Assert.ThrowsAsync<ValidationProblemException>(() =>
-        _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, null, 20000, false, Today)));
-    Assert.Contains("staffProfileId", missingStaff.Errors.Keys);
   }
 
   [Theory]
@@ -136,7 +134,7 @@ public sealed class IncomeKindManagementServiceTests : IDisposable
   {
     var service = await AddServiceAsync("Corte", 25000);
     var staff = await AddStaffAsync("Alex");
-    var serviceIncome = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, staff.Id, 20000, false, Today));
+    var serviceIncome = await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, staff.Id, 20000, false, Today));
     var sale = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(null, null, 250000, false, Today, "MembershipSale"));
 
     var toSale = await Assert.ThrowsAsync<ValidationProblemException>(() =>
@@ -169,7 +167,7 @@ public sealed class IncomeKindManagementServiceTests : IDisposable
   {
     var service = await AddServiceAsync("Corte", 25000);
     var alex = await AddStaffAsync("Alex");
-    await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, alex.Id, 20000, false, Today));
+    await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, alex.Id, 20000, false, Today));
     await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(null, null, 250000, false, Today, "MembershipSale"));
 
     var all = await _service.GetAsync(new IncomeListQuery(Today, Today));
@@ -194,5 +192,20 @@ public sealed class IncomeKindManagementServiceTests : IDisposable
     _dbContext.StaffProfiles.Add(staff);
     await _dbContext.SaveChangesAsync();
     return staff;
+  }
+
+  /// <summary>
+  /// ADR-0020 Q18: new service income is no longer created by hand (the bills post it); the manual ones stored before
+  /// are still listed, edited and deleted here. They are seeded as the manual creation stored them.
+  /// </summary>
+  private async Task<IncomeEntryView> SeedServiceIncomeAsync(Guid userId, IncomeEntryCreateRequest request)
+  {
+    var service = await _dbContext.Services.SingleAsync(candidate => candidate.Id == request.ServiceId);
+    var entry = new IncomeEntry(
+        service.Id, service.Name, service.BasePrice, request.StaffProfileId!.Value, request.Amount, request.IsPromo, request.OccurredOn,
+        userId, DateTime.UtcNow, service.BusinessPercentage);
+    _dbContext.IncomeEntries.Add(entry);
+    await _dbContext.SaveChangesAsync();
+    return (await _service.GetAsync(new IncomeListQuery(request.OccurredOn, request.OccurredOn))).Items.Single(item => item.Id == entry.Id);
   }
 }

@@ -13,5 +13,7 @@ public interface IAdminAppointmentsService
 
   Task<AppointmentView> UpdateAsync(Guid appointmentId, AppointmentUpdateRequest request, CancellationToken cancellationToken = default);
 
-  Task<AppointmentView> UpdateStatusAsync(Guid appointmentId, AppointmentStatusUpdateRequest request, CancellationToken cancellationToken = default);
+  /// <param name="actingUserId">Who changes it: completing an appointment opens its bill in their name (ADR-0020, BUG-092).</param>
+  Task<AppointmentView> UpdateStatusAsync(
+      Guid appointmentId, AppointmentStatusUpdateRequest request, Guid actingUserId, CancellationToken cancellationToken = default);
 }

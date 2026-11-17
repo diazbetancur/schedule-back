@@ -55,7 +55,7 @@ public sealed class AdminRolesHttpIntegrationTests
     Assert.Equal(HttpStatusCode.OK, permissionsResponse.StatusCode);
     var permissions = await permissionsResponse.Content.ReadFromJsonAsync<List<PermissionView>>();
     Assert.NotNull(permissions);
-    var salesPermission = Assert.Single(permissions!, p => p.Code == PermissionCodes.SalesRegister);
+    var salesPermission = Assert.Single(permissions!, p => p.Code == PermissionCodes.InventoryView);
 
     using var createRoleResponse = await context.Client.PostAsJsonAsync(
         "/api/v1/admin/roles",
@@ -80,7 +80,7 @@ public sealed class AdminRolesHttpIntegrationTests
     var login = await loginResponse.Content.ReadFromJsonAsync<TokenResponse>();
     Assert.NotNull(login);
     var jwt = new JwtSecurityTokenHandler().ReadJwtToken(login!.AccessToken);
-    Assert.Contains(jwt.Claims, c => c.Type == PermissionClaimTypes.Permission && c.Value == PermissionCodes.SalesRegister);
+    Assert.Contains(jwt.Claims, c => c.Type == PermissionClaimTypes.Permission && c.Value == PermissionCodes.InventoryView);
   }
 
   [Fact]

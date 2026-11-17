@@ -1,3 +1,4 @@
+using Barbershop.Domain.Appointments;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Services.Admin;
 using Barbershop.Domain.Services;
@@ -225,11 +226,24 @@ internal sealed class ServiceCatalogManagementService : IAdminServiceCatalogServ
                 $"El servicio general tiene {rates} tarifa(s). Asígnalas a otro servicio general o elimínalas antes de eliminarlo.");
         }
 
-        service.MarkDeleted(UtcNow());
+        // ADR-0018 D8: a general service with future appointments still to attend cannot be deleted.
+        var nowUtc = UtcNow();
+        var futureAppointments = await _dbContext.Appointments.CountAsync(
+            appointment => appointment.GeneralServiceId == generalServiceId
+                && appointment.StartsAt > nowUtc
+                && (appointment.Status == AppointmentStatus.Pending || appointment.Status == AppointmentStatus.Confirmed),
+            cancellationToken);
+        if (futureAppointments > 0)
+        {
+            throw new ConflictException(futureAppointments == 1
+                ? "El servicio general tiene 1 cita futura agendada. Espera a que pase o cámbiale el servicio antes de eliminarlo."
+                : $"El servicio general tiene {futureAppointments} citas futuras agendadas. Espera a que pasen o cámbiales el servicio antes de eliminarlo.");
+        }
+
+        service.MarkDeleted(nowUtc);
 
         // BUG-079: the professionals stop offering it. Appointments keep their own copy of the service and duration
-        // (ADR-0016 D11), so nothing references an offering. Blocking the deletion while there are offerings or future
-        // appointments is a pending business decision; it is not enforced here.
+        // (ADR-0016 D11), so nothing references an offering; with only offerings the deletion goes ahead (ADR-0018 D8).
         var offerings = await _dbContext.StaffServiceOfferings
             .Where(offering => offering.GeneralServiceId == generalServiceId)
             .ToListAsync(cancellationToken);

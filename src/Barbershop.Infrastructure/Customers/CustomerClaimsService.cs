@@ -5,6 +5,7 @@ using Barbershop.Application.Customers.Claims;
 using Barbershop.Application.ServiceRecords;
 using Barbershop.Domain.Customers;
 using Barbershop.Domain.Users;
+using Barbershop.Infrastructure.Authorization;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -298,6 +299,10 @@ internal sealed class CustomerClaimsService : IOwnCustomerProfileService, IAdmin
                 throw new ConflictException(StaleMessage);
             }
 
+            // ADR-0018 D11: nobody approves a claim made from their own account; an Admin may, and it is marked.
+            var selfApproved = await SelfApprovalGuard.ResolveAsync(
+                _dbContext, currentUserId, claim.UserId == currentUserId, SelfClaimForbiddenMessage, cancellationToken);
+
             // The existing link rules: identity verified in person, profile live and without an account, account active
             // with the Customer role and no other live profile, under the account lock. The profile's version stops a
             // concurrent link of it.
@@ -306,6 +311,11 @@ internal sealed class CustomerClaimsService : IOwnCustomerProfileService, IAdmin
                 approvingClaimId: claim.Id, cancellationToken);
 
             claim.Approve(request.CustomerId, currentUserId, request.Notes?.Trim(), _timeProvider.GetUtcNow().UtcDateTime);
+            if (selfApproved)
+            {
+                claim.MarkSelfApproved();
+            }
+
             await _dbContext.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
@@ -316,6 +326,9 @@ internal sealed class CustomerClaimsService : IOwnCustomerProfileService, IAdmin
 
         return await GetByIdAsync(claimId, cancellationToken);
     }
+
+    internal const string SelfClaimForbiddenMessage =
+        "No puedes aprobar una reclamación de perfil hecha desde tu propia cuenta. Pide a otra persona que la revise.";
 
     public async Task<CustomerClaimView> RejectAsync(
         Guid currentUserId, Guid claimId, CustomerClaimRejectRequest request, CancellationToken cancellationToken = default)
@@ -447,7 +460,8 @@ internal sealed class CustomerClaimsService : IOwnCustomerProfileService, IAdmin
                 claim.DecidedAt,
                 claim.DecidedByUserId is { } decidedBy && users.TryGetValue(decidedBy, out var reviewer) ? reviewer.FullName : null,
                 claim.DecisionNotes,
-                claim.Version);
+                claim.Version,
+                claim.IsSelfApproved);
         }).ToArray();
     }
 }

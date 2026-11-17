@@ -20,7 +20,6 @@ internal sealed class IdentitySeedService : IIdentitySeedService
   private static readonly IReadOnlyDictionary<string, string> PermissionDescriptions =
       new Dictionary<string, string>(StringComparer.Ordinal)
       {
-        [PermissionCodes.SalesRegister] = "Registrar ventas",
         [PermissionCodes.ServiceRecordsRegister] = "Registrar servicios realizados",
         [PermissionCodes.ServiceRecordsApprove] = "Aprobar servicios realizados",
         [PermissionCodes.LoyaltySettingsManage] = "Configurar el programa de fidelización",
@@ -29,11 +28,34 @@ internal sealed class IdentitySeedService : IIdentitySeedService
         [PermissionCodes.LoyaltyRedemptionsDeliver] = "Confirmar la entrega de redenciones de puntos",
         [PermissionCodes.LoyaltyPointsAdjust] = "Ajustar puntos de clientes",
         [PermissionCodes.MembershipPaymentsConfirm] = "Confirmar el pago de membresías",
-        [PermissionCodes.CustomerClaimsApprove] = "Aprobar reclamaciones de perfiles de cliente"
+        [PermissionCodes.CustomerClaimsApprove] = "Aprobar reclamaciones de perfiles de cliente",
+        [PermissionCodes.InventoryView] = "Ver existencias, costos y ganancia de productos",
+        [PermissionCodes.InventoryReceive] = "Registrar entradas de mercancía y el stock mínimo",
+        [PermissionCodes.InventoryAdjust] = "Ajustar existencias de productos",
+        [PermissionCodes.BillsOpen] = "Abrir cuentas y editar las propias mientras están abiertas",
+        [PermissionCodes.BillsClose] = "Cerrar cuentas",
+        [PermissionCodes.BillsCharge] = "Registrar el cobro de una cuenta",
+        [PermissionCodes.BillsDiscount] = "Dar descuentos y cortesías en cuentas",
+        [PermissionCodes.BillsManage] = "Ver y editar todas las cuentas abiertas",
+        [PermissionCodes.BillsApprove] = "Aprobar cuentas y corregir las cerradas",
+        [PermissionCodes.BillsUnapprove] = "Desaprobar cuentas aprobadas",
+        [PermissionCodes.BillsVoid] = "Anular cuentas"
       };
 
-  // Professionals register the services they performed; every administrative permission stays out of Staff.
-  private static readonly IReadOnlyCollection<string> StaffPermissionCodes = [PermissionCodes.ServiceRecordsRegister];
+  // Professionals build, close and charge the bills of their services (ADR-0020 Q16); discounts and every administrative
+  // permission stay out of Staff (Q2). Since stage 6 the old registration of services performed (service-records.register)
+  // is no longer a default of anyone. Like every default grant, these are given only when the permission or the role is
+  // created (ADR-0008).
+  private static readonly IReadOnlyCollection<string> StaffPermissionCodes =
+  [
+    PermissionCodes.BillsOpen,
+    PermissionCodes.BillsClose,
+    PermissionCodes.BillsCharge,
+  ];
+
+  /// <summary>Every permission of the catalog except the retired registration of services performed (ADR-0020 stage 6).</summary>
+  internal static readonly IReadOnlyCollection<string> AdminPermissionCodes =
+      PermissionCodes.All.Where(code => code != PermissionCodes.ServiceRecordsRegister).ToArray();
 
   private readonly AppDbContext _dbContext;
   private readonly IPasswordHasher<object> _passwordHasher;
@@ -156,7 +178,7 @@ internal sealed class IdentitySeedService : IIdentitySeedService
       changed = true;
     }
 
-    changed |= GrantDefaults(RoleNames.Admin, PermissionCodes.All);
+    changed |= GrantDefaults(RoleNames.Admin, AdminPermissionCodes);
     changed |= GrantDefaults(RoleNames.Staff, StaffPermissionCodes);
     return changed;
 

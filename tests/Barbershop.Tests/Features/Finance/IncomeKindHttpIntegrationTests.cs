@@ -33,7 +33,7 @@ public sealed class IncomeKindHttpIntegrationTests
   }
 
   [Fact]
-  public async Task OlderClientJson_WithoutKind_StillCreatesAndEditsServiceIncome()
+  public async Task OlderClientJson_WithoutKind_IsRefusedForNewServiceIncome_AndStillEditsTheStoredOnes()
   {
     using var context = await CreateContextAsync();
     if (context is null)
@@ -48,9 +48,13 @@ public sealed class IncomeKindHttpIntegrationTests
 
     // Exactly the body the current production front end sends: no "kind" property at all.
     var legacyBody = $$"""{"serviceId":"{{serviceId}}","staffProfileId":"{{staffId}}","amount":20000,"isPromo":false,"occurredOn":"{{Today:yyyy-MM-dd}}"}""";
+    // ADR-0020 Q18: read as a service income, which is now charged with a bill.
     using var created = await context.Client.PostAsync("/api/v1/admin/income", Json(legacyBody));
-    Assert.Equal(HttpStatusCode.Created, created.StatusCode);
-    var entry = (await created.Content.ReadFromJsonAsync<IncomeEntryView>())!;
+    Assert.Equal(HttpStatusCode.Conflict, created.StatusCode);
+
+    var seededId = await SeedManualIncomeAsync(context.Factory, serviceId, staffId, 20000, Today);
+    var entry = (await context.Client.GetPageItemsAsync<IncomeEntryView>($"/api/v1/admin/income?from={Today:yyyy-MM-dd}&to={Today:yyyy-MM-dd}"))!
+        .Single(item => item.Id == seededId);
     Assert.Equal("Service", entry.Kind);
     Assert.Equal(8000, entry.BusinessAmount);
     Assert.Equal(12000, entry.ProfessionalAmount);
@@ -78,11 +82,7 @@ public sealed class IncomeKindHttpIntegrationTests
     var serviceId = await SeedServiceAsync(context.Factory, "Corte", 25000, businessPercentage: 40);
     var staffId = await SeedStaffAsync(context.Factory, "kind-sale");
 
-    using (var service = await context.Client.PostAsJsonAsync(
-        "/api/v1/admin/income", new IncomeEntryCreateRequest(serviceId, staffId, 20000, false, Today)))
-    {
-      Assert.Equal(HttpStatusCode.Created, service.StatusCode);
-    }
+    await SeedManualIncomeAsync(context.Factory, serviceId, staffId, 20000, Today);
 
     var saleBody = $$"""{"kind":"MembershipSale","amount":250000,"isPromo":false,"occurredOn":"{{Today:yyyy-MM-dd}}"}""";
     using var created = await context.Client.PostAsync("/api/v1/admin/income", Json(saleBody));
@@ -209,5 +209,14 @@ public sealed class IncomeKindHttpIntegrationTests
       Client.Dispose();
       Factory.Dispose();
     }
+  }
+
+  /// <summary>ADR-0020 Q18: a manual service income stored before the bills.</summary>
+  private static async Task<Guid> SeedManualIncomeAsync(IntegrationTestFactory factory, Guid serviceId, Guid staffId, int amount, DateOnly occurredOn)
+  {
+    using var scope = factory.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    var createdBy = await db.Users.Select(user => user.Id).FirstAsync();
+    return (await ManualIncomeSeed.ServiceIncomeAsync(db, serviceId, staffId, amount, occurredOn, createdBy)).Id;
   }
 }

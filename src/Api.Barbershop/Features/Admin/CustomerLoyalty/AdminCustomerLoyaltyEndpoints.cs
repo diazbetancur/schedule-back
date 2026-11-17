@@ -15,10 +15,10 @@ public static class AdminCustomerLoyaltyEndpoints
     public static RouteGroupBuilder MapAdminCustomerLoyaltyEndpoints(this RouteGroupBuilder api)
     {
         var loyalty = api.MapGroup("/admin/customers/{customerId:guid}/loyalty")
-            .WithTags("Admin")
-            .RequireAuthorization(AuthPolicyNames.Admin);
+            .WithTags("Admin");
 
         loyalty.MapGet(string.Empty, GetWalletAsync)
+            .RequireAuthorization(AuthPolicyNames.CustomerLoyaltyOrPaymentsAccess)
             .WithName("GetAdminCustomerLoyalty")
             .Produces<LoyaltyWalletView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -27,6 +27,7 @@ public static class AdminCustomerLoyaltyEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         loyalty.MapGet("/movements", GetMovementsAsync)
+            .RequireAuthorization(AuthPolicyNames.CustomerLoyaltyOrPaymentsAccess)
             .WithName("GetAdminCustomerLoyaltyMovements")
             .Produces<PagedResult<LoyaltyMovementView>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)

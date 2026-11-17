@@ -56,6 +56,10 @@ public static class AdminServiceRecordsEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
+        serviceRecords.MapGet("/pending-count", async (IAdminServiceRecordsService service, CancellationToken ct)
+                => new { count = await service.GetPendingCountAsync(ct) })
+            .WithName("GetAdminServiceRecordsPendingCount");
+
         serviceRecords.MapGet("/{serviceRecordId:guid}/related", GetRelatedAsync)
             .WithName("GetAdminServiceRecordRelated")
             .Produces<ServiceRecordRelatedView>(StatusCodes.Status200OK)

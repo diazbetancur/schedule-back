@@ -1,5 +1,6 @@
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Finance.Admin;
+using Barbershop.Domain.Finance;
 using Barbershop.Domain.Services;
 using Barbershop.Domain.Staff;
 using Barbershop.Infrastructure.Finance;
@@ -33,7 +34,7 @@ public sealed class IncomeManagementServiceTests : IDisposable
     var staff = await AddStaffAsync("Alex");
     var userId = Guid.NewGuid();
 
-    var view = await _service.CreateAsync(userId, new IncomeEntryCreateRequest(
+    var view = await SeedServiceIncomeAsync(userId, new IncomeEntryCreateRequest(
         service.Id, staff.Id, 20000, IsPromo: true, Today));
 
     Assert.Equal(service.Id, view.ServiceId);
@@ -49,53 +50,27 @@ public sealed class IncomeManagementServiceTests : IDisposable
   }
 
   [Fact]
-  public async Task CreateAsync_UnknownService_ThrowsValidation()
-  {
-    var staff = await AddStaffAsync("Alex");
-
-    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
-        _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
-            Guid.NewGuid(), staff.Id, 10000, false, Today)));
-
-    Assert.Contains("serviceId", exception.Errors.Keys);
-  }
-
-  [Fact]
-  public async Task CreateAsync_UnknownStaff_ThrowsValidation()
-  {
-    var service = await AddServiceAsync("Barba", 10000);
-
-    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
-        _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
-            service.Id, Guid.NewGuid(), 10000, false, Today)));
-
-    Assert.Contains("staffProfileId", exception.Errors.Keys);
-  }
-
-  [Fact]
-  public async Task CreateAsync_NegativeAmount_ThrowsValidation()
+  public async Task CreateAsync_ServiceIncome_IsRetired_TheBillsPostIt()
   {
     var service = await AddServiceAsync("Barba", 10000);
     var staff = await AddStaffAsync("Alex");
 
-    var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
-        _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
-            service.Id, staff.Id, -1, false, Today)));
+    var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+        _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, staff.Id, 10000, false, Today)));
 
-    Assert.Contains("amount", exception.Errors.Keys);
+    Assert.Contains("«Cuentas»", exception.Message);
+    Assert.Empty(_dbContext.IncomeEntries);
   }
 
-  [Fact]
-  public async Task CreateAsync_FutureDate_ThrowsValidation()
+  [Theory]
+  [InlineData("ProductSale")]
+  [InlineData("Tip")]
+  public async Task CreateAsync_ProductSalesAndTips_OnlyComeFromBills(string kind)
   {
-    var service = await AddServiceAsync("Barba", 10000);
-    var staff = await AddStaffAsync("Alex");
-
     var exception = await Assert.ThrowsAsync<ValidationProblemException>(() =>
-        _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
-            service.Id, staff.Id, 10000, false, Today.AddDays(1))));
+        _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(null, null, 10000, false, Today, kind)));
 
-    Assert.Contains("occurredOn", exception.Errors.Keys);
+    Assert.Contains("kind", exception.Errors.Keys);
   }
 
   [Fact]
@@ -105,7 +80,7 @@ public sealed class IncomeManagementServiceTests : IDisposable
     var second = await AddServiceAsync("Tinte", 45000);
     var staff = await AddStaffAsync("Alex");
 
-    var created = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+    var created = await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
         first.Id, staff.Id, 20000, false, Today));
 
     var updated = await _service.UpdateAsync(created.Id, new IncomeEntryUpdateRequest(
@@ -121,7 +96,7 @@ public sealed class IncomeManagementServiceTests : IDisposable
   {
     var service = await AddServiceAsync("Corte", 20000);
     var staff = await AddStaffAsync("Alex");
-    var created = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+    var created = await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
         service.Id, staff.Id, 20000, false, Today));
 
     await _service.SoftDeleteAsync(created.Id);
@@ -137,9 +112,9 @@ public sealed class IncomeManagementServiceTests : IDisposable
     var alex = await AddStaffAsync("Alex");
     var bianca = await AddStaffAsync("Bianca");
 
-    await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, alex.Id, 20000, false, Today));
-    await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, bianca.Id, 20000, false, Today));
-    await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, alex.Id, 20000, false, Today.AddDays(-1)));
+    await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, alex.Id, 20000, false, Today));
+    await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, bianca.Id, 20000, false, Today));
+    await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(service.Id, alex.Id, 20000, false, Today.AddDays(-1)));
 
     var todayAll = await _service.GetAsync(new IncomeListQuery(Today, Today));
     Assert.Equal(2, todayAll.TotalCount);
@@ -155,7 +130,7 @@ public sealed class IncomeManagementServiceTests : IDisposable
     var service = await AddServiceAsync("Corte", 20000, businessPercentage: 30);
     var staff = await AddStaffAsync("Alex");
 
-    var view = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+    var view = await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
         service.Id, staff.Id, 20000, false, Today));
 
     Assert.Equal(30, view.BusinessPercentage);
@@ -169,7 +144,7 @@ public sealed class IncomeManagementServiceTests : IDisposable
     var service = await AddServiceAsync("Corte", 100, businessPercentage: 33);
     var staff = await AddStaffAsync("Alex");
 
-    var view = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+    var view = await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
         service.Id, staff.Id, 100, false, Today));
 
     Assert.Equal(33, view.BusinessAmount);
@@ -183,7 +158,7 @@ public sealed class IncomeManagementServiceTests : IDisposable
     var second = await AddServiceAsync("Tinte", 45000, businessPercentage: 50);
     var staff = await AddStaffAsync("Alex");
 
-    var created = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+    var created = await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
         first.Id, staff.Id, 20000, false, Today));
     Assert.Equal(10, created.BusinessPercentage);
 
@@ -198,7 +173,7 @@ public sealed class IncomeManagementServiceTests : IDisposable
   {
     var service = await AddServiceAsync("Corte", 20000, businessPercentage: 30);
     var staff = await AddStaffAsync("Alex");
-    var created = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+    var created = await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
         service.Id, staff.Id, 20000, false, Today));
 
     // The master changes after the income was registered.
@@ -220,7 +195,7 @@ public sealed class IncomeManagementServiceTests : IDisposable
   {
     var service = await AddServiceAsync("Corte clásico", 20000, businessPercentage: 30);
     var staff = await AddStaffAsync("Alex");
-    var created = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+    var created = await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
         service.Id, staff.Id, 20000, false, Today));
 
     service.Update("Corte premium", 35000, DateTime.UtcNow, businessPercentage: 30);
@@ -240,7 +215,7 @@ public sealed class IncomeManagementServiceTests : IDisposable
     var service = await AddServiceAsync("Corte", 20000, businessPercentage: 40);
     var first = await AddStaffAsync("Alex");
     var second = await AddStaffAsync("Juan");
-    var created = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+    var created = await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
         service.Id, first.Id, 20000, false, Today));
 
     service.Update("Corte", 20000, DateTime.UtcNow, businessPercentage: 0);
@@ -262,7 +237,7 @@ public sealed class IncomeManagementServiceTests : IDisposable
     var first = await AddServiceAsync("Corte", 20000, businessPercentage: 10);
     var second = await AddServiceAsync("Tinte", 45000, businessPercentage: 50);
     var staff = await AddStaffAsync("Alex");
-    var created = await _service.CreateAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
+    var created = await SeedServiceIncomeAsync(Guid.NewGuid(), new IncomeEntryCreateRequest(
         first.Id, staff.Id, 20000, false, Today));
 
     await _service.UpdateAsync(created.Id, new IncomeEntryUpdateRequest(second.Id, staff.Id, 45000, false, Today));
@@ -289,5 +264,20 @@ public sealed class IncomeManagementServiceTests : IDisposable
     _dbContext.StaffProfiles.Add(staff);
     await _dbContext.SaveChangesAsync();
     return staff;
+  }
+
+  /// <summary>
+  /// ADR-0020 Q18: new service income is no longer created by hand (the bills post it); the manual ones stored before
+  /// are still listed, edited and deleted here. They are seeded as the manual creation stored them.
+  /// </summary>
+  private async Task<IncomeEntryView> SeedServiceIncomeAsync(Guid userId, IncomeEntryCreateRequest request)
+  {
+    var service = await _dbContext.Services.SingleAsync(candidate => candidate.Id == request.ServiceId);
+    var entry = new IncomeEntry(
+        service.Id, service.Name, service.BasePrice, request.StaffProfileId!.Value, request.Amount, request.IsPromo, request.OccurredOn,
+        userId, DateTime.UtcNow, service.BusinessPercentage);
+    _dbContext.IncomeEntries.Add(entry);
+    await _dbContext.SaveChangesAsync();
+    return (await _service.GetAsync(new IncomeListQuery(request.OccurredOn, request.OccurredOn))).Items.Single(item => item.Id == entry.Id);
   }
 }

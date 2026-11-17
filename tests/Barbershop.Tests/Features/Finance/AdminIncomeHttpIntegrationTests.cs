@@ -46,13 +46,17 @@ public sealed class AdminIncomeHttpIntegrationTests
     var serviceId = await SeedServiceAsync(context.Factory, "Corte", 25000, businessPercentage: 40);
     var staffId = await SeedStaffAsync(context.Factory, "income-alex");
 
+    // ADR-0020 Q18: a new service income is charged with a bill; the API refuses to create one by hand.
     using var createResponse = await context.Client.PostAsJsonAsync(
         "/api/v1/admin/income",
         new IncomeEntryCreateRequest(serviceId, staffId, 20000, IsPromo: true, Today));
-    Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
-    var created = await createResponse.Content.ReadFromJsonAsync<IncomeEntryView>();
-    Assert.NotNull(created);
-    Assert.Equal(20000, created!.Amount);
+    Assert.Equal(HttpStatusCode.Conflict, createResponse.StatusCode);
+
+    // The manual ones stored before are still listed, filtered and deleted.
+    var seeded = await SeedManualIncomeAsync(context.Factory, serviceId, staffId, 20000, Today, isPromo: true);
+    using var createdResponse = await context.Client.GetAsync($"/api/v1/admin/income?from={Today:yyyy-MM-dd}&to={Today:yyyy-MM-dd}");
+    var created = (await createdResponse.Content.ReadPageItemsAsync<IncomeEntryView>())!.Single(entry => entry.Id == seeded);
+    Assert.Equal(20000, created.Amount);
     Assert.Equal("Corte", created.ServiceName);
     Assert.Equal(25000, created.BasePrice);
     Assert.True(created.IsPromo);
@@ -101,10 +105,7 @@ public sealed class AdminIncomeHttpIntegrationTests
 
     for (var day = 10; day <= 12; day++)
     {
-      using var create = await context.Client.PostAsJsonAsync(
-          "/api/v1/admin/income",
-          new IncomeEntryCreateRequest(serviceId, staffId, 2_000_000_000, IsPromo: false, new DateOnly(2019, 5, day)));
-      Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+      await SeedManualIncomeAsync(context.Factory, serviceId, staffId, 2_000_000_000, new DateOnly(2019, 5, day));
     }
 
     using var list = await context.Client.GetAsync(
@@ -257,5 +258,15 @@ public sealed class AdminIncomeHttpIntegrationTests
       Client.Dispose();
       Factory.Dispose();
     }
+  }
+
+  /// <summary>ADR-0020 Q18: a manual service income stored before the bills.</summary>
+  private static async Task<Guid> SeedManualIncomeAsync(
+      IntegrationTestFactory factory, Guid serviceId, Guid staffId, int amount, DateOnly occurredOn, bool isPromo = false)
+  {
+    using var scope = factory.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    var createdBy = await db.Users.Select(user => user.Id).FirstAsync();
+    return (await ManualIncomeSeed.ServiceIncomeAsync(db, serviceId, staffId, amount, occurredOn, createdBy, isPromo)).Id;
   }
 }

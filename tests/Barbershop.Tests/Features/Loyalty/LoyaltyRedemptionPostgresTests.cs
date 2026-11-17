@@ -372,7 +372,9 @@ public sealed class LoyaltyRedemptionPostgresTests
   {
     await using var context = CreateContext(null);
     var today = DateOnly.FromDateTime(BogotaClock.ToLocal(_clock.GetUtcNow().UtcDateTime));
-    var record = new ServiceRecord(Guid.NewGuid(), 0, null, seed.StaffProfileId, seed.HaircutId, "Corte", today, null, "Carla", null, seed.AdminId, DateTime.UtcNow);
+    // ADR-0018 D1: the professional registers it, so the admin who confirms it is a third party.
+    var barberUserId = await context.StaffProfiles.Where(staff => staff.Id == seed.StaffProfileId).Select(staff => staff.UserId).SingleAsync();
+    var record = new ServiceRecord(Guid.NewGuid(), 0, null, seed.StaffProfileId, seed.HaircutId, "Corte", today, null, "Carla", null, barberUserId, DateTime.UtcNow);
     context.ServiceRecords.Add(record);
     await context.SaveChangesAsync();
     return await context.ServiceRecords.AsNoTracking().SingleAsync(candidate => candidate.Id == record.Id);

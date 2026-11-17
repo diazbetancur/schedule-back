@@ -139,6 +139,9 @@ public sealed class ServiceRecord
 
   public string? ReviewNotes { get; private set; }
   public Guid? ApprovedByUserId { get; private set; }
+
+  /// <summary>ADR-0018 D1 (SONDA BUG-090): approved by an Admin who is the customer or the registering professional.</summary>
+  public bool IsSelfApproved { get; private set; }
   public DateTime? ApprovedAt { get; private set; }
 
   public string? RejectionReason { get; private set; }
@@ -148,7 +151,11 @@ public sealed class ServiceRecord
   /// <summary>Mapped to PostgreSQL's xmin system column; used as an optimistic concurrency token.</summary>
   public uint Version { get; private set; }
 
-  public void Approve(ServiceRecordApproval approval, Guid approvedByUserId, DateTime approvedAt)
+  /// <param name="selfApproved">
+  /// ADR-0018 D1: an Admin approved a record where they are the customer or the professional who registered it; it stays
+  /// marked so everyone sees it (anyone else is refused before reaching here).
+  /// </param>
+  public void Approve(ServiceRecordApproval approval, Guid approvedByUserId, DateTime approvedAt, bool selfApproved = false)
   {
     EnsurePending();
     approval.EnsureConsistent();
@@ -177,6 +184,7 @@ public sealed class ServiceRecord
     LoyaltyPointsSnapshot = approval.AccruesLoyaltyPoints ? approval.LoyaltyPointsSnapshot : null;
     ReviewNotes = DomainValidation.Optional(approval.ReviewNotes, MaxNotesLength);
     ApprovedByUserId = approvedByUserId;
+    IsSelfApproved = selfApproved;
     ApprovedAt = DomainValidation.EnsureUtc(approvedAt, nameof(approvedAt));
     Status = ServiceRecordStatus.Approved;
   }

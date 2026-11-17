@@ -3,6 +3,9 @@ using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Loyalty.Redemptions;
 using Barbershop.Application.ServiceRecords;
 using Barbershop.Domain.Loyalty;
+using Barbershop.Application.Notifications;
+using Barbershop.Infrastructure.Authorization;
+using Barbershop.Infrastructure.Notifications;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -31,7 +34,10 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
         _dbContext = dbContext;
         _timeProvider = timeProvider;
         _wallet = new LoyaltyWalletService(dbContext, timeProvider);
+        _notifications = new CustomerNotificationOutbox(dbContext, timeProvider);
     }
+
+    private readonly CustomerNotificationOutbox _notifications;
 
     // ── Catalog ────────────────────────────────────────────────────────────────────────────────
 
@@ -410,7 +416,7 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
             redemptionId,
             request.Version,
             isReplay: redemption => redemption.Status == LoyaltyRedemptionStatus.Approved && redemption.ApprovedByUserId == currentUserId,
-            apply: (redemption, utcNow, today) =>
+            apply: async (redemption, utcNow, today) =>
             {
                 if (redemption.Status != LoyaltyRedemptionStatus.Requested)
                 {
@@ -419,8 +425,14 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
 
                 // Revalidated here even if the expiration job has not run yet.
                 EnsureWithinDeadline(redemption, today, "aprobar");
+                var selfApproved = await ResolveSelfApprovalAsync(currentUserId, redemption.CustomerId, cancellationToken);
                 redemption.Approve(currentUserId, utcNow, today);
-                return Task.CompletedTask;
+                if (selfApproved)
+                {
+                    redemption.MarkSelfApproved();
+                }
+
+                await NotifyApprovedAsync(redemption, cancellationToken);
             },
             cancellationToken);
         return await GetAsync(redemptionId, cancellationToken);
@@ -443,6 +455,11 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
 
                 redemption.Reject(reason, currentUserId, utcNow);
                 await _wallet.ReleaseReservationInCurrentTransactionAsync(redemption.CustomerId, redemption.Id, currentUserId, utcNow, cancellationToken);
+                await _notifications.QueueForCustomerAsync(
+                    redemption.CustomerId,
+                    UserNotificationTypes.LoyaltyRedemptionRejected,
+                    CustomerNotificationMessages.RedemptionRejected(redemption.Id, redemption.RewardNameSnapshot, redemption.PointsCost, reason),
+                    cancellationToken);
             },
             cancellationToken);
         return await GetAsync(redemptionId, cancellationToken);
@@ -481,7 +498,7 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
                 {
                     // No direct delivery can skip the service record (ADR-0015 R13).
                     throw new ConflictException(
-                        "Esta recompensa es un servicio: se entrega al confirmar el servicio realizado con el tipo Recompensa.");
+                        "Esta recompensa es un servicio: se entrega al aprobar la cuenta en la que se agrega el canje.");
                 }
 
                 if (redemption.Status != LoyaltyRedemptionStatus.Approved)
@@ -490,6 +507,11 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
                 }
 
                 EnsureWithinDeadline(redemption, today, "entregar");
+                if (await ResolveSelfApprovalAsync(currentUserId, redemption.CustomerId, cancellationToken))
+                {
+                    redemption.MarkSelfApproved();
+                }
+
                 redemption.Deliver(currentUserId, utcNow, today, serviceRecordId: null);
                 await _wallet.ConsumeReservationInCurrentTransactionAsync(redemption.CustomerId, redemption.Id, currentUserId, utcNow, cancellationToken);
             },
@@ -590,8 +612,78 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
 
         var today = LoyaltyWalletService.BogotaDate(utcNow);
         EnsureWithinDeadline(redemption, today, "entregar");
+
+        // The service record's own approval already applied ADR-0018 D1 to this actor; an Admin delivering their own
+        // reward through it is marked here as well (D11).
+        if (await ResolveSelfApprovalAsync(currentUserId, live, cancellationToken))
+        {
+            redemption.MarkSelfApproved();
+        }
+
         redemption.Deliver(currentUserId, utcNow, today, serviceRecordId);
         await _wallet.ConsumeReservationInCurrentTransactionAsync(live, redemption.Id, currentUserId, utcNow, cancellationToken);
+        return redemption;
+    }
+
+    /// <summary>
+    /// ADR-0020 (C8): delivers an approved redemption through the approval of a bill, inside the caller's transaction,
+    /// which already holds the bill's lock: then the live customer profile and the redemption are locked (the order of
+    /// R13), the redemption is checked against the bill's customer, the service of the line (service rewards) and its
+    /// deadline, and its reserved points are consumed. ADR-0018 D11 was applied by the bill's own approval; an Admin
+    /// delivering their own reward is marked here as well.
+    /// </summary>
+    internal async Task<LoyaltyRedemption> DeliverForBillInCurrentTransactionAsync(
+        Guid redemptionId, Guid customerId, Guid? serviceId, Guid billLineId, Guid currentUserId, DateTime utcNow,
+        CancellationToken cancellationToken)
+    {
+        var live = await _wallet.LockLiveCustomerAsync(customerId, cancellationToken);
+        await LockRedemptionAsync(redemptionId, cancellationToken);
+        var redemption = await _dbContext.LoyaltyRedemptions.SingleOrDefaultAsync(candidate => candidate.Id == redemptionId, cancellationToken);
+
+        if (redemption is null || redemption.CustomerId != live)
+        {
+            throw new ConflictException("El canje de la cuenta ya no es del cliente (por ejemplo, por una fusión). Revisa la línea del canje.");
+        }
+
+        if (redemption.RewardKindSnapshot == LoyaltyRewardKind.Service && redemption.ServiceIdSnapshot != serviceId)
+        {
+            throw new ConflictException($"La recompensa es el servicio «{redemption.ServiceNameSnapshot}»: revisa la línea del canje.");
+        }
+
+        if (redemption.Status != LoyaltyRedemptionStatus.Approved)
+        {
+            throw new ConflictException(NotInStatusMessage(redemption, "entregar"));
+        }
+
+        var today = LoyaltyWalletService.BogotaDate(utcNow);
+        EnsureWithinDeadline(redemption, today, "entregar");
+        if (await ResolveSelfApprovalAsync(currentUserId, live, cancellationToken))
+        {
+            redemption.MarkSelfApproved();
+        }
+
+        redemption.Deliver(currentUserId, utcNow, today, serviceRecordId: null, billLineId);
+        await _wallet.ConsumeReservationInCurrentTransactionAsync(live, redemption.Id, currentUserId, utcNow, cancellationToken);
+        return redemption;
+    }
+
+    /// <summary>
+    /// ADR-0020 Q20: the bill that delivered this redemption was unapproved. Inside the caller's transaction, which already
+    /// holds the bill's lock and the live customer's: the redemption is locked, goes back to Approved in the live profile
+    /// (without its delivery deadline) and its points are reserved again. Returns it.
+    /// </summary>
+    internal async Task<LoyaltyRedemption> ReopenForBillUnapprovalInCurrentTransactionAsync(
+        Guid redemptionId, Guid lockedLiveCustomerId, Guid postingId, Guid currentUserId, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        await LockRedemptionAsync(redemptionId, cancellationToken);
+        var redemption = await _dbContext.LoyaltyRedemptions.SingleAsync(candidate => candidate.Id == redemptionId, cancellationToken);
+        if (redemption.Status != LoyaltyRedemptionStatus.Delivered || redemption.BillLineId is null)
+        {
+            throw new ConflictException("El canje de esta cuenta ya no está entregado por ella. Recarga e intenta de nuevo.");
+        }
+
+        await _wallet.RestoreRedemptionReservationInCurrentTransactionAsync(redemption, lockedLiveCustomerId, postingId, currentUserId, utcNow, cancellationToken);
+        redemption.Reopen(lockedLiveCustomerId, utcNow);
         return redemption;
     }
 
@@ -643,7 +735,8 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
     private static IQueryable<LoyaltyRedemption> DueRedemptions(IQueryable<LoyaltyRedemption> query, DateOnly today)
         => query.Where(redemption =>
             (redemption.Status == LoyaltyRedemptionStatus.Requested && redemption.ApproveBy < today)
-            || (redemption.Status == LoyaltyRedemptionStatus.Approved && redemption.DeliverBy < today));
+            // ADR-0020 Q20: a redemption reopened by an unapproved bill keeps no delivery deadline.
+            || (redemption.Status == LoyaltyRedemptionStatus.Approved && redemption.DeliverBy < today && redemption.ReopenedAt == null));
 
     // ── Merges (ADR-0013 D5) ───────────────────────────────────────────────────────────────────
 
@@ -731,7 +824,14 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
             await _wallet.ReserveInCurrentTransactionAsync(customerId, redemption.Id, redemption.PointsCost, currentUserId, utcNow, cancellationToken);
             if (approveNow)
             {
+                var selfApproved = await ResolveSelfApprovalAsync(currentUserId, customerId, cancellationToken);
                 redemption.Approve(currentUserId, utcNow, today);
+                if (selfApproved)
+                {
+                    redemption.MarkSelfApproved();
+                }
+
+                await NotifyApprovedAsync(redemption, cancellationToken);
             }
 
             await _dbContext.SaveChangesAsync(cancellationToken);
@@ -818,6 +918,26 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
             _dbContext.ChangeTracker.Clear();
         }
     }
+
+    /// <summary>ADR-0019 N1: saved with the approval, so a replayed approval never notifies twice.</summary>
+    private Task NotifyApprovedAsync(LoyaltyRedemption redemption, CancellationToken cancellationToken)
+        => _notifications.QueueForCustomerAsync(
+            redemption.CustomerId,
+            UserNotificationTypes.LoyaltyRedemptionApproved,
+            CustomerNotificationMessages.RedemptionApproved(redemption.Id, redemption.RewardNameSnapshot, redemption.DeliverBy),
+            cancellationToken);
+
+    internal const string SelfRedemptionForbiddenMessage =
+        "No puedes aprobar ni entregar un canje de tus propios puntos. Pide a otra persona que lo revise.";
+
+    /// <summary>ADR-0018 D11: the actor may not approve or deliver a redemption of the profile linked to their account.</summary>
+    private async Task<bool> ResolveSelfApprovalAsync(Guid currentUserId, Guid customerId, CancellationToken cancellationToken)
+        => await SelfApprovalGuard.ResolveAsync(
+            _dbContext,
+            currentUserId,
+            await SelfApprovalGuard.IsOwnCustomerProfileAsync(_dbContext, currentUserId, customerId, cancellationToken),
+            SelfRedemptionForbiddenMessage,
+            cancellationToken);
 
     private static void EnsurePending(LoyaltyRedemption redemption, string action)
     {
@@ -1028,7 +1148,8 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
                     .OrderBy(allocation => allocation.ExpiresOn)
                     .Select(allocation => new LoyaltyRedemptionAllocationView(allocation.LotId, allocation.Points, allocation.ExpiresOn))
                     .ToArray(),
-                redemption.Version))
+                redemption.Version,
+                redemption.IsSelfApproved))
             .ToArray();
     }
 

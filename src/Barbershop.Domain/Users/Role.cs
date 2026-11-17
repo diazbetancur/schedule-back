@@ -21,6 +21,12 @@ public sealed class Role
   public ICollection<UserRole> UserRoles { get; } = [];
   public ICollection<RolePermission> RolePermissions { get; } = [];
 
+  /// <summary>
+  /// ADR-0020 (BUG-091): the permissions of the Staff system role can be edited (its name cannot, and it cannot be
+  /// deleted); Admin and Customer stay locked, so nobody can lock everyone out.
+  /// </summary>
+  public bool CanEditPermissions => !IsSystemRole || NormalizedName == DomainValidation.NormalizeKey(RoleNames.Staff);
+
   public void SetName(string name)
   {
     Name = DomainValidation.Required(name, nameof(name), 50, 2);
@@ -29,7 +35,7 @@ public sealed class Role
 
   public void AddPermission(Guid permissionId, DateTime assignedAtUtc)
   {
-    if (IsSystemRole)
+    if (!CanEditPermissions)
     {
       throw new InvalidOperationException("System roles cannot have their permissions modified directly.");
     }
@@ -44,7 +50,7 @@ public sealed class Role
 
   public void RemovePermission(Guid permissionId)
   {
-    if (IsSystemRole)
+    if (!CanEditPermissions)
     {
       throw new InvalidOperationException("System roles cannot have their permissions modified directly.");
     }

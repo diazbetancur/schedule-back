@@ -98,8 +98,44 @@ public static class ApiFoundationServiceCollectionExtensions
             options.AddPolicy(AuthPolicyNames.Staff, policy => policy.RequireRole(AuthRoleNames.Staff));
             options.AddPolicy(AuthPolicyNames.Customer, policy => policy.RequireRole(AuthRoleNames.Customer));
             options.AddPermissionPolicies();
+            options.AddPolicy(AuthPolicyNames.CustomerLoyaltyOrPaymentsAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin,
+                    global::Barbershop.Domain.Users.PermissionCodes.LoyaltyPointsAdjust,
+                    global::Barbershop.Domain.Users.PermissionCodes.MembershipPaymentsConfirm)));
+            options.AddPolicy(AuthPolicyNames.InventoryAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin,
+                    global::Barbershop.Domain.Users.PermissionCodes.InventoryView,
+                    global::Barbershop.Domain.Users.PermissionCodes.InventoryReceive,
+                    global::Barbershop.Domain.Users.PermissionCodes.InventoryAdjust)));
+            options.AddPolicy(AuthPolicyNames.BillsAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin,
+                    global::Barbershop.Domain.Users.PermissionCodes.BillsOpen,
+                    global::Barbershop.Domain.Users.PermissionCodes.BillsClose,
+                    global::Barbershop.Domain.Users.PermissionCodes.BillsManage,
+                    global::Barbershop.Domain.Users.PermissionCodes.BillsApprove,
+                    global::Barbershop.Domain.Users.PermissionCodes.BillsUnapprove,
+                    global::Barbershop.Domain.Users.PermissionCodes.BillsVoid)));
+            options.AddPolicy(AuthPolicyNames.BillsApproveAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin, global::Barbershop.Domain.Users.PermissionCodes.BillsApprove)));
+            options.AddPolicy(AuthPolicyNames.BillsUnapproveAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin, global::Barbershop.Domain.Users.PermissionCodes.BillsUnapprove)));
+            options.AddPolicy(AuthPolicyNames.BillsVoidAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin, global::Barbershop.Domain.Users.PermissionCodes.BillsVoid)));
         });
         services.AddScoped<IAuthorizationHandler, CurrentPermissionAuthorizationHandler>();
+        services.AddScoped<IAuthorizationHandler, AdminOrCurrentPermissionAuthorizationHandler>();
 
         services.AddRateLimiter(ConfigureRateLimiter);
 

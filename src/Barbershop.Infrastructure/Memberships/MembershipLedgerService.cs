@@ -1,7 +1,9 @@
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Memberships.Admin;
 using Barbershop.Domain.Common;
+using Barbershop.Application.Notifications;
 using Barbershop.Domain.Memberships;
+using Barbershop.Infrastructure.Notifications;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
@@ -28,7 +30,10 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
         _dbContext = dbContext;
         _memberships = memberships;
         _timeProvider = timeProvider;
+        _notifications = new CustomerNotificationOutbox(dbContext, timeProvider);
     }
+
+    private readonly CustomerNotificationOutbox _notifications;
 
     public async Task<CustomerMembershipDetailView> ConsumeAsync(
         Guid currentUserId,
@@ -100,6 +105,40 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
         return await RegisterAsync(currentUserId, membership, request, cancellationToken);
     }
 
+    /// <summary>
+    /// ADR-0020 stage 4: reverses the consumption of an unapproved bill inside the caller's transaction, with the same
+    /// append-only rows as <see cref="ReverseAsync"/>: the units go back to their lines; a membership that expired or was
+    /// annulled meanwhile is not reactivated (ADR-0010 P7). Nothing is saved: the caller saves and commits.
+    /// </summary>
+    internal async Task<MembershipConsumptionReversal> ReverseInCurrentTransactionAsync(
+        Guid currentUserId, Guid consumptionId, string reason, CancellationToken cancellationToken)
+    {
+        var consumption = await _dbContext.MembershipConsumptions.AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Id == consumptionId, cancellationToken)
+            ?? throw new ConflictException("No encontramos el consumo de la membresía de esta cuenta.");
+        await LockMembershipAsync(consumption.CustomerMembershipId, cancellationToken);
+        if (await _dbContext.MembershipConsumptionReversals.AnyAsync(reversal => reversal.MembershipConsumptionId == consumption.Id, cancellationToken))
+        {
+            throw new ConflictException("El consumo de la membresía de esta cuenta ya fue revertido.");
+        }
+
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        var trimmed = reason.Length <= ReasonMaxLength ? reason : reason[..ReasonMaxLength];
+        var reversal = new MembershipConsumptionReversal(consumption.Id, trimmed, currentUserId, utcNow);
+        _dbContext.MembershipConsumptionReversals.Add(reversal);
+        var taken = await _dbContext.MembershipMovements
+            .Where(movement => movement.MembershipConsumptionId == consumption.Id && movement.Type == MembershipMovementType.Consumption)
+            .ToListAsync(cancellationToken);
+        foreach (var movement in taken)
+        {
+            _dbContext.MembershipMovements.Add(new MembershipMovement(
+                consumption.CustomerMembershipId, movement.MembershipAllowanceId, consumption.Id, MembershipMovementType.Reversal,
+                movement.Quantity, currentUserId, utcNow));
+        }
+
+        return reversal;
+    }
+
     public async Task<CustomerMembershipDetailView> ReverseAsync(
         Guid currentUserId,
         Guid membershipId,
@@ -139,6 +178,13 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
             {
                 throw new ConflictException(
                     "Este consumo proviene de un servicio realizado confirmado y no se puede revertir desde la membresía.");
+            }
+
+            // ADR-0020: a consumption of an approved bill is undone by unapproving the bill, which reverses it too.
+            if (await _dbContext.BillPostings.AnyAsync(posting => posting.MembershipConsumptionId == consumption.Id, cancellationToken))
+            {
+                throw new ConflictException(
+                    "Este consumo proviene de una cuenta aprobada; se corrige desaprobando la cuenta.");
             }
 
             // Allowed on an annulled membership too: the units go back to their lines but the membership stays
@@ -203,7 +249,21 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
     {
         var staffExists = request.StaffProfileId is not { } staffId
             || await _dbContext.StaffProfiles.AnyAsync(staff => staff.Id == staffId, cancellationToken);
-        return Register(currentUserId, membership, request, await LoadAvailableAsync(membership, cancellationToken), staffExists);
+        var available = await LoadAvailableAsync(membership, cancellationToken);
+        var consumption = Register(currentUserId, membership, request, available, staffExists);
+
+        // ADR-0019 N1: saved with the consumption (a retried key is replayed before reaching here), with what is left of
+        // that service. Both the direct consumption and the confirmed service record go through here.
+        var remaining = membership.Allowances
+            .Where(allowance => allowance.Services.Any(service => service.ServiceId == request.ServiceId))
+            .Sum(allowance => available[allowance.Id]) - request.Quantity;
+        await _notifications.QueueForCustomerAsync(
+            membership.CustomerId,
+            UserNotificationTypes.MembershipConsumed,
+            CustomerNotificationMessages.MembershipConsumed(
+                membership.Id, membership.PlanName, consumption.ServiceNameSnapshot, request.Quantity, Math.Max(0, remaining)),
+            cancellationToken);
+        return consumption;
     }
 
     private MembershipConsumption Register(
@@ -294,7 +354,7 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
         return consumption;
     }
 
-    private async Task<IReadOnlyDictionary<Guid, int>> LoadAvailableAsync(CustomerMembership membership, CancellationToken cancellationToken)
+    internal async Task<IReadOnlyDictionary<Guid, int>> LoadAvailableAsync(CustomerMembership membership, CancellationToken cancellationToken)
     {
         var used = await _dbContext.MembershipMovements
             .Where(movement => movement.CustomerMembershipId == membership.Id)

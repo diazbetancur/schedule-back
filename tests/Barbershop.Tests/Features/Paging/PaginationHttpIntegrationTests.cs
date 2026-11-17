@@ -710,11 +710,13 @@ public sealed class PaginationHttpIntegrationTests
       return ids;
     }
 
-    AuthenticateAs(context.Client, staff.AccessToken);
-    var ownRecords = await ReadAllAsync<ServiceRecordView>("/api/v1/staff/service-records", 105, item => item.Id);
-    Assert.Equal(oldestPending, ownRecords[0]);
-
+    // ADR-0020 stage 6: the professional's own list is retired; the administration reads the 104 reviewed records
+    // (past the old cap of 100) and the pending one in its tray.
     AuthenticateAs(context.Client, admin.AccessToken);
+    await ReadAllAsync<ServiceRecordView>("/api/v1/admin/service-records?status=Rejected", 104, item => item.Id);
+    var pendingRecords = await ReadAllAsync<ServiceRecordView>("/api/v1/admin/service-records", 1, item => item.Id);
+    Assert.Equal(oldestPending, pendingRecords[0]);
+
     await ReadAllAsync<LoyaltyRedemptionView>("/api/v1/admin/loyalty/redemptions/deliveries", 201, item => item.Id);
     await ReadAllAsync<CustomerClaimView>("/api/v1/admin/customer-claims?status=Rejected", 201, item => item.Id);
 

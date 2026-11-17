@@ -7,7 +7,8 @@ using Microsoft.Extensions.Options;
 namespace Barbershop.Infrastructure.Notifications;
 
 /// <summary>
-/// Sends queued push notifications (with retries), creates appointment reminders every minute and
+/// Sends queued push notifications (with retries), creates appointment reminders every minute, membership and points
+/// expiry notices every 15 minutes (ADR-0019) and
 /// cleans up old rows. Everything lives in PostgreSQL, so a restart or a sleeping instance loses nothing:
 /// pending work is picked up on the next run.
 /// </summary>
@@ -16,6 +17,9 @@ internal sealed class NotificationBackgroundWorker : BackgroundService
   private const int BatchSize = 25;
   private const int MaxBatchesPerIteration = 20;
   private static readonly TimeSpan ReminderInterval = TimeSpan.FromMinutes(1);
+
+  /// <summary>ADR-0019 N3: membership and points expiry notices (daytime only, deduplicated).</summary>
+  private static readonly TimeSpan ExpiryReminderInterval = TimeSpan.FromMinutes(15);
   private static readonly TimeSpan CleanupInterval = TimeSpan.FromHours(6);
 
   private readonly IServiceScopeFactory _scopeFactory;
@@ -48,6 +52,7 @@ internal sealed class NotificationBackgroundWorker : BackgroundService
 
     var pollInterval = TimeSpan.FromSeconds(Math.Clamp(_options.PollIntervalSeconds, 1, 300));
     var nextReminderRun = DateTime.MinValue;
+    var nextExpiryReminderRun = DateTime.MinValue;
     var nextCleanup = DateTime.MinValue;
 
     while (!stoppingToken.IsCancellationRequested)
@@ -61,6 +66,12 @@ internal sealed class NotificationBackgroundWorker : BackgroundService
         {
           nextReminderRun = nowUtc + ReminderInterval;
           await scope.ServiceProvider.GetRequiredService<AppointmentReminderService>().RunAsync(stoppingToken);
+        }
+
+        if (_options.RemindersEnabled && nowUtc >= nextExpiryReminderRun)
+        {
+          nextExpiryReminderRun = nowUtc + ExpiryReminderInterval;
+          await scope.ServiceProvider.GetRequiredService<CustomerExpiryReminderService>().RunAsync(stoppingToken);
         }
 
         var processor = scope.ServiceProvider.GetRequiredService<NotificationDeliveryProcessor>();

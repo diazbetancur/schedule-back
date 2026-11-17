@@ -76,6 +76,65 @@ public sealed class LoyaltyRedemptionServiceTests : IDisposable
 
   public void Dispose() => _dbContext.Dispose();
 
+  // ── ADR-0018 D11: nobody approves or delivers their own redemption ───────────────────────────
+
+  [Fact]
+  public async Task TheBeneficiaryWithoutAdminRole_CannotApproveDeliverOrApproveAtTheCounter_TheirOwnRedemption()
+  {
+    var customerId = await CreateLinkedCustomerAsync();
+    await SeedLotAsync(customerId, 500);
+    var reward = await CreateRewardAsync("Gorra", "Other", null, cost: 10);
+    var requested = await RequestAsync(reward.Id);
+    var version = (await _redemptions.GetAsync(requested.Id)).Version;
+
+    var approve = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+        _redemptions.ApproveAsync(_customerUser.Id, requested.Id, new LoyaltyRedemptionDecisionRequest(version)));
+    Assert.Equal(LoyaltyRedemptionService.SelfRedemptionForbiddenMessage, approve.Message);
+    Assert.Equal("Requested", (await _redemptions.GetAsync(requested.Id)).Status);
+
+    // Approved by a third party, the beneficiary still cannot deliver it.
+    var approved = await _redemptions.ApproveAsync(_admin.Id, requested.Id, new LoyaltyRedemptionDecisionRequest(version));
+    Assert.False(approved.IsSelfApproved);
+    await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+        _redemptions.DeliverAsync(_customerUser.Id, requested.Id, new LoyaltyRedemptionDecisionRequest(approved.Version)));
+    Assert.Equal("Approved", (await _redemptions.GetAsync(requested.Id)).Status);
+
+    // At the counter with «approve now»: refused, and nothing is reserved.
+    var before = await _dbContext.LoyaltyRedemptions.CountAsync();
+    await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _redemptions.CreateAtCounterAsync(
+        _customerUser.Id, customerId, new LoyaltyCounterRedemptionRequest(reward.Id, InPersonVerified: true, ApproveNow: true, IdempotencyKey: Guid.NewGuid())));
+    _dbContext.ChangeTracker.Clear();
+    Assert.Equal(before, await _dbContext.LoyaltyRedemptions.CountAsync());
+    await AssertReconciledAsync();
+  }
+
+  [Fact]
+  public async Task AnAdminBeneficiary_MayApproveAndDeliverTheirOwnRedemption_AndItIsMarkedSelfApproved()
+  {
+    GrantAdmin(_customerUser);
+    var customerId = await CreateLinkedCustomerAsync();
+    await SeedLotAsync(customerId, 500);
+    var reward = await CreateRewardAsync("Gorra", "Other", null, cost: 10);
+
+    var requested = await RequestAsync(reward.Id);
+    var approved = await _redemptions.ApproveAsync(
+        _customerUser.Id, requested.Id, new LoyaltyRedemptionDecisionRequest((await _redemptions.GetAsync(requested.Id)).Version));
+    Assert.Equal(("Approved", true), (approved.Status, approved.IsSelfApproved));
+
+    // Approved by someone else and delivered by the beneficiary: the delivery marks it too.
+    var second = await RequestAsync(reward.Id);
+    var approvedByOther = await _redemptions.ApproveAsync(
+        _admin.Id, second.Id, new LoyaltyRedemptionDecisionRequest((await _redemptions.GetAsync(second.Id)).Version));
+    Assert.False(approvedByOther.IsSelfApproved);
+    var delivered = await _redemptions.DeliverAsync(_customerUser.Id, second.Id, new LoyaltyRedemptionDecisionRequest(approvedByOther.Version));
+    Assert.Equal(("Delivered", true), (delivered.Status, delivered.IsSelfApproved));
+
+    var counter = await _redemptions.CreateAtCounterAsync(
+        _customerUser.Id, customerId, new LoyaltyCounterRedemptionRequest(reward.Id, InPersonVerified: true, ApproveNow: true, IdempotencyKey: Guid.NewGuid()));
+    Assert.Equal(("Approved", true), (counter.Status, counter.IsSelfApproved));
+    await AssertReconciledAsync();
+  }
+
   // ── Admin list (ADR-0016 B7) ─────────────────────────────────────────────────────────────────
 
   [Fact]
@@ -452,7 +511,7 @@ public sealed class LoyaltyRedemptionServiceTests : IDisposable
 
     var direct = await Assert.ThrowsAsync<ConflictException>(() =>
         _redemptions.DeliverAsync(_admin.Id, requested.Id, new LoyaltyRedemptionDecisionRequest(approved.Version)));
-    Assert.Contains("servicio realizado", direct.Message);
+    Assert.Contains("aprobar la cuenta", direct.Message);
 
     var stranger = new User("Otra Persona", "otra@example.com", "hash", DateTime.UtcNow);
     _dbContext.Users.Add(stranger);
@@ -689,6 +748,19 @@ public sealed class LoyaltyRedemptionServiceTests : IDisposable
   private Task<MyLoyaltyRedemptionView> RequestAsync(Guid rewardId)
       => _redemptions.RequestAsync(_customerUser.Id, new LoyaltyRedemptionRequest(rewardId, Guid.NewGuid()));
 
+  private void GrantAdmin(User user)
+  {
+    var role = _dbContext.Roles.SingleOrDefault(candidate => candidate.Name == RoleNames.Admin) ?? new Role(RoleNames.Admin, isSystemRole: true);
+    if (_dbContext.Entry(role).State == EntityState.Detached)
+    {
+      _dbContext.Roles.Add(role);
+    }
+
+    _dbContext.UserRoles.Add(new UserRole(user.Id, role.Id, DateTime.UtcNow));
+    _dbContext.SaveChanges();
+    _dbContext.ChangeTracker.Clear();
+  }
+
   private void SetProgram(bool enabled)
   {
     var settings = _dbContext.LoyaltySettings.Single();
@@ -706,7 +778,7 @@ public sealed class LoyaltyRedemptionServiceTests : IDisposable
   private async Task<ServiceRecord> SeedPendingRecordAsync(Service service)
   {
     var record = new ServiceRecord(
-        Guid.NewGuid(), 0, null, _barber.Id, service.Id, service.Name, Today, null, "Carla", null, _admin.Id, _clock.GetUtcNow().UtcDateTime);
+        Guid.NewGuid(), 0, null, _barber.Id, service.Id, service.Name, Today, null, "Carla", null, _barber.UserId, _clock.GetUtcNow().UtcDateTime);
     _dbContext.ServiceRecords.Add(record);
     await _dbContext.SaveChangesAsync();
     _dbContext.ChangeTracker.Clear();

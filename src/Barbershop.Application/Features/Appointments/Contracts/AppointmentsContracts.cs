@@ -156,4 +156,7 @@ public static class CustomerAppointmentScopes
 {
     public const string Upcoming = "Upcoming";
     public const string Past = "Past";
+
+    /// <summary>ADR-0018 D3 (SONDA BUG-023): every cancelled appointment of the customer, any date, newest first.</summary>
+    public const string Cancelled = "Cancelled";
 }

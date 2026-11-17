@@ -1,3 +1,4 @@
+using Barbershop.Tests.Infrastructure;
 using System.IdentityModel.Tokens.Jwt;
 using Barbershop.Application.Auth;
 using Barbershop.Application.Email;
@@ -162,7 +163,7 @@ public sealed class AuthServiceTests : IDisposable
     {
         var registration = await _authService.RegisterAsync(new RegisterRequest("Vendedor User", "vendedor@example.com", "Secret123!", null));
 
-        var salesPermission = await _dbContext.Permissions.SingleAsync(p => p.Code == PermissionCodes.SalesRegister);
+        var salesPermission = await _dbContext.Permissions.SingleAsync(p => p.Code == PermissionCodes.InventoryView);
         var sellerRole = new Role("Vendedor");
         sellerRole.AddPermission(salesPermission.Id, DateTime.UtcNow);
         _dbContext.Roles.Add(sellerRole);
@@ -173,7 +174,7 @@ public sealed class AuthServiceTests : IDisposable
 
         var jwt = new JwtSecurityTokenHandler().ReadJwtToken(login.AccessToken);
         var permissionClaims = jwt.Claims.Where(c => c.Type == PermissionClaimTypes.Permission).Select(c => c.Value).ToList();
-        Assert.Contains(PermissionCodes.SalesRegister, permissionClaims);
+        Assert.Contains(PermissionCodes.InventoryView, permissionClaims);
     }
 
     [Fact]
@@ -189,7 +190,7 @@ public sealed class AuthServiceTests : IDisposable
 
         var jwt = new JwtSecurityTokenHandler().ReadJwtToken(login.AccessToken);
         var permissionClaims = jwt.Claims.Where(c => c.Type == PermissionClaimTypes.Permission).Select(c => c.Value).ToList();
-        Assert.Equal(PermissionCodes.All.OrderBy(c => c), permissionClaims.OrderBy(c => c));
+        Assert.Equal(PermissionDefaults.Admin.OrderBy(c => c), permissionClaims.OrderBy(c => c));
     }
 
     [Fact]
@@ -321,11 +322,11 @@ public sealed class AuthServiceTests : IDisposable
 
         var login = await _authService.LoginAsync(new LoginRequest("admin-exposed@example.com", "Secret123!"));
 
-        Assert.Equal(PermissionCodes.All.OrderBy(c => c, StringComparer.Ordinal), login.User.Permissions);
+        Assert.Equal(PermissionDefaults.Admin.OrderBy(c => c, StringComparer.Ordinal), login.User.Permissions);
     }
 
     [Fact]
-    public async Task Login_StaffUser_GetsOnlyServiceRecordRegistration()
+    public async Task Login_StaffUser_GetsOnlyTheBillDefaults()
     {
         var registration = await _authService.RegisterAsync(new RegisterRequest("Barbero", "barbero-perms@example.com", "Secret123!", null));
 
@@ -339,8 +340,10 @@ public sealed class AuthServiceTests : IDisposable
             .Where(c => c.Type == PermissionClaimTypes.Permission)
             .Select(c => c.Value)
             .ToArray();
-        Assert.Equal([PermissionCodes.ServiceRecordsRegister], tokenPermissions);
-        Assert.Equal([PermissionCodes.ServiceRecordsRegister], login.User.Permissions);
+        // ADR-0020 Q16: Staff opens, closes and charges bills by default; never discounts (Q2).
+        string[] expected = PermissionDefaults.Staff;
+        Assert.Equal(expected, tokenPermissions);
+        Assert.Equal(expected, login.User.Permissions);
     }
 
     private async Task<Guid> RegisterAndDeactivateAsync(string fullName, string email, string password, string? phone = null)

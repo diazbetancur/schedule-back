@@ -1,3 +1,4 @@
+using Barbershop.Tests.Infrastructure;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Customers.Admin;
 using Barbershop.Application.Finance.Admin;
@@ -127,8 +128,8 @@ public sealed class ServiceRecordsNavigationAndRelationsTests : IDisposable
     var twin = await RegisterAsync(_haircut);
     await RegisterAsync(_beard);                                                     // other service: not related
 
-    var manual = await _income.CreateAsync(_admin.Id, new IncomeEntryCreateRequest(_haircut.Id, _barber.Id, 25000, false, _today));
-    await _income.CreateAsync(_admin.Id, new IncomeEntryCreateRequest(_haircut.Id, _otherBarber.Id, 25000, false, _today)); // other professional
+    var manual = await ManualIncomeSeed.ServiceIncomeAsync(_dbContext, _haircut.Id, _barber.Id, 25000, _today, _admin.Id);
+    await ManualIncomeSeed.ServiceIncomeAsync(_dbContext, _haircut.Id, _otherBarber.Id, 25000, _today, _admin.Id); // other professional
 
     var customer = await _customers.CreateAsync(_admin.Id, new CustomerCreateRequest("Carla", "3001234567", "carla@example.com"));
     var plan = await _plans.CreateAsync(new MembershipPlanUpsertRequest("Oro", null, 250000, "Pool", 10, 90, Terms, null, [new(_haircut.Id, null)], []));

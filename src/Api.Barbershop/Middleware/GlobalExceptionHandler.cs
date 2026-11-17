@@ -96,6 +96,7 @@ public sealed partial class GlobalExceptionHandler : IExceptionHandler
         BadRequestException => (StatusCodes.Status400BadRequest, "Invalid request", "invalid_request"),
         ArgumentException => (StatusCodes.Status400BadRequest, "Invalid request", "invalid_request"),
         ConflictException => (StatusCodes.Status409Conflict, "Conflict", "conflict"),
+        GoneException => (StatusCodes.Status410Gone, "Gone", "gone"),
         UnauthorizedException => (StatusCodes.Status401Unauthorized, "Unauthorized", "unauthorized"),
         TooManyRequestsException => (StatusCodes.Status429TooManyRequests, "Too many requests", "too_many_requests"),
         NotFoundException => (StatusCodes.Status404NotFound, "Resource not found", "resource_not_found"),

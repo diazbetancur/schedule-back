@@ -294,11 +294,15 @@ public sealed class ReviewEligibilityTests : IDisposable
         new CustomerAppointmentCreateRequest(staffProfileId, ServiceOfferingTestData.Corte, ToUtc(date, hour, minute), null));
   }
 
+  /// <summary>
+  /// The bookings here are on a future day (a customer cannot book the past) and ADR-0018 D2 refuses completing those
+  /// through the service, so the test data marks it completed directly: what is under test is the review eligibility.
+  /// </summary>
   private async Task CompleteAppointmentAsync(Guid appointmentId)
   {
-    await _adminAppointmentsService.UpdateStatusAsync(
-        appointmentId,
-        new AppointmentStatusUpdateRequest(AppointmentStatus.Completed));
+    var appointment = await _dbContext.Appointments.SingleAsync(candidate => candidate.Id == appointmentId);
+    appointment.UpdateStatus(AppointmentStatus.Completed, CurrentUtc.UtcDateTime);
+    await _dbContext.SaveChangesAsync();
   }
 
   private static DateOnly CurrentDate => DateOnly.FromDateTime(CurrentUtc.UtcDateTime);

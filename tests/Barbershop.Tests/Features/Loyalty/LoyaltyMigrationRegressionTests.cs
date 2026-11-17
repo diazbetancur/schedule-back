@@ -44,7 +44,13 @@ public sealed class LoyaltyMigrationRegressionTests
     var history = await SeedHistoryWithTheOldSchemaAsync(db);
     var servicesBefore = await SnapshotAsync(db, "SELECT \"Id\", \"Name\", \"BasePrice\", \"BusinessPercentage\", \"IsActive\", \"IsDeleted\" FROM public.services ORDER BY \"Id\"");
     var plansBefore = await SnapshotAsync(db, "SELECT \"Id\", \"Name\", \"Price\", \"Mode\", \"PoolQuantity\", \"DefaultDurationDays\", \"IsActive\", \"IsDeleted\" FROM public.membership_plans ORDER BY \"Id\"");
-    var incomeBefore = await SnapshotAsync(db, "SELECT * FROM public.income_entries ORDER BY \"Id\"");
+    // ADR-0020 adds nullable columns to income_entries later: only the columns that exist now are compared.
+    var incomeColumns = string.Join(", ", (await db.Database.SqlQuery<string>($"""
+        SELECT column_name AS "Value" FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'income_entries' ORDER BY ordinal_position
+        """).ToListAsync()).Select(column => $"\"{column}\""));
+    var incomeSql = $"SELECT {incomeColumns} FROM public.income_entries ORDER BY \"Id\"";
+    var incomeBefore = await SnapshotAsync(db, incomeSql);
     // The columns that exist now: later migrations may add new ones (stage 4 adds the loyalty decision), which
     // must not count as changes to the historical rows.
     var membershipColumns = string.Join(", ", (await db.Database.SqlQuery<string>($"""
@@ -59,7 +65,7 @@ public sealed class LoyaltyMigrationRegressionTests
     // Historical rows are untouched.
     Assert.Equal(servicesBefore, await SnapshotAsync(db, "SELECT \"Id\", \"Name\", \"BasePrice\", \"BusinessPercentage\", \"IsActive\", \"IsDeleted\" FROM public.services ORDER BY \"Id\""));
     Assert.Equal(plansBefore, await SnapshotAsync(db, "SELECT \"Id\", \"Name\", \"Price\", \"Mode\", \"PoolQuantity\", \"DefaultDurationDays\", \"IsActive\", \"IsDeleted\" FROM public.membership_plans ORDER BY \"Id\""));
-    Assert.Equal(incomeBefore, await SnapshotAsync(db, "SELECT * FROM public.income_entries ORDER BY \"Id\""));
+    Assert.Equal(incomeBefore, await SnapshotAsync(db, incomeSql));
     Assert.Equal(membershipsBefore, await SnapshotAsync(db, membershipsSql));
 
     // Existing services and membership types, deleted ones included, grant no points until configured.

@@ -49,7 +49,8 @@ public sealed record CustomerClaimView(
     DateTime? DecidedAt,
     string? DecidedByName,
     string? DecisionNotes,
-    uint Version);
+    uint Version,
+    bool IsSelfApproved = false);
 
 /// <summary>
 /// A profile the claim may belong to, reduced to what identifies it (hints only). <c>IsLinked</c> profiles are shown so

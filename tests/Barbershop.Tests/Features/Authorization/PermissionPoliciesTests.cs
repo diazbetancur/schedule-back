@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using Api.Barbershop.Configuration;
 using Barbershop.Application.Auth;
 using Barbershop.Domain.Users;
@@ -34,7 +34,6 @@ public sealed class PermissionPoliciesTests
   {
     string[] expected =
     [
-      PermissionCodes.SalesRegister,
       PermissionCodes.ServiceRecordsRegister,
       PermissionCodes.ServiceRecordsApprove,
       PermissionCodes.LoyaltySettingsManage,
@@ -44,6 +43,17 @@ public sealed class PermissionPoliciesTests
       PermissionCodes.LoyaltyPointsAdjust,
       PermissionCodes.MembershipPaymentsConfirm,
       PermissionCodes.CustomerClaimsApprove,
+      PermissionCodes.InventoryView,
+      PermissionCodes.InventoryReceive,
+      PermissionCodes.InventoryAdjust,
+      PermissionCodes.BillsOpen,
+      PermissionCodes.BillsClose,
+      PermissionCodes.BillsCharge,
+      PermissionCodes.BillsDiscount,
+      PermissionCodes.BillsManage,
+      PermissionCodes.BillsApprove,
+      PermissionCodes.BillsUnapprove,
+      PermissionCodes.BillsVoid,
     ];
 
     Assert.Equal(expected.OrderBy(code => code, StringComparer.Ordinal), PermissionCodes.All.OrderBy(code => code, StringComparer.Ordinal));
@@ -62,14 +72,21 @@ public sealed class PermissionPoliciesTests
       PermissionCodes.LoyaltyPointsAdjust,
       PermissionCodes.MembershipPaymentsConfirm,
       PermissionCodes.CustomerClaimsApprove,
+      PermissionCodes.InventoryAdjust,
+      PermissionCodes.BillsApprove,
+      PermissionCodes.BillsUnapprove,
+      PermissionCodes.BillsVoid,
     ];
 
     Assert.Equal(expected.OrderBy(code => code, StringComparer.Ordinal), PermissionCodes.Critical.OrderBy(code => code, StringComparer.Ordinal));
     Assert.All(PermissionCodes.Critical, code => Assert.Contains(code, PermissionCodes.All));
     // Existing and everyday permissions keep their token-only policies.
-    Assert.DoesNotContain(PermissionCodes.SalesRegister, PermissionCodes.Critical);
+    Assert.DoesNotContain(PermissionCodes.BillsOpen, PermissionCodes.Critical);
+    Assert.DoesNotContain(PermissionCodes.BillsDiscount, PermissionCodes.Critical);
     Assert.DoesNotContain(PermissionCodes.ServiceRecordsRegister, PermissionCodes.Critical);
     Assert.DoesNotContain(PermissionCodes.LoyaltyRewardsManage, PermissionCodes.Critical);
+    Assert.DoesNotContain(PermissionCodes.InventoryView, PermissionCodes.Critical);
+    Assert.DoesNotContain(PermissionCodes.InventoryReceive, PermissionCodes.Critical);
   }
 
   [Fact]
@@ -78,7 +95,10 @@ public sealed class PermissionPoliciesTests
     var policyNames = PermissionCodes.All.Select(PermissionPolicyNames.For).ToArray();
 
     Assert.Equal(policyNames.Length, policyNames.Distinct(StringComparer.Ordinal).Count());
-    Assert.Equal("SalesRegisterPolicy", PermissionPolicyNames.For(PermissionCodes.SalesRegister));
+    Assert.Equal("BillsOpenPolicy", PermissionPolicyNames.For(PermissionCodes.BillsOpen));
+    // ADR-0020 Q16: retired codes have no policy and are not in the catalog.
+    Assert.DoesNotContain("sales.register", PermissionCodes.All);
+    Assert.Throws<ArgumentException>(() => PermissionPolicyNames.For("sales.register"));
     Assert.Throws<ArgumentException>(() => PermissionPolicyNames.For("unknown.permission"));
     // Replaced by separate approve and deliver permissions before it ever shipped.
     Assert.DoesNotContain("loyalty.redemptions.manage", PermissionCodes.All);

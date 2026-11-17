@@ -69,12 +69,18 @@ public sealed class ServiceCatalogMigrationTests
     {
       ["services"] = ["GeneralServiceId"],
       ["appointments"] = ["GeneralServiceId", "GeneralServiceNameSnapshot", "ReservedDurationMinutes"],
-      ["service_records"] = ["GeneralServiceId", "ApprovedGeneralServiceId"],
+      // ADR-0018 D1: a later additive migration gives every record IsSelfApproved = false.
+      ["service_records"] = ["GeneralServiceId", "ApprovedGeneralServiceId", "IsSelfApproved"],
+      // ADR-0018 D11: the same later migration gives every redemption and claim IsSelfApproved = false.
+      ["loyalty_redemptions"] = ["IsSelfApproved"],
+      ["customer_claims"] = ["IsSelfApproved"],
     });
-    Assert.Equal(before.Keys.Order(), after.Keys.Except(NewTables).Order());
+    // ADR-0019 and ADR-0020: later additive migrations create user_notification_preferences, product_stock and
+    // inventory_movements (empty here).
+    Assert.Equal(before.Keys.Order(), after.Keys.Except(NewTables).Except(MigrationSnapshot.LaterTables).Order());
     foreach (var (table, rows) in before)
     {
-      Assert.True(rows.SequenceEqual(after[table]), $"{table} changed");
+      Assert.True(MigrationSnapshot.SameRows(rows, after[table]), $"{table} changed");
     }
 
     // Every rate, whatever its state or name, is attached to the provisional "Corte".

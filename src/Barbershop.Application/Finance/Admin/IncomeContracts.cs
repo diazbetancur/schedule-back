@@ -1,8 +1,10 @@
 namespace Barbershop.Application.Finance.Admin;
 
-// Kind is "Service" or "MembershipSale". Service income has a service and a professional; a membership
-// sale has neither, is 100% business and never produces a professional share. ServiceRecordId is set when the
-// income was created by confirming a service record: it is then managed from there and cannot be edited here.
+// Kind is "Service", "MembershipSale", "ProductSale" or "Tip". Service income has a service and a professional; a
+// membership sale has neither, is 100% business and never produces a professional share. A product sale (100% business)
+// and a tip (100% of the professional) always come from an approved bill (ADR-0020). ServiceRecordId or BillId is set
+// when the income was created by confirming a service record or approving a bill: it is then managed from there and
+// cannot be edited here. CommissionBase is the price before discounts the commission was computed on (P7).
 
 public sealed record IncomeEntryView(
     Guid Id,
@@ -20,7 +22,15 @@ public sealed record IncomeEntryView(
     DateTime CreatedAt,
     DateTime? UpdatedAt,
     string Kind,
-    Guid? ServiceRecordId = null);
+    Guid? ServiceRecordId = null,
+    bool IsSelfApproved = false,
+    Guid? BillId = null,
+    string? BillNumber = null,
+    string? ProductName = null,
+    int? Quantity = null,
+    int? CommissionBase = null,
+    /// <summary>ADR-0020 Q8: this income is the counter-entry of that one (its bill was unapproved).</summary>
+    Guid? ReversesIncomeEntryId = null);
 
 /// <summary>
 /// <c>Kind</c> is optional: clients that predate membership sales omit it and get a service income.

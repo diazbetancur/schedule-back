@@ -11,10 +11,10 @@ public static class AdminMembershipsEndpoints
     public static RouteGroupBuilder MapAdminMembershipsEndpoints(this RouteGroupBuilder api)
     {
         var customerMemberships = api.MapGroup("/admin/customers/{customerId:guid}/memberships")
-            .WithTags("Admin")
-            .RequireAuthorization(AuthPolicyNames.Admin);
+            .WithTags("Admin");
 
         customerMemberships.MapGet(string.Empty, GetCustomerMembershipsAsync)
+            .RequireAuthorization(AuthPolicyNames.CustomerLoyaltyOrPaymentsAccess)
             .WithName("GetAdminCustomerMemberships")
             .Produces<PagedResult<CustomerMembershipSummaryView>>(StatusCodes.Status200OK)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity)
@@ -23,6 +23,7 @@ public static class AdminMembershipsEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         customerMemberships.MapPost(string.Empty, SellAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("SellAdminCustomerMembership")
             .Produces<CustomerMembershipDetailView>(StatusCodes.Status201Created)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -32,16 +33,17 @@ public static class AdminMembershipsEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         var memberships = api.MapGroup("/admin/memberships")
-            .WithTags("Admin")
-            .RequireAuthorization(AuthPolicyNames.Admin);
+            .WithTags("Admin");
 
         memberships.MapGet("/income-candidates", GetIncomeCandidatesAsync)
+            .RequireAuthorization(AuthPolicyNames.CustomerLoyaltyOrPaymentsAccess)
             .WithName("GetAdminMembershipIncomeCandidates")
             .Produces<IReadOnlyList<MembershipIncomeCandidateView>>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         memberships.MapGet("/{membershipId:guid}", GetByIdAsync)
+            .RequireAuthorization(AuthPolicyNames.CustomerLoyaltyOrPaymentsAccess)
             .WithName("GetAdminMembershipById")
             .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -49,6 +51,7 @@ public static class AdminMembershipsEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         memberships.MapPost("/{membershipId:guid}/activate", ActivateAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("ActivateAdminMembership")
             .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -58,6 +61,7 @@ public static class AdminMembershipsEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         memberships.MapPost("/{membershipId:guid}/annul", AnnulAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("AnnulAdminMembership")
             .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -79,6 +83,7 @@ public static class AdminMembershipsEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         memberships.MapPost("/{membershipId:guid}/income-unlink", UnlinkIncomeAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("UnlinkAdminMembershipIncome")
             .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -88,6 +93,7 @@ public static class AdminMembershipsEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         memberships.MapPost("/{membershipId:guid}/consumptions", ConsumeAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("ConsumeAdminMembershipService")
             .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -97,6 +103,7 @@ public static class AdminMembershipsEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         memberships.MapPost("/{membershipId:guid}/consumptions/{consumptionId:guid}/reverse", ReverseConsumptionAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("ReverseAdminMembershipConsumption")
             .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -106,6 +113,7 @@ public static class AdminMembershipsEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         memberships.MapPost("/{membershipId:guid}/gifts/{giftId:guid}/deliveries", DeliverGiftAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("DeliverAdminMembershipGift")
             .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)
@@ -115,6 +123,7 @@ public static class AdminMembershipsEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden);
 
         memberships.MapPost("/{membershipId:guid}/gifts/{giftId:guid}/deliveries/{deliveryId:guid}/reverse", ReverseGiftDeliveryAsync)
+            .RequireAuthorization(AuthPolicyNames.Admin)
             .WithName("ReverseAdminMembershipGiftDelivery")
             .Produces<CustomerMembershipDetailView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound)

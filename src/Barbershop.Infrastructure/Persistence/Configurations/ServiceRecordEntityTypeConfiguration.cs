@@ -72,6 +72,8 @@ internal sealed class ServiceRecordConfiguration : IEntityTypeConfiguration<Serv
     builder.Property(x => x.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
     builder.Property(x => x.OperationType).HasConversion<string>().HasMaxLength(32);
     builder.Property(x => x.AccruesLoyaltyPoints).HasDefaultValue(false);
+    // ADR-0018 D1: existing records were never self-approved.
+    builder.Property(x => x.IsSelfApproved).HasDefaultValue(false);
     builder.Property(x => x.RegisteredAt).HasColumnType("timestamp with time zone").IsRequired();
     builder.Property(x => x.ApprovedAt).HasColumnType("timestamp with time zone");
     builder.Property(x => x.RejectedAt).HasColumnType("timestamp with time zone");

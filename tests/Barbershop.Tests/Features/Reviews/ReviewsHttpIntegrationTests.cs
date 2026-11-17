@@ -536,11 +536,12 @@ public sealed class ReviewsHttpIntegrationTests
   {
     await WithScopeAsync(factory, async serviceProvider =>
     {
-      var appointmentService = serviceProvider.GetRequiredService<IAdminAppointmentsService>();
-
-      await appointmentService.UpdateStatusAsync(
-              appointmentId,
-              new AppointmentStatusUpdateRequest(AppointmentStatus.Completed));
+      // Future bookings cannot be completed through the service (ADR-0018 D2); the test data marks it directly.
+      var dbContext = serviceProvider.GetRequiredService<AppDbContext>();
+      var appointment = await Microsoft.EntityFrameworkCore.EntityFrameworkQueryableExtensions.SingleAsync(
+          dbContext.Appointments, candidate => candidate.Id == appointmentId);
+      appointment.UpdateStatus(AppointmentStatus.Completed, DateTime.UtcNow);
+      await dbContext.SaveChangesAsync();
     });
   }
 

@@ -48,7 +48,8 @@ public sealed record ServiceRecordApprovalView(
     int? RewardBusinessPercentageSnapshot = null,
     int? RewardProfessionalCommission = null,
     Guid? GeneralServiceId = null,
-    string? GeneralServiceName = null);
+    string? GeneralServiceName = null,
+    bool IsSelfApproved = false);
 
 /// <summary>
 /// <c>SuggestedCustomerId</c>: for a pending record without customer registered from an appointment booked by an app

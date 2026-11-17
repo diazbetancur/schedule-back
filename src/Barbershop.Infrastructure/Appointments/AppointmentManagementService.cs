@@ -8,6 +8,7 @@ using Barbershop.Domain.Common;
 using Barbershop.Domain.Staff;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Availability;
+using Barbershop.Infrastructure.Bills;
 using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.Staff;
 using Microsoft.EntityFrameworkCore;
@@ -25,6 +26,8 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
 {
   private const string SlotNotAvailableMessage = "Ese horario ya no está disponible. Elige otro.";
   private const string ServiceNotOfferedMessage = "El profesional no ofrece este servicio en este momento. Elige otro servicio.";
+  internal const string CompleteFutureAppointmentMessage =
+      "Solo puedes marcar como completada una cita de hoy. Esta cita es de un día futuro.";
   private const string StaffCannotChangeDurationMessage = "Solo administración puede cambiar la duración de la cita.";
 
   private readonly AppDbContext _dbContext;
@@ -96,10 +99,12 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       Guid currentUserId, CustomerAppointmentListQuery query, CancellationToken cancellationToken)
   {
     var page = PageRequest.Create(query.Page, query.PageSize);
-    var scope = ListFilters.ParseOption(query.Scope, "scope", CustomerAppointmentScopes.Upcoming, CustomerAppointmentScopes.Past);
+    var scope = ListFilters.ParseOption(
+        query.Scope, "scope", CustomerAppointmentScopes.Upcoming, CustomerAppointmentScopes.Past, CustomerAppointmentScopes.Cancelled);
     var status = ListFilters.ParseEnumList<AppointmentStatus>(query.Status, "status");
-    // Upcoming is the queue still to attend (no default range); the rest is history (30-day windows).
-    var range = scope == CustomerAppointmentScopes.Upcoming
+    // Upcoming is the queue still to attend and Cancelled every cancellation (ADR-0018 D3): no default range. The rest
+    // is history (30-day windows).
+    var range = scope is CustomerAppointmentScopes.Upcoming or CustomerAppointmentScopes.Cancelled
         ? HistoryRange.ResolveOptional(query.From, query.To)
         : HistoryRange.Resolve(query.From, query.To, TodayInBogota());
 
@@ -118,6 +123,10 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     {
       appointments = appointments.Where(a =>
           a.StartsAt > nowUtc && (a.Status == AppointmentStatus.Pending || a.Status == AppointmentStatus.Confirmed));
+    }
+    else if (scope == CustomerAppointmentScopes.Cancelled)
+    {
+      appointments = appointments.Where(a => a.Status == AppointmentStatus.Cancelled);
     }
     else if (scope == CustomerAppointmentScopes.Past)
     {
@@ -344,7 +353,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
             cancellationToken)
         ?? throw new KeyNotFoundException("No encontramos la cita.");
 
-    return await UpdateStatusCoreAsync(appointment, staffProfile, request, cancellationToken);
+    return await UpdateStatusCoreAsync(appointment, staffProfile, request, currentUserId, cancellationToken);
   }
 
   async Task<PagedResult<AppointmentView>> IAdminAppointmentsService.GetAsync(
@@ -438,6 +447,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
   async Task<AppointmentView> IAdminAppointmentsService.UpdateStatusAsync(
       Guid appointmentId,
       AppointmentStatusUpdateRequest request,
+      Guid actingUserId,
       CancellationToken cancellationToken)
   {
     var appointment = await _dbContext.Appointments
@@ -448,7 +458,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     // (the customer is notified as usual), so the profile is loaded whatever its state.
     var staffProfile = await LoadStaffProfileAnyStateAsync(appointment.StaffProfileId, cancellationToken);
 
-    return await UpdateStatusCoreAsync(appointment, staffProfile, request, cancellationToken);
+    return await UpdateStatusCoreAsync(appointment, staffProfile, request, actingUserId, cancellationToken);
   }
 
   private async Task<StaffProfile> LoadStaffProfileAnyStateAsync(Guid staffProfileId, CancellationToken cancellationToken)
@@ -669,6 +679,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       Appointment appointment,
       StaffProfile staffProfile,
       AppointmentStatusUpdateRequest request,
+      Guid actingUserId,
       CancellationToken cancellationToken)
   {
     var allowedStatuses = new[]
@@ -700,7 +711,26 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       });
     }
 
-    appointment.UpdateStatus(request.Status, _timeProvider.GetUtcNow().UtcDateTime);
+    // ADR-0018 D2 (SONDA BUG-067): an appointment of a later day cannot be completed yet (Bogotá dates). Past days
+    // that were left open can still be closed. Applies to the professional and to the administration alike.
+    if (request.Status == AppointmentStatus.Completed
+        && DateOnly.FromDateTime(BogotaClock.ToLocal(appointment.StartsAt)) > TodayInBogota())
+    {
+      throw new ValidationProblemException(new Dictionary<string, string[]>
+      {
+        ["status"] = [CompleteFutureAppointmentMessage]
+      });
+    }
+
+    var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+    appointment.UpdateStatus(request.Status, utcNow);
+    if (request.Status == AppointmentStatus.Completed)
+    {
+      // ADR-0020 BUG-092: completing an appointment opens its bill (unless it already has one or older service records),
+      // saved together with the new status, so a completed appointment is never left without anything to charge.
+      await BillsService.OpenForCompletedAppointmentAsync(_dbContext, appointment, actingUserId, utcNow, cancellationToken);
+    }
+
     await _dbContext.SaveChangesAsync(cancellationToken);
 
     if (request.Status == AppointmentStatus.Cancelled)

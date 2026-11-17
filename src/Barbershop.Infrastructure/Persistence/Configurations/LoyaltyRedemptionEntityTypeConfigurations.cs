@@ -94,7 +94,7 @@ internal sealed class LoyaltyRedemptionConfiguration : IEntityTypeConfiguration<
           + "AND \"CancelledAt\" IS NULL AND \"ExpiredAt\" IS NULL) "
           + "OR (\"Status\" = 'Delivered' AND \"ApprovedAt\" IS NOT NULL AND \"DeliveredAt\" IS NOT NULL "
           + "AND \"DeliveredByUserId\" IS NOT NULL AND \"RejectedAt\" IS NULL AND \"CancelledAt\" IS NULL AND \"ExpiredAt\" IS NULL "
-          + "AND ((\"RewardKindSnapshot\" = 'Service' AND \"ServiceRecordId\" IS NOT NULL) "
+          + "AND ((\"RewardKindSnapshot\" = 'Service' AND (\"ServiceRecordId\" IS NOT NULL OR \"BillLineId\" IS NOT NULL)) "
           + "OR (\"RewardKindSnapshot\" = 'Other' AND \"ServiceRecordId\" IS NULL))) "
           + "OR (\"Status\" = 'Rejected' AND \"RejectedAt\" IS NOT NULL AND \"RejectedByUserId\" IS NOT NULL "
           + "AND \"RejectionReason\" IS NOT NULL AND \"ApprovedAt\" IS NULL AND \"DeliveredAt\" IS NULL "
@@ -106,6 +106,10 @@ internal sealed class LoyaltyRedemptionConfiguration : IEntityTypeConfiguration<
       tableBuilder.HasCheckConstraint(
           "ck_loyalty_redemptions_service_record_shape",
           "\"ServiceRecordId\" IS NULL OR (\"Status\" = 'Delivered' AND \"RewardKindSnapshot\" = 'Service')");
+      // ADR-0020: delivered by an approved bill; never by a service record and a bill at the same time.
+      tableBuilder.HasCheckConstraint(
+          "ck_loyalty_redemptions_bill_line_shape",
+          "\"BillLineId\" IS NULL OR (\"Status\" = 'Delivered' AND \"ServiceRecordId\" IS NULL)");
     });
 
     builder.HasKey(x => x.Id);
@@ -129,6 +133,7 @@ internal sealed class LoyaltyRedemptionConfiguration : IEntityTypeConfiguration<
     builder.Property(x => x.CancellationReason).HasMaxLength(LoyaltyRedemption.MaxReasonLength);
     builder.Property(x => x.ExpiredAt).HasColumnType("timestamp with time zone");
     builder.Ignore(x => x.IsPending);
+    builder.Property(x => x.ReopenedAt).HasColumnType("timestamp with time zone");
     builder.Ignore(x => x.CurrentDeadline);
     builder.Property(x => x.Version).IsRowVersion();
 
@@ -136,6 +141,12 @@ internal sealed class LoyaltyRedemptionConfiguration : IEntityTypeConfiguration<
     builder.HasIndex(x => new { x.RequestedByUserId, x.IdempotencyKey }).IsUnique();
     // A service record delivers at most one redemption.
     builder.HasIndex(x => x.ServiceRecordId).IsUnique().HasFilter("\"ServiceRecordId\" IS NOT NULL");
+    // A bill line delivers at most one redemption.
+    builder.HasIndex(x => x.BillLineId).IsUnique().HasFilter("\"BillLineId\" IS NOT NULL");
+    builder.HasOne<global::Barbershop.Domain.Bills.BillLine>()
+        .WithMany()
+        .HasForeignKey(x => x.BillLineId)
+        .OnDelete(DeleteBehavior.Restrict);
     builder.HasIndex(x => new { x.CustomerId, x.Status });
     builder.HasIndex(x => new { x.Status, x.RequestedAt });
 
@@ -143,6 +154,7 @@ internal sealed class LoyaltyRedemptionConfiguration : IEntityTypeConfiguration<
     builder.HasOne<LoyaltyReward>().WithMany().HasForeignKey(x => x.RewardId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<User>().WithMany().HasForeignKey(x => x.RequestedByUserId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<User>().WithMany().HasForeignKey(x => x.ApprovedByUserId).OnDelete(DeleteBehavior.Restrict);
+    builder.Property(x => x.IsSelfApproved).HasDefaultValue(false);
     builder.HasOne<User>().WithMany().HasForeignKey(x => x.DeliveredByUserId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<User>().WithMany().HasForeignKey(x => x.RejectedByUserId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<User>().WithMany().HasForeignKey(x => x.CancelledByUserId).OnDelete(DeleteBehavior.Restrict);
@@ -163,6 +175,7 @@ internal sealed class LoyaltyRedemptionAllocationConfiguration : IEntityTypeConf
     builder.Property(x => x.Id).ValueGeneratedNever();
 
     // One row per lot of a redemption: what it reserved there.
+    builder.Property(x => x.SupersededAt).HasColumnType("timestamp with time zone");
     builder.HasIndex(x => new { x.RedemptionId, x.LotId }).IsUnique();
     builder.HasIndex(x => x.LotId);
 

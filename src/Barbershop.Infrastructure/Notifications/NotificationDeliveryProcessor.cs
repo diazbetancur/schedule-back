@@ -91,6 +91,14 @@ internal sealed class NotificationDeliveryProcessor
       return;
     }
 
+    // ADR-0019 N4: checked when sending, so switching a category off also stops what was already queued. The
+    // notification stays in the bell and the history.
+    if (await IsSwitchedOffAsync(delivery, cancellationToken))
+    {
+      delivery.MarkSkipped(nowUtc, "The user switched off this kind of notification.");
+      return;
+    }
+
     var timeToLive = delivery.ExpiresAt - nowUtc;
     var message = new PushNotificationMessage(
         delivery.Title,
@@ -148,5 +156,28 @@ internal sealed class NotificationDeliveryProcessor
     }
 
     delivery.MarkSent(nowUtc, result.DeliveredSubscriptionIds);
+  }
+
+  private async Task<bool> IsSwitchedOffAsync(NotificationDelivery delivery, CancellationToken cancellationToken)
+  {
+    if (delivery.UserNotificationId is not { } notificationId)
+    {
+      return false;
+    }
+
+    var type = await _dbContext.UserNotifications.AsNoTracking()
+        .Where(notification => notification.Id == notificationId)
+        .Select(notification => notification.Type)
+        .SingleOrDefaultAsync(cancellationToken);
+    if (type is null)
+    {
+      return false;
+    }
+
+    var category = NotificationCategories.ForType(type);
+    return NotificationCategories.IsOptional(category)
+        && await _dbContext.UserNotificationPreferences.AsNoTracking().AnyAsync(
+            preference => preference.UserId == delivery.UserId && preference.Category == category && !preference.PushEnabled,
+            cancellationToken);
   }
 }

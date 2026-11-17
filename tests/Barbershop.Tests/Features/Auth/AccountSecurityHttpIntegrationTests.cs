@@ -134,16 +134,16 @@ public sealed class AccountSecurityHttpIntegrationTests
     Assert.Empty(customer.User.Permissions);
 
     var admin = await RegisterAdminAsync(context.Client, context.Factory, "exposed");
-    Assert.Equal(PermissionCodes.All.OrderBy(code => code, StringComparer.Ordinal), admin.User.Permissions);
+    Assert.Equal(PermissionDefaults.Admin.OrderBy(code => code, StringComparer.Ordinal), admin.User.Permissions);
 
     AuthenticateAs(context.Client, admin.AccessToken);
     var me = await context.Client.GetFromJsonAsync<AuthUserResponse>("/api/v1/auth/me");
     Assert.NotNull(me);
-    Assert.Equal(PermissionCodes.All.OrderBy(code => code, StringComparer.Ordinal), me!.Permissions);
+    Assert.Equal(PermissionDefaults.Admin.OrderBy(code => code, StringComparer.Ordinal), me!.Permissions);
   }
 
   [Fact]
-  public async Task Seed_GrantsAdminEverything_StaffOnlyServiceRegistration_AndCustomerNothing()
+  public async Task Seed_GrantsAdminEverything_StaffTheBillDefaults_AndCustomerNothing()
   {
     using var context = await CreateContextAsync();
     if (context is null) return;
@@ -160,11 +160,13 @@ public sealed class AccountSecurityHttpIntegrationTests
 
     var admin = roles.Single(role => role.Name == RoleNames.Admin);
     Assert.Equal(
-        PermissionCodes.All.OrderBy(code => code, StringComparer.Ordinal),
+        PermissionDefaults.Admin.OrderBy(code => code, StringComparer.Ordinal),
         admin.RolePermissions.Select(rp => rp.Permission.Code).OrderBy(code => code, StringComparer.Ordinal));
+    // ADR-0020 Q16: Staff also opens, closes and charges bills by default (never discounts, Q2).
     Assert.Equal(
-        [PermissionCodes.ServiceRecordsRegister],
-        roles.Single(role => role.Name == RoleNames.Staff).RolePermissions.Select(rp => rp.Permission.Code));
+        PermissionDefaults.Staff
+            .OrderBy(code => code, StringComparer.Ordinal),
+        roles.Single(role => role.Name == RoleNames.Staff).RolePermissions.Select(rp => rp.Permission.Code).OrderBy(code => code, StringComparer.Ordinal));
     Assert.Empty(roles.Single(role => role.Name == RoleNames.Customer).RolePermissions);
   }
 

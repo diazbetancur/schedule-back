@@ -186,7 +186,7 @@ public sealed class AdminLoyaltyHttpIntegrationTests
 
     AuthenticateAs(context.Client, admin.AccessToken);
     using (var revoke = await context.Client.PutAsJsonAsync(
-        $"/api/v1/admin/roles/{managerRole.Id}", new RoleUpdateRequest("Fidelización", [permissions[PermissionCodes.SalesRegister]])))
+        $"/api/v1/admin/roles/{managerRole.Id}", new RoleUpdateRequest("Fidelización", [permissions[PermissionCodes.InventoryView]])))
     {
       Assert.Equal(HttpStatusCode.OK, revoke.StatusCode);
     }

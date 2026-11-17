@@ -65,7 +65,7 @@ public sealed class LoyaltyWalletServiceTests : IDisposable
   // ── Membership: first income link ──────────────────────────────────────────────────────────
 
   [Fact]
-  public async Task TheSaleCopiesThePlanPoints_AndOnlyTheFirstIncomeLinkCreditsThem_UnlinkingKeepsThem()
+  public async Task TheSaleCopiesThePlanPoints_TheFirstIncomeLinkCreditsThem_UnlinkingWithdrawsThem_AndRelinkingGivesThemBack()
   {
     await SetProgramAsync(enabled: true);
     var customer = await CreateCustomerAsync("Carla");
@@ -75,8 +75,15 @@ public sealed class LoyaltyWalletServiceTests : IDisposable
     var linked = await _memberships.LinkIncomeAsync(_admin.Id, membership.Id, new MembershipIncomeLinkRequest(await AddIncomeAsync()));
     Assert.Equal(("Accrued", 40), (linked.Loyalty!.Decision, linked.Loyalty.AccruedPoints));
 
-    // Unlinking keeps the points; linking again (even another income) credits nothing more.
-    await _memberships.UnlinkIncomeAsync(_admin.Id, membership.Id, new MembershipIncomeUnlinkRequest());
+    // ADR-0018 D5 (SONDA BUG-104): the points follow the payment. Unlinking withdraws them…
+    var unlinked = await _memberships.UnlinkIncomeAsync(_admin.Id, membership.Id, new MembershipIncomeUnlinkRequest());
+    Assert.Equal(0, (await _wallet.GetWalletAsync(customer.Id)).AvailablePoints);
+    Assert.Equal(0, (await _dbContext.LoyaltyLots.SingleAsync()).RemainingPoints);
+    Assert.Equal(40, (await _dbContext.LoyaltyMovements.SingleAsync(movement => movement.Type == LoyaltyMovementType.MembershipUnlinkWithdrawal)).Points);
+    Assert.Equal("Accrued", unlinked.Loyalty!.Decision);
+    await AssertReconciledAsync();
+
+    // …and linking again (even another income) gives the same points back, in the same lot, without a second accrual.
     var relinked = await _memberships.LinkIncomeAsync(_admin.Id, membership.Id, new MembershipIncomeLinkRequest(await AddIncomeAsync()));
 
     Assert.Equal(("Accrued", 40), (relinked.Loyalty!.Decision, relinked.Loyalty.AccruedPoints));
@@ -84,6 +91,7 @@ public sealed class LoyaltyWalletServiceTests : IDisposable
     Assert.Equal((customer.Id, LoyaltySourceType.Membership, membership.Id, 40), (lot.CustomerId, lot.SourceType, lot.SourceId, lot.RemainingPoints));
     Assert.Equal((Today, Today.AddDays(364)), (lot.AccruedOn, lot.ExpiresOn));
     Assert.Equal(40, (await _wallet.GetWalletAsync(customer.Id)).AvailablePoints);
+    Assert.Equal(40, (await _dbContext.LoyaltyMovements.SingleAsync(movement => movement.Type == LoyaltyMovementType.MembershipRelinkCredit)).Points);
     await AssertReconciledAsync();
   }
 
@@ -510,7 +518,9 @@ public sealed class LoyaltyWalletServiceTests : IDisposable
     foreach (var lot in await _dbContext.LoyaltyLots.AsNoTracking().ToListAsync())
     {
       var own = movements.Where(movement => movement.LotId == lot.Id).ToList();
-      Assert.Equal(lot.InitialPoints, Assert.Single(own, movement => LoyaltyMovement.LotSign(movement.Type) > 0).Points);
+      // The lot's own credit; a relink credit (ADR-0018 D5) only gives back what an unlink withdrew.
+      Assert.Equal(lot.InitialPoints, Assert.Single(own, movement => LoyaltyMovement.LotSign(movement.Type) > 0
+          && movement.Type != LoyaltyMovementType.MembershipRelinkCredit).Points);
       Assert.Equal(lot.RemainingPoints, own.Sum(movement => LoyaltyMovement.LotSign(movement.Type) * movement.Points));
     }
 

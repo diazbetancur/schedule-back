@@ -306,6 +306,12 @@ public sealed class LoyaltyRedemption
   /// <summary>For a service reward: the confirmed service record that delivered it.</summary>
   public Guid? ServiceRecordId { get; private set; }
 
+  /// <summary>
+  /// ADR-0020: the bill line that delivered this redemption, when an approved bill delivered it. A service reward is
+  /// delivered by a service record (before bills) or by a bill line, never both.
+  /// </summary>
+  public Guid? BillLineId { get; private set; }
+
   public Guid? RejectedByUserId { get; private set; }
   public DateTime? RejectedAt { get; private set; }
   public string? RejectionReason { get; private set; }
@@ -316,6 +322,9 @@ public sealed class LoyaltyRedemption
 
   /// <summary>True when the customer cancelled it themselves.</summary>
   public bool CancelledByCustomer { get; private set; }
+
+  /// <summary>ADR-0018 D11: an Admin approved or delivered their own redemption (allowed only to that role, and marked).</summary>
+  public bool IsSelfApproved { get; private set; }
 
   public DateTime? ExpiredAt { get; private set; }
 
@@ -336,7 +345,35 @@ public sealed class LoyaltyRedemption
   };
 
   /// <summary>Pending and past its deadline on <paramref name="today"/> (Bogotá), even if the job has not recorded it yet.</summary>
-  public bool IsPastDeadlineOn(DateOnly today) => CurrentDeadline is { } deadline && today > deadline;
+  public bool IsPastDeadlineOn(DateOnly today) => ReopenedAt is null && CurrentDeadline is { } deadline && today > deadline;
+
+  /// <summary>
+  /// ADR-0020 Q20: the redemption went back to Approved because the bill that delivered it was unapproved. Its delivery
+  /// deadline no longer applies: it does not expire and it can be delivered again by the corrected bill.
+  /// </summary>
+  public DateTime? ReopenedAt { get; private set; }
+
+  /// <summary>
+  /// ADR-0020 Q20: the bill that delivered it was unapproved. Back to Approved (the delivery is cleared; the bill's
+  /// postings and events keep it), in the live profile of the customer (a merge after the delivery moves it there).
+  /// </summary>
+  public void Reopen(Guid liveCustomerId, DateTime utcNow)
+  {
+    if (Status != LoyaltyRedemptionStatus.Delivered || BillLineId is null)
+    {
+      throw new InvalidOperationException("Only a redemption delivered by a bill is reopened.");
+    }
+
+    CustomerId = liveCustomerId;
+    DeliveredByUserId = null;
+    DeliveredAt = null;
+    BillLineId = null;
+    ReopenedAt = DomainValidation.EnsureUtc(utcNow, nameof(utcNow));
+    Status = LoyaltyRedemptionStatus.Approved;
+  }
+
+  /// <summary>ADR-0018 D11: the approval or delivery was made by the beneficiary (an Admin).</summary>
+  public void MarkSelfApproved() => IsSelfApproved = true;
 
   public void Approve(Guid approvedByUserId, DateTime approvedAt, DateOnly today)
   {
@@ -388,20 +425,29 @@ public sealed class LoyaltyRedemption
   /// A service reward is delivered only through its confirmed service record (<paramref name="serviceRecordId"/>);
   /// any other reward without one.
   /// </summary>
-  public void Deliver(Guid deliveredByUserId, DateTime deliveredAt, DateOnly today, Guid? serviceRecordId)
+  public void Deliver(Guid deliveredByUserId, DateTime deliveredAt, DateOnly today, Guid? serviceRecordId, Guid? billLineId = null)
   {
     EnsureTransition(LoyaltyRedemptionStatus.Delivered);
-    if ((RewardKindSnapshot == LoyaltyRewardKind.Service) != (serviceRecordId is not null))
+    if (serviceRecordId is not null && billLineId is not null)
     {
-      throw new InvalidOperationException(RewardKindSnapshot == LoyaltyRewardKind.Service
-          ? "A service reward is delivered only by confirming its service record."
-          : "Only a service reward is delivered through a service record.");
+      throw new InvalidOperationException("A redemption is delivered by a service record or by a bill line, not both.");
+    }
+
+    if ((RewardKindSnapshot == LoyaltyRewardKind.Service) && serviceRecordId is null && billLineId is null)
+    {
+      throw new InvalidOperationException("A service reward is delivered only by confirming its service record or approving its bill.");
+    }
+
+    if (RewardKindSnapshot != LoyaltyRewardKind.Service && serviceRecordId is not null)
+    {
+      throw new InvalidOperationException("Only a service reward is delivered through a service record.");
     }
 
     EnsureWithinDeadline(today);
     DeliveredByUserId = deliveredByUserId;
     DeliveredAt = DomainValidation.EnsureUtc(deliveredAt, nameof(deliveredAt));
     ServiceRecordId = serviceRecordId;
+    BillLineId = billLineId;
     Status = LoyaltyRedemptionStatus.Delivered;
   }
 
@@ -440,4 +486,12 @@ public sealed class LoyaltyRedemptionAllocation
   public Guid RedemptionId { get; private set; }
   public Guid LotId { get; private set; }
   public int Points { get; private set; }
+
+  /// <summary>
+  /// ADR-0020 Q20: a reservation consumed by a delivery that was later undone; a new allocation holds the points again.
+  /// Only allocations without it are the redemption's current reservation.
+  /// </summary>
+  public DateTime? SupersededAt { get; private set; }
+
+  public void Supersede(DateTime utcNow) => SupersededAt = DomainValidation.EnsureUtc(utcNow, nameof(utcNow));
 }

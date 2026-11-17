@@ -247,6 +247,48 @@ public sealed class ServiceCatalogManagementServiceTests : IDisposable
     Assert.False(await _dbContext.StaffServiceOfferings.AnyAsync(offering => offering.GeneralServiceId == beard.Id));
   }
 
+  /// <summary>ADR-0018 D8 (pending of BUG-079): future appointments still to attend block the deletion, with how many.</summary>
+  [Fact]
+  public async Task AGeneralServiceWithFutureAppointments_CannotBeDeleted_ButPastOrCancelledOnesDoNotBlock()
+  {
+    var beard = await _catalog.CreateGeneralServiceAsync(new GeneralServiceCreateRequest(Barberia, "Barba"));
+    var user = new Barbershop.Domain.Users.User("Barbero", "barbero-future@example.com", "hash", DateTime.UtcNow);
+    var staff = new Barbershop.Domain.Staff.StaffProfile(user.Id, "Barbero", 30, DateTime.UtcNow);
+    _dbContext.Users.Add(user);
+    _dbContext.StaffProfiles.Add(staff);
+    var now = DateTime.UtcNow;
+    Barbershop.Domain.Appointments.Appointment Book(DateTime startsAt, Barbershop.Domain.Appointments.AppointmentStatus status)
+    {
+      var appointment = new Barbershop.Domain.Appointments.Appointment(
+          staff.Id, "Cliente", startsAt, startsAt.AddMinutes(30), status, Barbershop.Domain.Appointments.AppointmentSource.Manual, now.AddDays(-10));
+      _dbContext.Appointments.Add(appointment);
+      _dbContext.Entry(appointment).Property(nameof(appointment.GeneralServiceId)).CurrentValue = beard.Id;
+      return appointment;
+    }
+
+    var tomorrow = Book(now.AddDays(1), Barbershop.Domain.Appointments.AppointmentStatus.Confirmed);
+    var nextWeek = Book(now.AddDays(7), Barbershop.Domain.Appointments.AppointmentStatus.Pending);
+    Book(now.AddDays(2), Barbershop.Domain.Appointments.AppointmentStatus.Cancelled);
+    Book(now.AddDays(-2), Barbershop.Domain.Appointments.AppointmentStatus.Completed);
+    _dbContext.StaffServiceOfferings.Add(new Barbershop.Domain.Staff.StaffServiceOffering(staff.Id, beard.Id, 20, true, now));
+    await _dbContext.SaveChangesAsync();
+
+    var two = await Assert.ThrowsAsync<ConflictException>(() => _catalog.DeleteGeneralServiceAsync(beard.Id));
+    Assert.Contains("tiene 2 citas futuras agendadas", two.Message);
+
+    nextWeek.UpdateStatus(Barbershop.Domain.Appointments.AppointmentStatus.Cancelled, now);
+    await _dbContext.SaveChangesAsync();
+    var one = await Assert.ThrowsAsync<ConflictException>(() => _catalog.DeleteGeneralServiceAsync(beard.Id));
+    Assert.Contains("tiene 1 cita futura agendada", one.Message);
+    Assert.True(await _dbContext.StaffServiceOfferings.AnyAsync(offering => offering.GeneralServiceId == beard.Id));
+
+    // Once nothing is pending ahead, it goes and the offerings are withdrawn as before.
+    tomorrow.UpdateStatus(Barbershop.Domain.Appointments.AppointmentStatus.Cancelled, now);
+    await _dbContext.SaveChangesAsync();
+    await _catalog.DeleteGeneralServiceAsync(beard.Id);
+    Assert.False(await _dbContext.StaffServiceOfferings.AnyAsync(offering => offering.GeneralServiceId == beard.Id));
+  }
+
   [Fact]
   public async Task ARate_NeedsAnExistingActiveGeneralService()
   {

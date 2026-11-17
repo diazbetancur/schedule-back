@@ -18,6 +18,7 @@ using Barbershop.Application.Notifications;
 using Barbershop.Application.Products;
 using Barbershop.Application.PublicContent;
 using Barbershop.Application.Reviews;
+using Barbershop.Application.Bills;
 using Barbershop.Application.ServiceRecords;
 using Barbershop.Application.Services.Admin;
 using Barbershop.Application.Staff.Admin;
@@ -40,6 +41,7 @@ using Barbershop.Infrastructure.Notifications;
 using Barbershop.Infrastructure.Persistence;
 using Barbershop.Infrastructure.Products;
 using Barbershop.Infrastructure.Reviews;
+using Barbershop.Infrastructure.Bills;
 using Barbershop.Infrastructure.ServiceRecords;
 using Barbershop.Infrastructure.Services;
 using Barbershop.Infrastructure.Staff;
@@ -130,6 +132,7 @@ public static class DependencyInjection
         services.AddScoped<INotificationDispatcher, NotificationDispatcher>();
         services.AddScoped<NotificationDeliveryProcessor>();
         services.AddScoped<AppointmentReminderService>();
+        services.AddScoped<CustomerExpiryReminderService>();
         services.AddOptions<NotificationWorkerOptions>()
             .Bind(configuration.GetSection(NotificationWorkerOptions.SectionName));
         services.AddHostedService<NotificationBackgroundWorker>();
@@ -154,6 +157,7 @@ public static class DependencyInjection
         services.AddScoped<IAdminServiceCatalogService, ServiceCatalogManagementService>();
         services.AddScoped<IAdminProductCatalogService, ProductCatalogManagementService>();
         services.AddScoped<IPublicProductCatalogService, PublicProductCatalogService>();
+        services.AddScoped<IAdminInventoryService, InventoryManagementService>();
         services.AddScoped<CustomerManagementService>();
         services.AddScoped<IAdminCustomersService>(serviceProvider => serviceProvider.GetRequiredService<CustomerManagementService>());
         services.AddScoped<CustomerClaimsService>();
@@ -171,6 +175,12 @@ public static class DependencyInjection
         services.AddScoped<IAdminMembershipsService, MembershipSalesService>();
         services.AddScoped<MembershipLedgerService>();
         services.AddScoped<IAdminMembershipLedgerService>(serviceProvider => serviceProvider.GetRequiredService<MembershipLedgerService>());
+        services.AddScoped<BillsService>();
+        services.AddScoped<IBillsService>(serviceProvider => serviceProvider.GetRequiredService<BillsService>());
+        services.AddScoped<IBillApprovalService>(serviceProvider => serviceProvider.GetRequiredService<BillsService>());
+        services.AddScoped<IPaymentMethodsService>(serviceProvider => serviceProvider.GetRequiredService<BillsService>());
+        services.AddScoped<IMyBillsService>(serviceProvider => serviceProvider.GetRequiredService<BillsService>());
+        services.AddScoped<IBillReportsService>(serviceProvider => serviceProvider.GetRequiredService<BillsService>());
         services.AddScoped<ServiceRecordsService>();
         services.AddScoped<IStaffServiceRecordsService>(serviceProvider => serviceProvider.GetRequiredService<ServiceRecordsService>());
         services.AddScoped<IAdminServiceRecordsService>(serviceProvider => serviceProvider.GetRequiredService<ServiceRecordsService>());

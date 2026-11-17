@@ -53,14 +53,13 @@ public sealed class PermissionRevocationPersistenceHttpIntegrationTests
       Assert.Contains(PermissionCodes.LoyaltySettingsManage, admin.User.Permissions);
 
       await RevokeAsync(factory, RoleNames.Admin, PermissionCodes.LoyaltySettingsManage);
-      await RevokeAsync(factory, RoleNames.Staff, PermissionCodes.ServiceRecordsRegister);
 
       // Login: no longer restores it.
       var afterLogin = await LoginAsync(client, email);
       AssertLacksLoyaltyPermission(afterLogin);
       Assert.Equal(HttpStatusCode.Forbidden, await GetStatusAsync(client, afterLogin.AccessToken, LoyaltySettingsUrl));
       // The rest of the Admin role is untouched.
-      Assert.Equal(PermissionCodes.All.Count - 1, afterLogin.User.Permissions.Count);
+      Assert.Equal(PermissionDefaults.Admin.Length - 1, afterLogin.User.Permissions.Count);
       Assert.Equal(HttpStatusCode.OK, await GetStatusAsync(client, afterLogin.AccessToken, "/api/v1/admin/services"));
 
       // Refresh: same.
@@ -82,7 +81,7 @@ public sealed class PermissionRevocationPersistenceHttpIntegrationTests
 
       using var scope = restarted.Services.CreateScope();
       var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-      Assert.Empty(await GrantedCodesAsync(dbContext, RoleNames.Staff));
+      Assert.DoesNotContain(PermissionCodes.ServiceRecordsRegister, await GrantedCodesAsync(dbContext, RoleNames.Staff));
       Assert.DoesNotContain(PermissionCodes.LoyaltySettingsManage, await GrantedCodesAsync(dbContext, RoleNames.Admin));
       // The catalog itself is complete: nothing was re-created or duplicated.
       Assert.Equal(PermissionCodes.All.Count, await dbContext.Permissions.CountAsync());
@@ -109,10 +108,10 @@ public sealed class PermissionRevocationPersistenceHttpIntegrationTests
       var permissions = (await client.GetFromJsonAsync<List<PermissionView>>("/api/v1/admin/permissions"))!
           .ToDictionary(permission => permission.Code, permission => permission.Id, StringComparer.Ordinal);
       using var create = await client.PostAsJsonAsync("/api/v1/admin/roles", new RoleCreateRequest(
-          "Fidelización", [permissions[PermissionCodes.LoyaltySettingsManage], permissions[PermissionCodes.SalesRegister]]));
+          "Fidelización", [permissions[PermissionCodes.LoyaltySettingsManage], permissions[PermissionCodes.InventoryView]]));
       roleId = (await create.Content.ReadFromJsonAsync<RoleView>())!.Id;
       using var update = await client.PutAsJsonAsync(
-          $"/api/v1/admin/roles/{roleId}", new RoleUpdateRequest("Fidelización", [permissions[PermissionCodes.SalesRegister]]));
+          $"/api/v1/admin/roles/{roleId}", new RoleUpdateRequest("Fidelización", [permissions[PermissionCodes.InventoryView]]));
       Assert.Equal(HttpStatusCode.OK, update.StatusCode);
     }
 
@@ -122,7 +121,7 @@ public sealed class PermissionRevocationPersistenceHttpIntegrationTests
       using var scope = restarted.Services.CreateScope();
       var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
       var codes = await dbContext.RolePermissions.Where(grant => grant.RoleId == roleId).Select(grant => grant.Permission.Code).ToListAsync();
-      Assert.Equal([PermissionCodes.SalesRegister], codes);
+      Assert.Equal([PermissionCodes.InventoryView], codes);
     }
   }
 

@@ -52,19 +52,34 @@ internal sealed class RolesManagementService : IAdminRolesService
     public async Task<RoleView> UpdateAsync(Guid roleId, RoleUpdateRequest request, CancellationToken cancellationToken = default)
     {
         var role = await LoadAsync(roleId, cancellationToken);
-        if (role.IsSystemRole)
+        if (!role.CanEditPermissions)
         {
             throw new ConflictException("Los roles del sistema no se pueden editar.");
         }
 
         ValidateName(request.Name);
-        await EnsureNameIsUniqueAsync(request.Name, roleId, cancellationToken);
+        if (role.IsSystemRole)
+        {
+            // ADR-0020 (BUG-091): only the permissions of Staff change; its name is fixed, like the role itself.
+            if (!string.Equals(request.Name.Trim(), role.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ConflictException("El nombre de un rol del sistema no se puede cambiar; solo sus permisos.");
+            }
+        }
+        else
+        {
+            await EnsureNameIsUniqueAsync(request.Name, roleId, cancellationToken);
+            role.SetName(request.Name);
+        }
+
         var permissions = await LoadPermissionsAsync(request.PermissionIds, cancellationToken);
 
-        role.SetName(request.Name);
-
+        // Retired permissions (ADR-0020 Q16) are neither shown nor sent back: they stay exactly as they are.
         var targetPermissionIds = permissions.Select(permission => permission.Id).ToHashSet();
-        var currentPermissionIds = role.RolePermissions.Select(rolePermission => rolePermission.PermissionId).ToHashSet();
+        var currentPermissionIds = role.RolePermissions
+            .Where(rolePermission => PermissionCodes.IsInCatalog(rolePermission.Permission.Code))
+            .Select(rolePermission => rolePermission.PermissionId)
+            .ToHashSet();
 
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         foreach (var permissionId in currentPermissionIds.Except(targetPermissionIds))
@@ -95,7 +110,9 @@ internal sealed class RolesManagementService : IAdminRolesService
 
     public async Task<IReadOnlyList<PermissionView>> GetAllPermissionsAsync(CancellationToken cancellationToken = default)
     {
+        var catalog = PermissionCodes.All.ToArray();
         return await _dbContext.Permissions
+            .Where(permission => catalog.Contains(permission.Code))
             .OrderBy(permission => permission.Code)
             .Select(permission => new PermissionView(permission.Id, permission.Code, permission.Description))
             .ToListAsync(cancellationToken);
@@ -118,8 +135,9 @@ internal sealed class RolesManagementService : IAdminRolesService
             return [];
         }
 
+        var catalog = PermissionCodes.All.ToArray();
         var permissions = await _dbContext.Permissions
-            .Where(permission => uniqueIds.Contains(permission.Id))
+            .Where(permission => uniqueIds.Contains(permission.Id) && catalog.Contains(permission.Code))
             .ToListAsync(cancellationToken);
 
         if (permissions.Count != uniqueIds.Length)
@@ -163,7 +181,9 @@ internal sealed class RolesManagementService : IAdminRolesService
             role.Name,
             role.IsSystemRole,
             role.RolePermissions
+                .Where(rolePermission => PermissionCodes.IsInCatalog(rolePermission.Permission.Code))
                 .Select(rolePermission => new PermissionView(rolePermission.Permission.Id, rolePermission.Permission.Code, rolePermission.Permission.Description))
                 .OrderBy(permission => permission.Code, StringComparer.Ordinal)
-                .ToArray());
+                .ToArray(),
+            role.CanEditPermissions);
 }

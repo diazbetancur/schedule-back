@@ -15,7 +15,7 @@ namespace Barbershop.Infrastructure.Bills;
 /// </summary>
 internal sealed partial class BillsService : IMyBillsService, IBillReportsService
 {
-    private const string MyBillNotFoundMessage = "El comprobante no existe.";
+    private const string MyBillNotFoundMessage = "El recibo de caja no existe.";
 
     public async Task<PagedResult<MyBillSummaryView>> GetMineAsync(Guid currentUserId, MyBillListQuery query, CancellationToken cancellationToken = default)
     {

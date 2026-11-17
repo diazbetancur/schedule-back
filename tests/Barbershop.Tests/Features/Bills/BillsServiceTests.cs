@@ -208,7 +208,7 @@ public sealed partial class BillsServiceTests : IDisposable
     Assert.Equal(3, (await _dbContext.BillNumberSeries.SingleAsync()).NextNumber);
 
     var notice = await _dbContext.UserNotifications.SingleAsync(notification => notification.UserId == _customerUser.Id);
-    Assert.Equal(("bill.closed", "Tu comprobante C-000001"), (notice.Type, notice.Title));
+    Assert.Equal(("bill.closed", "Tu recibo de caja C-000001"), (notice.Type, notice.Title));
     Assert.Contains("$ 30.000", notice.Body);
     Assert.Contains("Efectivo", notice.Body);
   }

@@ -1765,7 +1765,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
     {
         var total = $"$ {bill.Total.ToString("N0", DisplayCulture)}";
         return new PushNotificationMessage(
-            $"Tu comprobante {bill.DisplayNumber}",
+            $"Tu recibo de caja {bill.DisplayNumber}",
             bill.Total > 0
                 ? $"Registramos tu cuenta {bill.DisplayNumber} por {total}, pagada con {bill.PaymentMethodNameSnapshot}. Gracias por tu visita."
                 : $"Registramos tu cuenta {bill.DisplayNumber}. Gracias por tu visita.",
@@ -1776,7 +1776,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
 
     private static PushNotificationMessage CorrectedMessage(Bill bill)
         => new(
-            $"Corregimos tu comprobante {bill.DisplayNumber}",
+            $"Corregimos tu recibo de caja {bill.DisplayNumber}",
             bill.Total > 0
                 ? $"Tu cuenta {bill.DisplayNumber} quedó corregida por $ {bill.Total.ToString("N0", DisplayCulture)}."
                 : $"Tu cuenta {bill.DisplayNumber} quedó corregida.",
@@ -1786,7 +1786,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
 
     private static PushNotificationMessage VoidedMessage(Bill bill)
         => new(
-            $"Anulamos tu comprobante {bill.DisplayNumber}",
+            $"Anulamos tu recibo de caja {bill.DisplayNumber}",
             $"La cuenta {bill.DisplayNumber} quedó anulada. Si tienes dudas, pregúntanos en la barbería.",
             $"/customer/bills/{bill.Id}",
             $"bill-{bill.Id:N}",

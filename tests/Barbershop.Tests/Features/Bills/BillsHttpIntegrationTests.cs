@@ -106,6 +106,34 @@ public sealed class BillsHttpIntegrationTests
   }
 
   [Fact]
+  public async Task L2_TheCashClosing_IsItsOwnCriticalPermission_GrantedToAnyRole_AndRevokedAtOnce()
+  {
+    using var factory = await CreateFactoryAsync();
+    if (factory is null) return;
+    using var client = factory.CreateClient();
+    var admin = await RegisterAdminAsync(factory, client, "cash");
+    var permissions = await GetPermissionsAsync(client, admin.AccessToken);
+    var role = await CreateRoleAsync(client, admin.AccessToken, "Caja", permissions[PermissionCodes.ReportsCashView]);
+    var cashier = await CreateUserWithRolesAsync(client, admin.AccessToken, "cashier", role.Id);
+
+    // ADR-0021 L2: no Admin role needed; the permission is enough (and the Admin keeps it by default).
+    AuthenticateAs(client, cashier.AccessToken);
+    Assert.Equal(HttpStatusCode.OK, await StatusAsync(client.GetAsync("/api/v1/admin/reports/cash")));
+    Assert.Equal(HttpStatusCode.Forbidden, await StatusAsync(client.GetAsync("/api/v1/admin/reports/summary")));
+    AuthenticateAs(client, admin.AccessToken);
+    Assert.Equal(HttpStatusCode.OK, await StatusAsync(client.GetAsync("/api/v1/admin/reports/cash")));
+
+    // Critical (ADR-0005): removing it from the role applies to the very same token.
+    using (var update = await client.PutAsJsonAsync($"/api/v1/admin/roles/{role.Id}", new RoleUpdateRequest("Caja", [])))
+    {
+      Assert.Equal(HttpStatusCode.OK, update.StatusCode);
+    }
+
+    AuthenticateAs(client, cashier.AccessToken);
+    Assert.Equal(HttpStatusCode.Forbidden, await StatusAsync(client.GetAsync("/api/v1/admin/reports/cash")));
+  }
+
+  [Fact]
   public async Task BillsApprove_IsCritical_ARevocationAppliesToTheSameToken()
   {
     using var factory = await CreateFactoryAsync();

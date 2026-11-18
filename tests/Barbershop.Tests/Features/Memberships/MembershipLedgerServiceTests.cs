@@ -256,17 +256,23 @@ public sealed class MembershipLedgerServiceTests : IDisposable
   }
 
   [Fact]
-  public async Task ReversalOnAnAnnulledMembership_IsAllowed_ButDoesNotEnableItsBenefits()
+  public async Task L3_AMembershipWithConsumptions_IsNotAnnulled_UntilTheyAreReversed()
   {
     var membership = await SellActiveAsync(await CreatePoolPlanAsync());
     var consumed = await ConsumeAsync(membership.Id, _haircut.Id, 2);
-    await _memberships.AnnulAsync(_adminId, membership.Id, new MembershipAnnulRequest("Retracto del cliente"));
 
-    var reversed = await _ledger.ReverseAsync(
-        _adminId, membership.Id, consumed.Consumptions.Single().Id, new MembershipConsumptionReverseRequest("El corte no se hizo"));
+    // ADR-0021 L3: what was used is respected; the annulment answers 409 and changes nothing.
+    var conflict = await Assert.ThrowsAsync<ConflictException>(() =>
+        _memberships.AnnulAsync(_adminId, membership.Id, new MembershipAnnulRequest("Retracto del cliente")));
+    Assert.Equal(MembershipSalesService.HasConsumptionsMessage, conflict.Message);
+    Assert.Equal("Active", (await _dbContext.CustomerMemberships.AsNoTracking().SingleAsync(m => m.Id == membership.Id)).Status.ToString());
 
-    Assert.Equal("Annulled", reversed.Status);
-    Assert.Equal(["Purchased:10/10"], Lines(reversed));
+    // A reversed consumption no longer counts.
+    await _ledger.ReverseAsync(_adminId, membership.Id, consumed.Consumptions.Single().Id, new MembershipConsumptionReverseRequest("El corte no se hizo"));
+    var annulled = await _memberships.AnnulAsync(_adminId, membership.Id, new MembershipAnnulRequest("Retracto del cliente"));
+
+    Assert.Equal("Annulled", annulled.Status);
+    Assert.Equal(["Purchased:10/10"], Lines(annulled));
     await Assert.ThrowsAsync<ConflictException>(() => ConsumeAsync(membership.Id, _haircut.Id, 1));
   }
 
@@ -319,19 +325,19 @@ public sealed class MembershipLedgerServiceTests : IDisposable
   }
 
   [Fact]
-  public async Task AnnulledMembership_RejectsServicesDatedBeforeTheAnnulment_AndAReversalUnblocksNothing()
+  public async Task AnnulledMembership_RejectsServicesDatedBeforeTheAnnulment_AndItsReturnedUnitsStayBlocked()
   {
     var membership = await SellActiveAsync(
         await CreatePoolPlanAsync(gifts: [new(null, "Service", _beard.Id, null, 1, "EveryPurchase")]), startsOn: _today.AddDays(-10));
     var consumed = await ConsumeAsync(membership.Id, _haircut.Id, 2, _today.AddDays(-6));
-    await _memberships.AnnulAsync(_adminId, membership.Id, new MembershipAnnulRequest("Retracto del cliente"));
+    // ADR-0021 L3: the consumption is reversed first; only then can the membership be annulled.
+    await _ledger.ReverseAsync(
+        _adminId, membership.Id, consumed.Consumptions.Single().Id, new MembershipConsumptionReverseRequest("El corte no se hizo"));
+    var reversed = await _memberships.AnnulAsync(_adminId, membership.Id, new MembershipAnnulRequest("Retracto del cliente"));
 
     // A service given while the membership was still active cannot be registered after the annulment.
     await Assert.ThrowsAsync<ConflictException>(() => ConsumeAsync(membership.Id, _haircut.Id, 1, _today.AddDays(-8)));
     await Assert.ThrowsAsync<ConflictException>(() => ConsumeAsync(membership.Id, _beard.Id, 1, _today.AddDays(-3)));
-
-    var reversed = await _ledger.ReverseAsync(
-        _adminId, membership.Id, consumed.Consumptions.Single().Id, new MembershipConsumptionReverseRequest("El corte no se hizo"));
 
     Assert.Equal("Annulled", reversed.Status);
     Assert.Equal("Annulled", reversed.DisplayStatus);

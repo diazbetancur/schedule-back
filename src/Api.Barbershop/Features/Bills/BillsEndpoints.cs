@@ -189,13 +189,15 @@ public static class BillsEndpoints
             .Produces<MyBillView>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status404NotFound);
 
-        // ADR-0020 stage 5: what was charged by day and payment method (Admin, with the other reports).
+        // ADR-0020 stage 5: what was charged by day and payment method. ADR-0021 L2: its own permission, reports.cash.view
+        // (critical: checked against the database on every request), held by Admin by default.
         api.MapGet("/admin/reports/cash", ([AsParameters] CashClosingQuery query, IBillReportsService service, CancellationToken ct)
                 => service.GetCashClosingAsync(query, ct))
             .WithTags("Admin")
-            .RequireAuthorization(AuthPolicyNames.Admin)
+            .RequireAuthorization(AuthPolicyNames.CashClosingAccess)
             .WithName("GetAdminCashClosing")
             .Produces<CashClosingView>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
 
         return api;

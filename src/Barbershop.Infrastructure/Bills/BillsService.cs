@@ -39,6 +39,8 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
     internal const string NotFoundMessage = "La cuenta no existe o no tienes acceso a ella.";
     internal const string WalkInLimitMessage =
         "Una cuenta de cliente ocasional no puede usar membresías, canjes ni puntos. Elige un perfil de cliente.";
+    internal const string AssignOtherStaffMessage =
+        "Solo puedes cargar servicios y propinas a tu nombre. Para cargarlos a otro profesional necesitas el permiso «Cargar servicios y propinas a nombre de otro profesional».";
     internal const string DiscountPermissionMessage = "Solo administración o quien tenga el permiso de descuentos puede dar descuentos o cortesías.";
     internal const string DiscountTooLargeMessage = "El descuento no puede ser mayor que lo que descuenta.";
     internal const string CancelledAppointmentMessage =
@@ -119,7 +121,8 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             actor.Has(PermissionCodes.BillsCharge),
             actor.Has(PermissionCodes.BillsClose),
             actor.Has(PermissionCodes.BillsApprove),
-            actor.Has(PermissionCodes.BillsVoid));
+            actor.Has(PermissionCodes.BillsVoid),
+            actor.Has(PermissionCodes.BillsAssignOtherStaff));
     }
 
     public async Task<PagedResult<BillSummaryView>> ListAsync(Guid currentUserId, BillListQuery query, CancellationToken cancellationToken = default)
@@ -898,6 +901,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         {
             case BillLineType.Service:
             {
+                EnsureCanAssignStaff(actor, request.StaffProfileId);
                 var staffId = await RequireStaffAsync(request.StaffProfileId, cancellationToken);
                 var general = await RequireGeneralServiceAsync(request.GeneralServiceId, cancellationToken);
                 if (request.IsCourtesy)
@@ -928,6 +932,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             case BillLineType.MembershipConsumption:
             {
                 var customerId = bill.CustomerId ?? throw new ConflictException(WalkInLimitMessage);
+                EnsureCanAssignStaff(actor, request.StaffProfileId);
                 var staffId = await RequireStaffAsync(request.StaffProfileId, cancellationToken);
                 var membershipId = request.CustomerMembershipId ?? throw Invalid("customerMembershipId", "Elige la membresía de la que se descuenta el servicio.");
                 var rateId = request.ServiceId ?? throw Invalid("serviceId", "Elige el servicio de la membresía.");
@@ -962,6 +967,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
                     return BillLine.Redemption(redemption.Id, redemption.RewardNameSnapshot, null, null, null, 0, null, utcNow);
                 }
 
+                EnsureCanAssignStaff(actor, request.StaffProfileId);
                 var staffId = await RequireStaffAsync(request.StaffProfileId, cancellationToken);
                 var rate = await _dbContext.Services.AsNoTracking().SingleAsync(candidate => candidate.Id == redemption.ServiceIdSnapshot, cancellationToken);
                 return BillLine.Redemption(
@@ -985,6 +991,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
 
             case BillLineType.Tip:
             {
+                EnsureCanAssignStaff(actor, request.StaffProfileId);
                 var staffId = await RequireStaffAsync(request.StaffProfileId, cancellationToken);
                 var amount = ValidateAmount(request.Amount);
                 var mode = ParseTipMode(request.TipPaymentMode);
@@ -1001,6 +1008,13 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         var utcNow = Now();
         if (request.StaffProfileId is { } staffId && staffId != line.StaffProfileId)
         {
+            // ADR-0021 L1: only a change of professional is checked, so lines already on another professional's name
+            // (open bills from before the rule) keep working: their rate, courtesy or amount can still be edited.
+            if (line.Type != BillLineType.Product)
+            {
+                EnsureCanAssignStaff(actor, staffId);
+            }
+
             line.SetStaff(await RequireStaffAsync(staffId, cancellationToken), utcNow);
         }
 
@@ -1069,6 +1083,19 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
     }
 
     private static string? CourtesyReason(BillLineRequest request) => request.IsCourtesy ? ValidateReason(request.Reason) : null;
+
+    /// <summary>
+    /// ADR-0021 L1: services, membership consumptions, service redemptions and tips go on the actor's own name unless
+    /// they hold bills.assign-other-staff (Admin by default). Products are not checked: their professional is only
+    /// informative (Q11). The line an appointment bill opens with is the appointment's professional and is not checked.
+    /// </summary>
+    private static void EnsureCanAssignStaff(Actor actor, Guid? staffProfileId)
+    {
+        if (staffProfileId is { } staffId && staffId != actor.StaffProfileId && !actor.Has(PermissionCodes.BillsAssignOtherStaff))
+        {
+            throw new UnauthorizedAccessException(AssignOtherStaffMessage);
+        }
+    }
 
     private static void EnsureCanDiscount(Actor actor)
     {

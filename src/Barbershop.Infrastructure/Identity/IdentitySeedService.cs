@@ -39,7 +39,9 @@ internal sealed class IdentitySeedService : IIdentitySeedService
         [PermissionCodes.BillsManage] = "Ver y editar todas las cuentas abiertas",
         [PermissionCodes.BillsApprove] = "Aprobar cuentas y corregir las cerradas",
         [PermissionCodes.BillsUnapprove] = "Desaprobar cuentas aprobadas",
-        [PermissionCodes.BillsVoid] = "Anular cuentas"
+        [PermissionCodes.BillsVoid] = "Anular cuentas",
+        [PermissionCodes.BillsAssignOtherStaff] = "Cargar servicios y propinas a nombre de otro profesional",
+        [PermissionCodes.ReportsCashView] = "Ver el cierre de caja"
       };
 
   // Professionals build, close and charge the bills of their services (ADR-0020 Q16); discounts and every administrative

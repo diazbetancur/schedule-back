@@ -148,6 +148,20 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     return await ordered.ToPagedResultAsync(page, x => Map(x.Appointment, x.StaffName), cancellationToken);
   }
 
+  async Task<AppointmentView> ICustomerAppointmentsService.GetByIdAsync(Guid currentUserId, Guid appointmentId, CancellationToken cancellationToken)
+  {
+    _ = await LoadActiveUserAsync(currentUserId, cancellationToken);
+
+    // Someone else's appointment answers exactly like a missing one, so ids cannot be probed.
+    var found = await _dbContext.Appointments.AsNoTracking()
+        .Where(a => a.Id == appointmentId && a.CustomerUserId == currentUserId)
+        .Join(_dbContext.StaffProfiles, a => a.StaffProfileId, sp => sp.Id, (a, sp) => new { Appointment = a, StaffName = sp.DisplayName })
+        .SingleOrDefaultAsync(cancellationToken)
+        ?? throw new KeyNotFoundException("No encontramos la cita.");
+
+    return Map(found.Appointment, found.StaffName);
+  }
+
   async Task<AppointmentView> ICustomerAppointmentsService.CancelAsync(Guid currentUserId, Guid appointmentId, CancellationToken cancellationToken)
   {
     var appointment = await _dbContext.Appointments

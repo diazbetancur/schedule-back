@@ -133,6 +133,10 @@ public static class ApiFoundationServiceCollectionExtensions
                 .RequireAuthenticatedUser()
                 .AddRequirements(new AdminOrCurrentPermissionRequirement(
                     AuthRoleNames.Admin, global::Barbershop.Domain.Users.PermissionCodes.BillsVoid)));
+            options.AddPolicy(AuthPolicyNames.CashClosingAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin, global::Barbershop.Domain.Users.PermissionCodes.ReportsCashView)));
         });
         services.AddScoped<IAuthorizationHandler, CurrentPermissionAuthorizationHandler>();
         services.AddScoped<IAuthorizationHandler, AdminOrCurrentPermissionAuthorizationHandler>();

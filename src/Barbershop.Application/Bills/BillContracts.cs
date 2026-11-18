@@ -146,7 +146,8 @@ public sealed record BillOptionsView(
     bool CanCharge,
     bool CanClose,
     bool CanApprove,
-    bool CanVoid);
+    bool CanVoid,
+    bool CanAssignOtherStaff = false);
 
 public sealed record BillCustomerOption(Guid Id, string FullName, string? PhoneHint);
 

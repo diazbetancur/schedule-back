@@ -144,8 +144,15 @@ internal sealed class UserNotificationsService : IUserNotificationsService
         .Where(preference => preference.UserId == currentUserId)
         .ToDictionaryAsync(preference => preference.Category, preference => preference.PushEnabled, StringComparer.Ordinal, cancellationToken);
 
+    // ADR-0021 L4: «Reseñas» is only offered to professionals and administrators, the only ones who receive it.
+    var normalizedStaffRoles = new[] { RoleNames.Admin.ToUpperInvariant(), RoleNames.Staff.ToUpperInvariant() };
+    var isStaffSide = await _dbContext.Users.AsNoTracking()
+        .AnyAsync(user => user.Id == currentUserId
+            && user.UserRoles.Any(userRole => normalizedStaffRoles.Contains(userRole.Role.NormalizedName)), cancellationToken);
+
     // ADR-0019 N4: without a row the category is on.
     return new NotificationPreferencesView(NotificationCategories.Optional
+        .Where(category => isStaffSide || !NotificationCategories.StaffOnly.Contains(category))
         .Select(category => new NotificationPreferenceView(category, stored.GetValueOrDefault(category, true)))
         .ToArray());
   }
@@ -166,7 +173,7 @@ internal sealed class UserNotificationsService : IUserNotificationsService
       if (change?.Category is not { } category || !NotificationCategories.IsOptional(category))
       {
         errors[$"categories[{index}].category"] =
-            ["Tipo de aviso no válido: appointments, memberships, loyalty o campaigns. Los avisos de cuenta y seguridad no se pueden apagar."];
+            ["Tipo de aviso no válido: appointments, memberships, loyalty, purchases, reviews o campaigns. Los avisos de cuenta y seguridad no se pueden apagar."];
       }
 
       if (change?.PushEnabled is null)

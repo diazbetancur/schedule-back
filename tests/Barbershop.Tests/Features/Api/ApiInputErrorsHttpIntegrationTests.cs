@@ -256,6 +256,65 @@ public sealed class ApiInputErrorsHttpIntegrationTests
     Assert.Equal("El valor no tiene el formato esperado.", problem.GetProperty("errors").GetProperty("amount")[0].GetString());
   }
 
+  // ── SONDA lote K ──
+
+  /// <summary>BUG-160: a whole number beyond 2.147.483.647 is a 422 with the field and the limit (it was a generic 400).</summary>
+  [Fact]
+  public async Task AnAmountBeyondTheIntegerLimit_Answers422WithTheField_InIncomeExpensesAndFixedExpenses()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAdminAsync(context, "int-admin");
+    Authenticate(context.Client, admin);
+    var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(-5)).ToString("yyyy-MM-dd");
+
+    foreach (var (url, body, field) in new[]
+             {
+               ("/api/v1/admin/income", "{\"kind\":\"MembershipSale\",\"amount\":2147483648,\"occurredOn\":\"" + today + "\",\"isPromo\":false}", "amount"),
+               ("/api/v1/admin/expenses", "{\"name\":\"Arriendo\",\"amount\":99999999999,\"occurredOn\":\"" + today + "\"}", "amount"),
+               ("/api/v1/admin/fixed-expenses", "{\"name\":\"Arriendo\",\"defaultAmount\":2147483648}", "defaultAmount"),
+             })
+    {
+      using var response = await PostJsonAsync(context.Client, url, body);
+      var problem = await AssertValidationAsync(response, HttpStatusCode.UnprocessableEntity);
+      Assert.Equal("Debe ser un número entero de como máximo 2.147.483.647.", problem.GetProperty("errors").GetProperty(field)[0].GetString());
+    }
+  }
+
+  /// <summary>BUG-141/158: page=2147483647 overflowed the offset (500); out-of-range pages are a 422 everywhere.</summary>
+  [Fact]
+  public async Task AnExtremePage_Answers422_InEveryList()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAdminAsync(context, "page-admin");
+    Authenticate(context.Client, admin);
+    foreach (var url in new[]
+             {
+               "/api/v1/notifications/history?page=2147483647&pageSize=50",
+               "/api/v1/bills?page=2147483647",
+               "/api/v1/customer/bills?page=2147483647",
+               "/api/v1/admin/inventory?page=2147483647",
+               "/api/v1/admin/income?page=2147483648",
+             })
+    {
+      using var response = await context.Client.GetAsync(url);
+      var problem = await AssertValidationAsync(response, HttpStatusCode.UnprocessableEntity);
+      Assert.True(problem.GetProperty("errors").TryGetProperty("page", out _), url);
+    }
+
+    using var lastPage = await context.Client.GetAsync("/api/v1/customer/bills?page=1000000");
+    Assert.Equal(HttpStatusCode.OK, lastPage.StatusCode);
+  }
+
   // ── BUG-097 ──
 
   [Fact]

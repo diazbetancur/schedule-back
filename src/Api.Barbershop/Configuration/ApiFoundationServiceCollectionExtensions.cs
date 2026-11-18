@@ -230,6 +230,15 @@ public static class ApiFoundationServiceCollectionExtensions
                 QueueLimit = 0,
             }));
 
+        // SONDA BUG-157: the customer search of «Cuentas» cannot be used to walk the base.
+        options.AddPolicy(RateLimitPolicyNames.BillCustomerSearch, httpContext =>
+            RateLimitPartition.GetFixedWindowLimiter(GetUserPartition(httpContext), _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = BillCustomerSearchPermitLimit,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+
         options.AddPolicy(RateLimitPolicyNames.NotificationBroadcast, httpContext =>
             RateLimitPartition.GetFixedWindowLimiter(GetUserPartition(httpContext), _ => new FixedWindowRateLimiterOptions
             {
@@ -240,6 +249,9 @@ public static class ApiFoundationServiceCollectionExtensions
     }
 
     public const int NotificationTestPermitLimit = 3;
+
+    /// <summary>SONDA BUG-157: searches of customers per user and minute (typing a name a few times fits easily).</summary>
+    public const int BillCustomerSearchPermitLimit = 30;
     public const int NotificationBroadcastPermitLimit = 5;
 
     private static string GetClientIp(HttpContext httpContext) => ClientIpResolver.Resolve(httpContext);

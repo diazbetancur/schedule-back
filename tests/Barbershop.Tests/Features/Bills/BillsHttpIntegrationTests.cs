@@ -134,6 +134,54 @@ public sealed class BillsHttpIntegrationTests
   }
 
   [Fact]
+  public async Task BUG157_TheCustomerSearch_IsLimitedPerUser()
+  {
+    using var factory = await CreateFactoryAsync();
+    if (factory is null) return;
+    using var client = factory.CreateClient();
+    var admin = await RegisterAdminAsync(factory, client, "search");
+
+    AuthenticateAs(client, admin.AccessToken);
+    for (var i = 0; i < global::Api.Barbershop.Configuration.ApiFoundationServiceCollectionExtensions.BillCustomerSearchPermitLimit; i++)
+    {
+      Assert.Equal(HttpStatusCode.OK, await StatusAsync(client.GetAsync($"/api/v1/bills/customers?q=cliente{i}")));
+    }
+
+    Assert.Equal(HttpStatusCode.TooManyRequests, await StatusAsync(client.GetAsync("/api/v1/bills/customers?q=cliente")));
+  }
+
+  [Fact]
+  public async Task BUG161_SavingARoleFromAnOlderVersion_IsAConflict_AndTheRoleKeepsTheNewerSet()
+  {
+    using var factory = await CreateFactoryAsync();
+    if (factory is null) return;
+    using var client = factory.CreateClient();
+    var admin = await RegisterAdminAsync(factory, client, "roles");
+    var permissions = await GetPermissionsAsync(client, admin.AccessToken);
+    var role = await CreateRoleAsync(client, admin.AccessToken, "Caja versión", permissions[PermissionCodes.BillsOpen]);
+
+    AuthenticateAs(client, admin.AccessToken);
+    var read = (await client.GetFromJsonAsync<List<RoleView>>("/api/v1/admin/roles"))!.Single(candidate => candidate.Id == role.Id);
+    Assert.False(string.IsNullOrEmpty(read.Version));
+
+    using (var first = await client.PutAsJsonAsync($"/api/v1/admin/roles/{role.Id}",
+               new RoleUpdateRequest("Caja versión", [permissions[PermissionCodes.BillsClose]], read.Version)))
+    {
+      Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+    }
+
+    using (var stale = await client.PutAsJsonAsync($"/api/v1/admin/roles/{role.Id}",
+               new RoleUpdateRequest("Caja versión", [permissions[PermissionCodes.BillsCharge]], read.Version)))
+    {
+      Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+    }
+
+    var after = (await client.GetFromJsonAsync<List<RoleView>>("/api/v1/admin/roles"))!.Single(candidate => candidate.Id == role.Id);
+    Assert.Equal([PermissionCodes.BillsClose], after.Permissions.Select(permission => permission.Code));
+    Assert.NotEqual(read.Version, after.Version);
+  }
+
+  [Fact]
   public async Task BillsApprove_IsCritical_ARevocationAppliesToTheSameToken()
   {
     using var factory = await CreateFactoryAsync();

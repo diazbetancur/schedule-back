@@ -94,6 +94,15 @@ public sealed class Bill
   public Guid? PaymentMethodId { get; private set; }
   public string? PaymentMethodNameSnapshot { get; private set; }
 
+  /// <summary>
+  /// SONDA BUG-121: what was charged when the bill was closed (total and payment method). Corrections of the closed bill
+  /// (lines, payment method) change <see cref="Total"/> and <see cref="PaymentMethodId"/>, never these: the cash closing of
+  /// a past day is fixed. Null on bills closed before the copy existed whose charge could not be rebuilt from their events.
+  /// </summary>
+  public int? ChargedTotal { get; private set; }
+  public Guid? ChargedPaymentMethodId { get; private set; }
+  public string? ChargedPaymentMethodName { get; private set; }
+
   /// <summary>Services (not courtesies) and products at their catalog prices.</summary>
   public int Subtotal { get; private set; }
 
@@ -204,6 +213,9 @@ public sealed class Bill
     Number = DomainValidation.EnsureRange(number, 1, int.MaxValue, nameof(number));
     PaymentMethodId = paymentMethodId;
     PaymentMethodNameSnapshot = paymentMethodId is null ? null : DomainValidation.Required(paymentMethodName, nameof(paymentMethodName), PaymentMethod.MaxNameLength, 1);
+    ChargedTotal = Total;
+    ChargedPaymentMethodId = PaymentMethodId;
+    ChargedPaymentMethodName = PaymentMethodNameSnapshot;
     ClosedByUserId = closedByUserId;
     ClosedAt = DomainValidation.EnsureUtc(utcNow, nameof(utcNow));
     Status = BillStatus.Closed;

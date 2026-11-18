@@ -98,9 +98,9 @@ internal sealed class UserNotificationsService : IUserNotificationsService
       Guid currentUserId, int? page, int? pageSize, bool unreadOnly, CancellationToken cancellationToken = default)
   {
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-    if (page is < 1)
+    if (page is < 1 or > PageRequest.MaxPage)
     {
-      errors["page"] = ["La página debe ser 1 o mayor."];
+      errors["page"] = ["La página debe estar entre 1 y 1.000.000."];
     }
 
     if (pageSize is < 1 or > HistoryMaxPageSize)

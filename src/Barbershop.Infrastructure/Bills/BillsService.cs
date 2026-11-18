@@ -30,7 +30,11 @@ namespace Barbershop.Infrastructure.Bills;
 /// </summary>
 internal sealed partial class BillsService : IBillsService, IBillApprovalService, IPaymentMethodsService
 {
-    private const int MaxCustomerOptions = 20;
+    private const int MaxCustomerOptions = 10;
+
+    /// <summary>SONDA BUG-157: a name is searched from 3 letters; a phone only by its full number (7 digits or more).</summary>
+    internal const int MinCustomerSearchLength = 3;
+    internal const int MinCustomerPhoneDigits = 7;
     private const int PendingAppointmentWindowDays = 30;
     private const int MaxBackdatedDays = 30;
 
@@ -236,20 +240,56 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
 
     public async Task<IReadOnlyList<BillCustomerOption>> SearchCustomersAsync(string? query, CancellationToken cancellationToken = default)
     {
+        // SONDA BUG-157, same minimization as ADR-0009: a name by its letters, an email or a phone only when written in full
+        // (no fragments such as "@gmail.com" that would walk the base), few results and only hints of the contact data.
         var customers = _dbContext.Customers.AsNoTracking().Where(customer => customer.MergedIntoCustomerId == null);
-        var term = query?.Trim().ToLowerInvariant();
-        if (string.IsNullOrEmpty(term) || term.Length < 2)
+        var term = query?.Trim() ?? string.Empty;
+        if (term.Length < MinCustomerSearchLength)
         {
             return [];
         }
 
+        if (term.Contains('@'))
+        {
+            var at = term.IndexOf('@');
+            var domain = term[(at + 1)..];
+            if (at == 0 || !domain.Contains('.') || domain.StartsWith('.') || domain.EndsWith('.') || term.Count(c => c == '@') != 1)
+            {
+                return [];
+            }
+
+            var email = term.ToUpperInvariant(); // the stored NormalizedEmail: trimmed and upper case
+            customers = customers.Where(customer => customer.NormalizedEmail == email);
+        }
+        else if (term.All(c => char.IsAsciiDigit(c) || c is ' ' or '+' or '-' or '(' or ')'))
+        {
+            var digits = new string(term.Where(char.IsAsciiDigit).ToArray());
+            if (digits.Length < MinCustomerPhoneDigits)
+            {
+                return [];
+            }
+
+            var withCountry = "57" + digits;
+            var withoutCountry = digits.Length == 12 && digits.StartsWith("57", StringComparison.Ordinal) ? digits[2..] : digits;
+            customers = customers.Where(customer =>
+                customer.NormalizedPhone == digits || customer.NormalizedPhone == withCountry || customer.NormalizedPhone == withoutCountry);
+        }
+        else
+        {
+            var name = term.ToLowerInvariant();
+            customers = customers.Where(customer => customer.FullName.ToLower().Contains(name));
+        }
+
         return (await customers
-                .Where(customer => customer.FullName.ToLower().Contains(term) || customer.Phone.Contains(term) || customer.Email.ToLower().Contains(term))
                 .OrderBy(customer => customer.FullName)
                 .Take(MaxCustomerOptions)
-                .Select(customer => new { customer.Id, customer.FullName, customer.Phone })
+                .Select(customer => new { customer.Id, customer.FullName, customer.Phone, customer.Email })
                 .ToListAsync(cancellationToken))
-            .Select(customer => new BillCustomerOption(customer.Id, customer.FullName, ServiceRecordCustomerPrivacy.PhoneHint(customer.Phone)))
+            .Select(customer => new BillCustomerOption(
+                customer.Id,
+                customer.FullName,
+                ServiceRecordCustomerPrivacy.PhoneHint(customer.Phone),
+                ServiceRecordCustomerPrivacy.EmailHint(customer.Email)))
             .ToArray();
     }
 
@@ -936,6 +976,12 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
                 var staffId = await RequireStaffAsync(request.StaffProfileId, cancellationToken);
                 var membershipId = request.CustomerMembershipId ?? throw Invalid("customerMembershipId", "Elige la membresía de la que se descuenta el servicio.");
                 var rateId = request.ServiceId ?? throw Invalid("serviceId", "Elige el servicio de la membresía.");
+                // SONDA BUG-145: each consumption line is one unit; a quantity was accepted and silently counted as 1.
+                if (request.Quantity is { } consumedQuantity && consumedQuantity != 1)
+                {
+                    throw Invalid("quantity", "Cada línea de consumo de membresía descuenta una unidad. Para descontar dos, agrega dos líneas.");
+                }
+
                 await EnsureMembershipBalanceAsync(bill, customerId, membershipId, rateId, extra: 1, cancellationToken);
                 var rate = await _dbContext.Services.AsNoTracking().SingleAsync(candidate => candidate.Id == rateId, cancellationToken);
                 var generalName = await _dbContext.GeneralServices.AsNoTracking()
@@ -948,6 +994,9 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             {
                 var customerId = bill.CustomerId ?? throw new ConflictException(WalkInLimitMessage);
                 var redemptionId = request.LoyaltyRedemptionId ?? throw Invalid("loyaltyRedemptionId", "Elige el canje aprobado que se entrega.");
+                // SONDA BUG-129: the same redemption added to two bills at once. Locking the redemption (after the bill, the
+                // order every bill operation follows) makes the second one wait and then see the first: 409, never 200/200.
+                await LockAsync($"SELECT 1 FROM public.loyalty_redemptions WHERE \"Id\" = {redemptionId} FOR UPDATE", cancellationToken);
                 var live = await _wallet.ResolveLiveCustomerIdAsync(customerId, cancellationToken);
                 var redemption = await _dbContext.LoyaltyRedemptions.AsNoTracking()
                     .SingleOrDefaultAsync(candidate => candidate.Id == redemptionId && candidate.CustomerId == live, cancellationToken)
@@ -1102,6 +1151,40 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         if (!actor.Has(PermissionCodes.BillsDiscount))
         {
             throw new UnauthorizedAccessException(DiscountPermissionMessage);
+        }
+    }
+
+    internal const string TotalTooLargeMessage =
+        "La cuenta superaría el máximo técnico de $ 2.147.483.647. Revisa las cantidades o divide el cobro en otra cuenta.";
+
+    /// <summary>
+    /// SONDA BUG-131: the amounts of a bill are 32-bit (like every money column). They are added up in 64 bits first, so
+    /// a bill that would pass the technical maximum is a clear 422 instead of an overflow (500).
+    /// </summary>
+    private static void EnsureTotalsFit(Bill bill)
+    {
+        long subtotal = 0, tips = 0, directTips = 0;
+        foreach (var line in bill.Lines)
+        {
+            var gross = (long)line.Quantity * line.UnitPrice;
+            if (line.IsChargeable)
+            {
+                subtotal += gross;
+            }
+            else if (line.Type == BillLineType.Tip)
+            {
+                if (line.TipPaymentMode == TipPaymentMode.Direct) directTips += line.UnitPrice; else tips += line.UnitPrice;
+            }
+
+            if (gross > int.MaxValue)
+            {
+                throw Invalid("quantity", TotalTooLargeMessage);
+            }
+        }
+
+        if (subtotal > int.MaxValue || subtotal + tips > int.MaxValue || directTips > int.MaxValue)
+        {
+            throw Invalid("amount", TotalTooLargeMessage);
         }
     }
 
@@ -1264,6 +1347,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             var statusBefore = bill.Status;
             var hadMethod = bill.PaymentMethodId is not null;
             var change = await apply(actor, bill);
+            EnsureTotalsFit(bill);
             bill.Recalculate();
             ValidateDiscounts(bill);
             if (statusBefore is BillStatus.Closed or BillStatus.Unapproved)

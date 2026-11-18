@@ -30,20 +30,27 @@ internal sealed class CustomerNotificationOutbox
     _timeProvider = timeProvider;
   }
 
-  public async Task QueueForCustomerAsync(
+  public async Task<QueuedNotification?> QueueForCustomerAsync(
       Guid customerId, string type, PushNotificationMessage message, CancellationToken cancellationToken)
   {
     var userId = await _dbContext.Customers.AsNoTracking()
         .Where(profile => profile.Id == customerId)
         .Select(profile => profile.UserId)
         .SingleOrDefaultAsync(cancellationToken);
-    if (userId is { } accountId)
-    {
-      Queue(accountId, type, message);
-    }
+    return userId is { } accountId ? Queue(accountId, type, message) : null;
   }
 
-  public void Queue(Guid userId, string type, PushNotificationMessage message)
+  /// <summary>
+  /// SONDA BUG-145: takes back a notification queued in this same unit of work (not saved yet), so a later one can
+  /// replace it (for instance one notice for two consumption lines of the same service in one bill).
+  /// </summary>
+  public void Withdraw(QueuedNotification queued)
+  {
+    _dbContext.NotificationDeliveries.Remove(queued.Delivery);
+    _dbContext.UserNotifications.Remove(queued.Inbox);
+  }
+
+  public QueuedNotification Queue(Guid userId, string type, PushNotificationMessage message)
   {
     var nowUtc = _timeProvider.GetUtcNow().UtcDateTime;
     var title = Truncate(message.Title, MaxTitleLength);
@@ -52,7 +59,7 @@ internal sealed class CustomerNotificationOutbox
 
     var inboxEntry = new UserNotification(userId, type, title, body, url, nowUtc);
     _dbContext.UserNotifications.Add(inboxEntry);
-    _dbContext.NotificationDeliveries.Add(new NotificationDelivery(
+    var delivery = new NotificationDelivery(
         userId,
         inboxEntry.Id,
         NotificationDeliveryChannel.Push,
@@ -62,7 +69,9 @@ internal sealed class CustomerNotificationOutbox
         message.Tag,
         message.IsTimeSensitive,
         nowUtc,
-        nowUtc + (message.TimeToLive ?? TimeToLive)));
+        nowUtc + (message.TimeToLive ?? TimeToLive));
+    _dbContext.NotificationDeliveries.Add(delivery);
+    return new QueuedNotification(inboxEntry, delivery);
   }
 
   internal static string Points(int points) => points == 1 ? "1 punto" : $"{points} puntos";
@@ -72,6 +81,9 @@ internal sealed class CustomerNotificationOutbox
   private static string Truncate(string value, int maxLength)
       => value.Length <= maxLength ? value : value[..(maxLength - 3)] + "...";
 }
+
+/// <summary>A notification queued in the current unit of work, with its push delivery.</summary>
+internal sealed record QueuedNotification(UserNotification Inbox, NotificationDelivery Delivery);
 
 /// <summary>ADR-0019 N1: texts and links of the membership and points notifications (Spanish, tuteo).</summary>
 internal static class CustomerNotificationMessages

@@ -221,6 +221,29 @@ public sealed class CustomerNotificationsTests : IDisposable
     Assert.Equal(0, await reminders.RunAsync());
   }
 
+  // SONDA BUG-164: a membership with every unit used has nothing left to lose: no «vence pronto».
+  [Fact]
+  public async Task ExpiryReminders_SkipAMembershipWithoutBalance()
+  {
+    var customerId = await CreateCustomerAsync(linked: true);
+    var plan = await CreatePlanAsync(points: null);
+    var used = await _memberships.SellAsync(
+        _admin.Id, customerId, new MembershipSaleRequest(plan.Id, Today.AddDays(-30), EndsOn: Today.AddDays(6), ActivateNow: true));
+    var ledger = new MembershipLedgerService(_dbContext, _memberships, _clock);
+    await ledger.ConsumeAsync(_admin.Id, used.Id, new MembershipConsumptionRequest(_haircut.Id, 10, Today, null, Guid.NewGuid()));
+    _dbContext.ChangeTracker.Clear();
+    await ClearNotificationsAsync();
+
+    var dispatcher = new NotificationDispatcher(_dbContext, _clock, new NotificationWorkerSignal(), NullLogger<NotificationDispatcher>.Instance);
+    Assert.Equal(0, await new CustomerExpiryReminderService(_dbContext, dispatcher, _clock).RunAsync());
+
+    // With one unit given back it has something left again, and it is warned.
+    var consumption = await _dbContext.MembershipConsumptions.AsNoTracking().SingleAsync();
+    await ledger.ReverseAsync(_admin.Id, used.Id, consumption.Id, new MembershipConsumptionReverseRequest("Corte no realizado"));
+    _dbContext.ChangeTracker.Clear();
+    Assert.Equal(1, await new CustomerExpiryReminderService(_dbContext, dispatcher, _clock).RunAsync());
+  }
+
   // ── Preferences (push only) and history ────────────────────────────────────────────────────
 
   [Fact]

@@ -148,6 +148,28 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     return await ordered.ToPagedResultAsync(page, x => Map(x.Appointment, x.StaffName), cancellationToken);
   }
 
+  internal const string OpenBillRescheduleMessage =
+      "Esta cita ya tiene una cuenta abierta, así que no se puede reprogramar. Ciérrala si el servicio se prestó, o anúlala para poder cambiar la fecha.";
+
+  /// <summary>
+  /// SONDA BUG-155 (ADR-0020, decision of the user on 2026-11-18): an appointment whose bill is open keeps its date and
+  /// time; the bill (dated as its appointment) would otherwise stay on the old day and blocked until the new one.
+  /// </summary>
+  private async Task EnsureNoOpenBillAsync(Guid appointmentId, CancellationToken cancellationToken)
+  {
+    // Opening a bill locks the appointment row too, so a bill opened at the same moment is seen here (or waits).
+    if (_dbContext.Database.IsNpgsql())
+    {
+      await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+          $"SELECT 1 FROM public.appointments WHERE \"Id\" = {appointmentId} FOR UPDATE", cancellationToken);
+    }
+
+    if (await _dbContext.Bills.AnyAsync(bill => bill.AppointmentId == appointmentId && bill.Status == Barbershop.Domain.Bills.BillStatus.Open, cancellationToken))
+    {
+      throw new ConflictException(OpenBillRescheduleMessage);
+    }
+  }
+
   async Task<AppointmentView> ICustomerAppointmentsService.GetByIdAsync(Guid currentUserId, Guid appointmentId, CancellationToken cancellationToken)
   {
     _ = await LoadActiveUserAsync(currentUserId, cancellationToken);
@@ -257,6 +279,8 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       {
         throw new ConflictException(SlotNotAvailableMessage);
       }
+
+      await EnsureNoOpenBillAsync(appointment.Id, cancellationToken);
 
       // Same barber, same service and same reserved length (D11): the current offering is not read again.
       var endsAtUtc = request.StartsAtUtc + (appointment.EndsAt - appointment.StartsAt);
@@ -634,6 +658,11 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
         {
           ["status"] = ["Esta cita ya no se puede editar: solo se editan citas pendientes o confirmadas."]
         });
+      }
+
+      if (request.StartsAtUtc != appointment.StartsAt)
+      {
+        await EnsureNoOpenBillAsync(appointment.Id, cancellationToken);
       }
 
       // A different service must be offered and brings its duration; otherwise the reserved duration is kept

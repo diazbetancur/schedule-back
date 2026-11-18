@@ -54,7 +54,11 @@ internal sealed class CustomerExpiryReminderService
     var memberships = await _dbContext.CustomerMemberships.AsNoTracking()
         .Where(membership => membership.Status == MembershipStatus.Active
             && membership.EndsOn >= today
-            && membership.EndsOn <= horizon)
+            && membership.EndsOn <= horizon
+            // SONDA BUG-164: a membership with every unit already used has nothing left to lose; no warning.
+            && _dbContext.MembershipAllowances.Where(allowance => allowance.CustomerMembershipId == membership.Id).Sum(allowance => allowance.GrantedQuantity)
+                > _dbContext.MembershipMovements.Where(movement => movement.CustomerMembershipId == membership.Id)
+                    .Sum(movement => movement.Type == MembershipMovementType.Consumption ? movement.Quantity : -movement.Quantity))
         .Join(
             _dbContext.Customers.AsNoTracking().Where(profile => profile.UserId != null),
             membership => membership.CustomerId,

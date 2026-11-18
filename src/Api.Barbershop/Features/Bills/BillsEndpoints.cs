@@ -42,7 +42,9 @@ public static class BillsEndpoints
 
         bills.MapGet("/customers", (string? q, IBillsService service, CancellationToken ct) => service.SearchCustomersAsync(q, ct))
             .WithName("SearchBillCustomers")
-            .Produces<IReadOnlyList<BillCustomerOption>>(StatusCodes.Status200OK);
+            .RequireRateLimiting(global::Api.Barbershop.Configuration.RateLimitPolicyNames.BillCustomerSearch)
+            .Produces<IReadOnlyList<BillCustomerOption>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests);
 
         bills.MapGet("/{billId:guid}", (Guid billId, ClaimsPrincipal user, IBillsService service, CancellationToken ct)
                 => service.GetAsync(user.GetRequiredUserId(), billId, ct))

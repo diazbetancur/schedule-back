@@ -30,17 +30,19 @@ public static class BillsEndpoints
             .Produces<PagedResult<BillSummaryView>>(StatusCodes.Status200OK)
             .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
 
-        bills.MapGet("/pending", (ClaimsPrincipal user, IBillsService service, CancellationToken ct)
-                => service.GetPendingAsync(user.GetRequiredUserId(), ct))
+        bills.MapGet("/pending", ([AsParameters] BillPendingQuery query, ClaimsPrincipal user, IBillsService service, CancellationToken ct)
+                => service.GetPendingAsync(user.GetRequiredUserId(), query, ct))
             .WithName("GetPendingBills")
-            .Produces<BillPendingView>(StatusCodes.Status200OK);
+            .Produces<BillPendingView>(StatusCodes.Status200OK)
+            .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
 
         bills.MapGet("/pending/count", (ClaimsPrincipal user, IBillsService service, CancellationToken ct)
                 => service.GetPendingCountAsync(user.GetRequiredUserId(), ct))
             .WithName("GetPendingBillsCount")
             .Produces<BillCountView>(StatusCodes.Status200OK);
 
-        bills.MapGet("/customers", (string? q, IBillsService service, CancellationToken ct) => service.SearchCustomersAsync(q, ct))
+        bills.MapGet("/customers", (string? q, ClaimsPrincipal user, IBillsService service, CancellationToken ct)
+                => service.SearchCustomersAsync(user.GetRequiredUserId(), q, ct))
             .WithName("SearchBillCustomers")
             .RequireRateLimiting(global::Api.Barbershop.Configuration.RateLimitPolicyNames.BillCustomerSearch)
             .Produces<IReadOnlyList<BillCustomerOption>>(StatusCodes.Status200OK)

@@ -133,7 +133,8 @@ public sealed class Bill
   /// <summary>Mapped to PostgreSQL's xmin system column; used as an optimistic concurrency token.</summary>
   public uint Version { get; private set; }
 
-  public IReadOnlyList<BillLine> Lines => _lines;
+  /// <summary>The lines in the bill; a line removed during a correction (kept for its postings) is not one of them.</summary>
+  public IReadOnlyList<BillLine> Lines => _lines.Where(line => line.RemovedAt is null).ToList();
 
   public string? DisplayNumber => Number is { } number ? FormatNumber(Series ?? BillNumberSeries.DefaultPrefix, number) : null;
 
@@ -146,7 +147,7 @@ public sealed class Bill
   public BillLine AddLine(BillLine line, DateTime utcNow)
   {
     EnsureEditable();
-    if (_lines.Count >= MaxLines)
+    if (Lines.Count >= MaxLines)
     {
       throw new InvalidOperationException($"A bill holds at most {MaxLines} lines.");
     }
@@ -157,12 +158,24 @@ public sealed class Bill
     return line;
   }
 
-  public void RemoveLine(BillLine line, DateTime utcNow)
+  /// <param name="keepRecord">
+  /// ADR-0021 L9: the line has postings of a previous approval (reversed), so it stays stored, marked as removed.
+  /// </param>
+  public void RemoveLine(BillLine line, DateTime utcNow, bool keepRecord = false)
   {
     EnsureEditable();
-    if (!_lines.Remove(line))
+    if (!_lines.Contains(line) || line.RemovedAt is not null)
     {
       throw new InvalidOperationException("The line does not belong to this bill.");
+    }
+
+    if (keepRecord)
+    {
+      line.MarkRemoved(utcNow);
+    }
+    else
+    {
+      _lines.Remove(line);
     }
 
     Touch(utcNow);
@@ -189,10 +202,11 @@ public sealed class Bill
   /// <summary>Recomputes the money projections from the lines; callers validate the discounts first.</summary>
   public void Recalculate()
   {
-    Subtotal = _lines.Where(line => line.IsChargeable).Sum(line => line.GrossAmount);
-    DiscountTotal = _lines.Where(line => line.Type == BillLineType.Discount).Sum(line => line.UnitPrice);
-    TipTotal = _lines.Where(line => line.Type == BillLineType.Tip && line.TipPaymentMode == TipPaymentMode.WithBill).Sum(line => line.UnitPrice);
-    DirectTipTotal = _lines.Where(line => line.Type == BillLineType.Tip && line.TipPaymentMode == TipPaymentMode.Direct).Sum(line => line.UnitPrice);
+    var lines = Lines;
+    Subtotal = lines.Where(line => line.IsChargeable).Sum(line => line.GrossAmount);
+    DiscountTotal = lines.Where(line => line.Type == BillLineType.Discount).Sum(line => line.UnitPrice);
+    TipTotal = lines.Where(line => line.Type == BillLineType.Tip && line.TipPaymentMode == TipPaymentMode.WithBill).Sum(line => line.UnitPrice);
+    DirectTipTotal = lines.Where(line => line.Type == BillLineType.Tip && line.TipPaymentMode == TipPaymentMode.Direct).Sum(line => line.UnitPrice);
     Total = Subtotal - DiscountTotal + TipTotal;
   }
 
@@ -233,6 +247,20 @@ public sealed class Bill
     PaymentMethodId = paymentMethodId;
     PaymentMethodNameSnapshot = paymentMethodId is null ? null : DomainValidation.Required(paymentMethodName, nameof(paymentMethodName), PaymentMethod.MaxNameLength, 1);
     Touch(utcNow);
+  }
+
+  /// <summary>
+  /// ADR-0021 L11 (SONDA BUG-172): the approver corrects how the bill was paid. The copy of what was charged follows
+  /// the method, so the receipt and the cash closing agree; the amount charged (<see cref="ChargedTotal"/>) never changes.
+  /// </summary>
+  public void CorrectPaymentMethod(Guid paymentMethodId, string paymentMethodName, DateTime utcNow)
+  {
+    ChangePaymentMethod(paymentMethodId, paymentMethodName, utcNow);
+    if (ChargedTotal is not null)
+    {
+      ChargedPaymentMethodId = PaymentMethodId;
+      ChargedPaymentMethodName = PaymentMethodNameSnapshot;
+    }
   }
 
   public void Approve(Guid approvalId, Guid approvedByUserId, DateTime utcNow, bool selfApproved)

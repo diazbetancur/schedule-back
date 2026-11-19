@@ -23,16 +23,16 @@ public sealed partial class BillsServiceTests
     await _dbContext.SaveChangesAsync();
 
     // Fragments that would walk the base find nothing.
-    Assert.Empty(await _bills.SearchCustomersAsync("@gmail.com"));
-    Assert.Empty(await _bills.SearchCustomersAsync("gmail.com"));
-    Assert.Empty(await _bills.SearchCustomersAsync("carla@gmail"));
-    Assert.Empty(await _bills.SearchCustomersAsync("300123"));
-    Assert.Empty(await _bills.SearchCustomersAsync("Ca"));
+    Assert.Empty(await _bills.SearchCustomersAsync(_admin.Id, "@gmail.com"));
+    Assert.Empty(await _bills.SearchCustomersAsync(_admin.Id, "gmail.com"));
+    Assert.Empty(await _bills.SearchCustomersAsync(_admin.Id, "carla@gmail"));
+    Assert.Empty(await _bills.SearchCustomersAsync(_admin.Id, "300123"));
+    Assert.Empty(await _bills.SearchCustomersAsync(_admin.Id, "Ca"));
 
-    var byEmail = Assert.Single(await _bills.SearchCustomersAsync(" CARLA@gmail.com "));
+    var byEmail = Assert.Single(await _bills.SearchCustomersAsync(_admin.Id, " CARLA@gmail.com "));
     Assert.Equal(("Carla Gómez", "•••4567", "c•••@gmail.com"), (byEmail.FullName, byEmail.PhoneHint, byEmail.EmailHint));
-    Assert.Equal("Diego Ruiz", Assert.Single(await _bills.SearchCustomersAsync("+57 310 987 6543")).FullName);
-    Assert.Equal("Carla Gómez", Assert.Single(await _bills.SearchCustomersAsync("car")).FullName);
+    Assert.Equal("Diego Ruiz", Assert.Single(await _bills.SearchCustomersAsync(_admin.Id, "+57 310 987 6543")).FullName);
+    Assert.Equal("Carla Gómez", Assert.Single(await _bills.SearchCustomersAsync(_admin.Id, "car")).FullName);
   }
 
   [Fact]

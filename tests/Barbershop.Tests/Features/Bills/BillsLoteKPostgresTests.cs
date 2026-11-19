@@ -58,9 +58,11 @@ public sealed class BillsLoteKPostgresTests
     await using (var context = CreateContext())
     {
       var cash = await Service(context).GetCashClosingAsync(new CashClosingQuery());
-      // What was charged: 3 × 25.000 in cash, whatever the corrections say now (each corrected bill is 20.000 by card).
+      // What was charged: 3 × 25.000, whatever the corrections say now (each corrected bill is 20.000). ADR-0021 L11
+      // (SONDA BUG-172): correcting the payment method moves the copy of the charge, so B and C count by card.
       Assert.Equal((3, 75000L), (cash.BillCount, cash.Total));
-      Assert.Equal(seeded.Cash, Assert.Single(cash.Methods).PaymentMethodId);
+      Assert.Equal((1, 25000L), cash.Methods.Where(method => method.PaymentMethodId == seeded.Cash).Select(method => (method.BillCount, method.Total)).Single());
+      Assert.Equal((2, 50000L), cash.Methods.Where(method => method.PaymentMethodId == card).Select(method => (method.BillCount, method.Total)).Single());
     }
 
     // The backfill: down (the copy is dropped) and up again (it is rebuilt from bill_events).
@@ -268,7 +270,7 @@ public sealed class BillsLoteKPostgresTests
     }
 
     await using var again = CreateContext();
-    return await Service(again).ChangePaymentMethodAsync(seeded.AdminId, bill.Id, new BillPaymentMethodRequest(bill.Version, card));
+    return await Service(again).ChangePaymentMethodAsync(seeded.AdminId, bill.Id, new BillPaymentMethodRequest(bill.Version, card, "Pagó con tarjeta"));
   }
 
   private static BillsService Service(AppDbContext context)

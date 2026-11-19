@@ -101,6 +101,15 @@ internal static class CustomerNotificationMessages
           $"membership-{membershipId:N}",
           IsTimeSensitive: false);
 
+  /// <summary>ADR-0021 L12 (SONDA BUG-175): no internal reason, only what happened and where to ask.</summary>
+  public static PushNotificationMessage MembershipAnnulled(Guid membershipId, string planName)
+      => new(
+          "Tu membresía fue anulada",
+          $"Tu membresía «{planName}» fue anulada. Si tienes dudas, pregúntanos en la barbería.",
+          MembershipUrl(membershipId),
+          $"membership-{membershipId:N}",
+          IsTimeSensitive: false);
+
   public static PushNotificationMessage MembershipActivated(Guid membershipId, string planName, DateOnly endsOn, bool justSold)
       => new(
           "Tu membresía está activa",

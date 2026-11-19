@@ -360,11 +360,12 @@ internal sealed class AuthService : IAuthService
         var tokenHash = ComputeTokenHash(rawToken);
         var expiresAt = utcNow.AddMinutes(_jwtOptions.Value.PasswordResetTokenMinutes);
 
+        // Built before storing the token: without an absolute App:FrontendUrl this is a configuration error, never an
+        // email with a relative link that does not open.
+        var resetUrl = AppOptions.BuildFrontendLink(_appOptions.Value.FrontendUrl, $"auth/reset-password?token={rawToken}");
+
         user.SetPasswordResetToken(tokenHash, expiresAt);
         await _dbContext.SaveChangesAsync(cancellationToken);
-
-        var frontendUrl = _appOptions.Value.FrontendUrl.TrimEnd('/');
-        var resetUrl = $"{frontendUrl}/auth/reset-password?token={rawToken}";
         var firstName = user.FullName.Split(' ')[0];
 
         var email = new EmailMessage(

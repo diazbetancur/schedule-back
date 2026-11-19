@@ -30,6 +30,10 @@ internal static class ServiceCatalogLocks
     public static Task LockGeneralServiceAsync(this AppDbContext db, Guid generalServiceId, CancellationToken ct)
         => LockAsync(db, "SELECT 1 FROM public.general_services WHERE \"Id\" = {0} FOR UPDATE", generalServiceId, ct);
 
+    /// <summary>ADR-0021 L14: a bill line that takes a rate shares it, so deleting the rate waits and then sees the line.</summary>
+    public static Task ShareRateAsync(this AppDbContext db, Guid rateId, CancellationToken ct)
+        => LockAsync(db, "SELECT 1 FROM public.services WHERE \"Id\" = {0} FOR SHARE", rateId, ct);
+
     public static Task LockRateAsync(this AppDbContext db, Guid rateId, CancellationToken ct)
         => LockAsync(db, "SELECT 1 FROM public.services WHERE \"Id\" = {0} FOR UPDATE", rateId, ct);
 

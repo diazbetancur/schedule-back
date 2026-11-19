@@ -4,6 +4,8 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Barbershop.Application.Auth;
+using Barbershop.Application.Authorization;
+using Barbershop.Application.Notifications;
 using Barbershop.Application.Staff.Admin;
 using Barbershop.Domain.Users;
 using Barbershop.Infrastructure.Persistence;
@@ -502,6 +504,104 @@ public sealed class ApiInputErrorsHttpIntegrationTests
     }
 
     Assert.Equal("soporte-123", notFound.Headers.GetValues("X-Correlation-ID").Single());
+  }
+
+  // ── SONDA lote N ──
+
+  private const string NotIntegerText = "Debe ser un número entero, escrito solo con dígitos (sin letras, decimales ni exponentes).";
+  private const string TooLargeText = "Debe ser un número entero de como máximo 2.147.483.647.";
+
+  /// <summary>BUG-174: «not a whole number» and «too large» are different errors, in the query and in the body.</summary>
+  [Fact]
+  public async Task ANumberThatIsNotWhole_SaysSo_AndOnlyATooLargeOneMentionsTheLimit()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAdminAsync(context, "not-whole-admin");
+    Authenticate(context.Client, admin);
+    foreach (var (url, field, expected) in new[]
+             {
+               ("/api/v1/bills?page=abc", "page", NotIntegerText),
+               ("/api/v1/bills?page=1.5", "page", NotIntegerText),
+               ("/api/v1/notifications/inbox?offset=abc", "offset", NotIntegerText),
+               ("/api/v1/bills?page=2147483648", "page", TooLargeText),
+             })
+    {
+      using var response = await context.Client.GetAsync(url);
+      var problem = await AssertValidationAsync(response, HttpStatusCode.UnprocessableEntity);
+      Assert.Equal(expected, problem.GetProperty("errors").GetProperty(field)[0].GetString());
+    }
+
+    foreach (var amount in new[] { "1e3", "12.5" })
+    {
+      using var response = await PostJsonAsync(context.Client, "/api/v1/admin/expenses", "{\"name\":\"Arriendo\",\"amount\":" + amount + ",\"occurredOn\":\"2026-11-01\"}");
+      var problem = await AssertValidationAsync(response, HttpStatusCode.BadRequest);
+      Assert.Equal(NotIntegerText, problem.GetProperty("errors").GetProperty("amount")[0].GetString());
+    }
+  }
+
+  /// <summary>BUG-187: a date of the cash closing with a zone or a space is the same 422 as one with a time.</summary>
+  [Fact]
+  public async Task TheCashClosing_RefusesADateWithAZoneOrASpace_With422()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAdminAsync(context, "cash-zone-admin");
+    Authenticate(context.Client, admin);
+    foreach (var from in new[] { "2026-11-10T23:00:00Z", "2026-11-10%2023:00", "2026-11-10T23:00:00-05:00" })
+    {
+      using var response = await context.Client.GetAsync($"/api/v1/admin/reports/cash?from={from}");
+      var problem = await AssertValidationAsync(response, HttpStatusCode.UnprocessableEntity);
+      Assert.Equal("Escribe la fecha como AAAA-MM-DD, sin hora.", problem.GetProperty("errors").GetProperty("from")[0].GetString());
+    }
+  }
+
+  /// <summary>BUG-173: a role version that is not a number is a field error, not a concurrency conflict.</summary>
+  [Fact]
+  public async Task ARoleVersionThatIsNotANumber_Answers422()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAdminAsync(context, "role-version-admin");
+    Authenticate(context.Client, admin);
+    using var created = await context.Client.PostAsJsonAsync("/api/v1/admin/roles", new RoleCreateRequest("Caja versión", []));
+    var role = JsonDocument.Parse(await created.Content.ReadAsStringAsync()).RootElement;
+    using var response = await context.Client.PutAsJsonAsync(
+        $"/api/v1/admin/roles/{role.GetProperty("id").GetString()}", new RoleUpdateRequest("Caja versión", [], "abc"));
+
+    var problem = await AssertValidationAsync(response, HttpStatusCode.UnprocessableEntity);
+    Assert.Equal("La versión del rol no es válida. Recarga la página y vuelve a guardar.", problem.GetProperty("errors").GetProperty("version")[0].GetString());
+  }
+
+  /// <summary>BUG-176: a customer cannot store the «Reseñas» preference, which only professionals and admins receive.</summary>
+  [Fact]
+  public async Task ACustomer_CannotStoreTheReviewsPreference()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    Authenticate(context.Client, await RegisterAsync(context.Client, "reviews-customer"));
+    using var response = await context.Client.PutAsJsonAsync(
+        "/api/v1/notifications/preferences", new NotificationPreferencesUpdateRequest([new("reviews", false)]));
+
+    var problem = await AssertValidationAsync(response, HttpStatusCode.UnprocessableEntity);
+    Assert.Equal("Los avisos de reseñas son solo para profesionales y administradores.",
+        problem.GetProperty("errors").GetProperty("categories[0].category")[0].GetString());
   }
 
   // ── helpers ──

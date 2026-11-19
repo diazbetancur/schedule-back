@@ -2,6 +2,7 @@ using Barbershop.Application.Auth;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Services.Admin;
+using Barbershop.Domain.Bills;
 using Barbershop.Domain.Loyalty;
 using Barbershop.Domain.Services;
 using Barbershop.Infrastructure.Loyalty;
@@ -215,14 +216,53 @@ internal sealed class ServiceManagementService : IAdminServicesService
             .Select(reward => reward.Name)
             .ToListAsync(cancellationToken);
 
-        return new ServiceUsageView(plans, rewards);
+        return new ServiceUsageView(plans, rewards, await PendingBillsAsync(serviceId, cancellationToken));
+    }
+
+    private const int MaxPendingBillsListed = 5;
+
+    /// <summary>ADR-0021 L14: the bills not approved yet that have a line of the rate (any line type).</summary>
+    private async Task<IReadOnlyList<string>> PendingBillsAsync(Guid serviceId, CancellationToken cancellationToken)
+    {
+        var bills = await (
+                from line in _dbContext.BillLines.AsNoTracking()
+                join bill in _dbContext.Bills.AsNoTracking() on line.BillId equals bill.Id
+                where line.ServiceId == serviceId
+                    && (bill.Status == BillStatus.Open || bill.Status == BillStatus.Closed || bill.Status == BillStatus.Unapproved)
+                select new { bill.Id, bill.Series, bill.Number, bill.CustomerNameSnapshot, bill.OpenedAt })
+            .Distinct()
+            .OrderBy(bill => bill.OpenedAt)
+            .ToListAsync(cancellationToken);
+        return bills
+            .Select(bill => bill.Number is { } number
+                ? Bill.FormatNumber(bill.Series ?? BillNumberSeries.DefaultPrefix, number)
+                : $"cuenta abierta de {bill.CustomerNameSnapshot}")
+            .ToArray();
+    }
+
+    internal static string PendingBillsMessage(IReadOnlyList<string> bills)
+    {
+        var listed = string.Join(", ", bills.Take(MaxPendingBillsListed));
+        var more = bills.Count > MaxPendingBillsListed ? $" y {bills.Count - MaxPendingBillsListed} más" : string.Empty;
+        return $"Esta tarifa está en cuentas que aún no se aprueban: {listed}{more}. Apruébalas, corrígelas o anúlalas antes de eliminarla.";
     }
 
     public async Task SoftDeleteAsync(Guid serviceId, CancellationToken cancellationToken = default)
     {
+        // ADR-0021 L14 (SONDA BUG-178): a rate on a line of a bill not approved yet is not deleted. Adding such a line shares
+        // the rate row, so a line added at the same moment is seen here (or sees the rate deleted).
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(cancellationToken);
+        await _dbContext.LockRateAsync(serviceId, cancellationToken);
         var service = await LoadAsync(serviceId, cancellationToken);
+        var pending = await PendingBillsAsync(serviceId, cancellationToken);
+        if (pending.Count > 0)
+        {
+            throw new ConflictException(PendingBillsMessage(pending));
+        }
+
         service.MarkDeleted(_timeProvider.GetUtcNow().UtcDateTime);
         await _dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private void ApplyLoyaltyPoints(Service service, int? requestedPoints, DateTime utcNow)

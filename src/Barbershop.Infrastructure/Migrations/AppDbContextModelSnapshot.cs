@@ -476,6 +476,9 @@ namespace Barbershop.Infrastructure.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
 
+                    b.Property<DateTime?>("RemovedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<Guid?>("ServiceId")
                         .HasColumnType("uuid");
 

@@ -1159,7 +1159,7 @@ internal sealed class LoyaltyWalletService : IMyLoyaltyService, IAdminCustomerLo
             ? new Dictionary<Guid, string>()
             : (await (
                     from posting in _dbContext.BillPostings.AsNoTracking()
-                    join line in _dbContext.BillLines.AsNoTracking() on posting.BillLineId equals line.Id
+                    join line in _dbContext.BillLines.IgnoreQueryFilters().AsNoTracking() on posting.BillLineId equals line.Id
                     join bill in _dbContext.Bills.AsNoTracking() on line.BillId equals bill.Id
                     where postingIds.Contains(posting.Id)
                     select new { posting.Id, line.NameSnapshot, bill.Series, bill.Number })

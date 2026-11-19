@@ -17,6 +17,9 @@ public static class UserNotificationTypes
   public const string MembershipConsumed = "membership.consumed";
   public const string MembershipExpiring = "membership.expiring";
 
+  /// <summary>ADR-0021 L12: the membership was annulled (the internal reason is not sent).</summary>
+  public const string MembershipAnnulled = "membership.annulled";
+
   // ADR-0019 N1: loyalty points.
   public const string LoyaltyPointsEarned = "loyalty.points_earned";
   public const string LoyaltyPointsWithdrawn = "loyalty.points_withdrawn";

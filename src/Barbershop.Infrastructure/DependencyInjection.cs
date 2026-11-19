@@ -195,16 +195,30 @@ public static class DependencyInjection
         return services;
     }
 
-    private static IServiceCollection AddValidatedOptions(this IServiceCollection services, IConfiguration configuration, IHostEnvironment environment)
+    /// <summary>App options, validated on start (App:FrontendUrl absolute https outside Development/Testing).</summary>
+    internal static IServiceCollection AddAppOptions(this IServiceCollection services, IConfiguration configuration, IHostEnvironment environment)
     {
-        var relaxedEnvironment = OptionsValidationHelpers.IsRelaxedEnvironment(environment);
-
         services.AddOptions<AppOptions>()
             .Bind(configuration.GetSection(AppOptions.SectionName))
             .ValidateDataAnnotations()
             .Validate(options => !string.IsNullOrWhiteSpace(options.ApiBasePath), $"{AppOptions.SectionName}:ApiBasePath is required.")
             .Validate(options => !string.IsNullOrWhiteSpace(options.CorrelationIdHeaderName), $"{AppOptions.SectionName}:CorrelationIdHeaderName is required.")
+            // The email links need it (QA included: it sends reset links too). Only Development/Testing may leave it empty.
+            .Validate(
+                options => environment.IsDevelopment() || environment.IsEnvironment("Testing")
+                    ? string.IsNullOrWhiteSpace(options.FrontendUrl) || AppOptions.IsValidFrontendUrl(options.FrontendUrl, requireHttps: false)
+                    : AppOptions.IsValidFrontendUrl(options.FrontendUrl, requireHttps: true),
+                AppOptions.FrontendUrlRequiredMessage)
             .ValidateOnStart();
+
+        return services;
+    }
+
+    private static IServiceCollection AddValidatedOptions(this IServiceCollection services, IConfiguration configuration, IHostEnvironment environment)
+    {
+        var relaxedEnvironment = OptionsValidationHelpers.IsRelaxedEnvironment(environment);
+
+        services.AddAppOptions(configuration, environment);
 
         services.AddOptions<DatabaseOptions>()
             .Bind(configuration.GetSection(DatabaseOptions.SectionName))

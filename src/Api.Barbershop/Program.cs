@@ -83,6 +83,18 @@ app.UseMiddleware<CorrelationIdMiddleware>();
 // BUG-101: no-store by default (personal data, errors); short public caching for anonymous public content.
 app.UseMiddleware<CacheControlMiddleware>();
 app.UseExceptionHandler();
+// SONDA BUG-160: JSON bodies stay readable, so a number too large for its field can be told apart from a text (the
+// framework reports both alike). Uploads (multipart) are not buffered.
+app.Use(async (context, next) =>
+{
+    if (context.Request.HasJsonContentType())
+    {
+        context.Request.EnableBuffering();
+        context.Items[GlobalExceptionHandler.BufferedJsonBodyKey] = context.Request.Body;
+    }
+
+    await next(context);
+});
 app.UseStatusCodePages();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseCors(CorsOptions.PolicyName);

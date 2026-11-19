@@ -146,9 +146,11 @@ public sealed record BillOptionsView(
     bool CanCharge,
     bool CanClose,
     bool CanApprove,
-    bool CanVoid);
+    bool CanVoid,
+    bool CanAssignOtherStaff = false);
 
-public sealed record BillCustomerOption(Guid Id, string FullName, string? PhoneHint);
+/// <summary>SONDA BUG-157 (ADR-0009 minimization): the profile id to select it, the name and hints; never the email or phone.</summary>
+public sealed record BillCustomerOption(Guid Id, string FullName, string? PhoneHint, string? EmailHint = null);
 
 public sealed record BillMembershipOption(Guid Id, string PlanName, DateOnly EndsOn, IReadOnlyList<BillMembershipServiceOption> Services);
 

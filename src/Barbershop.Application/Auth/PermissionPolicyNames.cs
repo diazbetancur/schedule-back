@@ -29,6 +29,8 @@ public static class PermissionPolicyNames
     public const string BillsApprove = "BillsApprovePolicy";
     public const string BillsUnapprove = "BillsUnapprovePolicy";
     public const string BillsVoid = "BillsVoidPolicy";
+    public const string BillsAssignOtherStaff = "BillsAssignOtherStaffPolicy";
+    public const string ReportsCashView = "ReportsCashViewPolicy";
 
     private static readonly IReadOnlyDictionary<string, string> ByPermissionCode =
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -53,6 +55,8 @@ public static class PermissionPolicyNames
             [PermissionCodes.BillsApprove] = BillsApprove,
             [PermissionCodes.BillsUnapprove] = BillsUnapprove,
             [PermissionCodes.BillsVoid] = BillsVoid,
+            [PermissionCodes.BillsAssignOtherStaff] = BillsAssignOtherStaff,
+            [PermissionCodes.ReportsCashView] = ReportsCashView,
         };
 
     public static string For(string permissionCode)

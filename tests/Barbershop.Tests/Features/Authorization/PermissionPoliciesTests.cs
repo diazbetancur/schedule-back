@@ -54,6 +54,8 @@ public sealed class PermissionPoliciesTests
       PermissionCodes.BillsApprove,
       PermissionCodes.BillsUnapprove,
       PermissionCodes.BillsVoid,
+      PermissionCodes.BillsAssignOtherStaff,
+      PermissionCodes.ReportsCashView,
     ];
 
     Assert.Equal(expected.OrderBy(code => code, StringComparer.Ordinal), PermissionCodes.All.OrderBy(code => code, StringComparer.Ordinal));
@@ -76,6 +78,8 @@ public sealed class PermissionPoliciesTests
       PermissionCodes.BillsApprove,
       PermissionCodes.BillsUnapprove,
       PermissionCodes.BillsVoid,
+      // ADR-0021 L2: the cash closing shows all the money charged; revoking it applies at once.
+      PermissionCodes.ReportsCashView,
     ];
 
     Assert.Equal(expected.OrderBy(code => code, StringComparer.Ordinal), PermissionCodes.Critical.OrderBy(code => code, StringComparer.Ordinal));
@@ -83,6 +87,7 @@ public sealed class PermissionPoliciesTests
     // Existing and everyday permissions keep their token-only policies.
     Assert.DoesNotContain(PermissionCodes.BillsOpen, PermissionCodes.Critical);
     Assert.DoesNotContain(PermissionCodes.BillsDiscount, PermissionCodes.Critical);
+    Assert.DoesNotContain(PermissionCodes.BillsAssignOtherStaff, PermissionCodes.Critical);
     Assert.DoesNotContain(PermissionCodes.ServiceRecordsRegister, PermissionCodes.Critical);
     Assert.DoesNotContain(PermissionCodes.LoyaltyRewardsManage, PermissionCodes.Critical);
     Assert.DoesNotContain(PermissionCodes.InventoryView, PermissionCodes.Critical);

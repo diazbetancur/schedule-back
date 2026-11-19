@@ -28,6 +28,7 @@ public sealed class BillsPostgresTests
   private const string MigrationBeforeBills = "20261115124512_AddInventory";
   private const string MigrationBeforeReversals = "20261115155934_AddBillsAndApprovals";
   private const string MigrationBeforeRetirement = "20261116021013_AddBillHistoryIndexes";
+  private const string MigrationBeforeChargeSnapshot = "20261116021029_RetireServiceRecordRegistration";
 
   private static readonly string[] NewTables =
       ["bills", "bill_lines", "bill_events", "bill_approvals", "bill_postings", "payment_methods", "bill_number_series"];
@@ -235,7 +236,8 @@ public sealed class BillsPostgresTests
     await db.GetService<IMigrator>().MigrateAsync(MigrationBeforeReversals);
     var before = await MigrationSnapshotReader.ReadAsync(db);
     Assert.Single(before["income_entries"]);
-    await db.GetService<IMigrator>().MigrateAsync();
+    // Up to the last migration before AddBillChargeSnapshot, which adds (and fills) columns of bills on purpose.
+    await db.GetService<IMigrator>().MigrateAsync(MigrationBeforeChargeSnapshot);
     var after = await MigrationSnapshotReader.ReadAsync(db);
     Assert.Equal(before.Keys.Order(), after.Keys.Order());
     foreach (var (table, rows) in before)

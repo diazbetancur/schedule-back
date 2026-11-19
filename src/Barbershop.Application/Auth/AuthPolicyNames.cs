@@ -29,4 +29,7 @@ public static class AuthPolicyNames
 
   /// <summary>ADR-0020: Admin, or bills.void still granted in the database (critical).</summary>
   public const string BillsVoidAccess = "BillsVoidAccessPolicy";
+
+  /// <summary>ADR-0021 L2: the cash closing, for the Admin role or whoever still holds reports.cash.view in the database.</summary>
+  public const string CashClosingAccess = "CashClosingAccessPolicy";
 }

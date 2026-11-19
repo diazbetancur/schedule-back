@@ -17,6 +17,9 @@ public sealed partial class GlobalExceptionHandler : IExceptionHandler
 
   public const string RequiredMessage = "Este dato es obligatorio.";
   public const string WrongFormatMessage = "El valor no tiene el formato esperado.";
+
+  /// <summary>SONDA BUG-160: amounts and other whole numbers are 32-bit; the limit is technical, not a business cap.</summary>
+  public const string IntegerOutOfRangeMessage = "Debe ser un número entero de como máximo 2.147.483.647.";
   public const string UnreadableBodyMessage = "No se pudo leer la solicitud: revisa que los datos tengan el formato esperado.";
 
   /// <summary>BUG-072: concurrent writes used to answer 500.</summary>
@@ -61,6 +64,15 @@ public sealed partial class GlobalExceptionHandler : IExceptionHandler
         && exception is not BadHttpRequestException { StatusCode: StatusCodes.Status413PayloadTooLarge })
     {
       var missing = MissingRequiredProperties(jsonException);
+      if (missing.Count == 0 && IsIntegerConversion(jsonException) && await IsNumberAtAsync(httpContext, jsonException.Path))
+      {
+        // SONDA BUG-160: 2147483648 in «amount» used to be a generic 400; it is a value the field cannot hold.
+        return await WriteValidationAsync(
+            httpContext, exception, StatusCodes.Status422UnprocessableEntity,
+            new Dictionary<string, string[]>(StringComparer.Ordinal) { [FieldOf(jsonException.Path)] = [IntegerOutOfRangeMessage] },
+            IntegerOutOfRangeMessage);
+      }
+
       return missing.Count > 0
           ? await WriteValidationAsync(
               httpContext, exception, StatusCodes.Status422UnprocessableEntity,
@@ -70,6 +82,17 @@ public sealed partial class GlobalExceptionHandler : IExceptionHandler
               httpContext, exception, StatusCodes.Status400BadRequest,
               new Dictionary<string, string[]>(StringComparer.Ordinal) { [FieldOf(jsonException.Path)] = [WrongFormatMessage] },
               UnreadableBodyMessage);
+    }
+
+    // SONDA BUG-141/158: a whole number in the query that does not fit (page=2147483648) is a field error, not a
+    // generic 400: «Failed to bind parameter "int? page" from "2147483648".»
+    if (exception is BadHttpRequestException { InnerException: null } bindException
+        && BoundIntegerParameter(bindException.Message) is { } parameter)
+    {
+      return await WriteValidationAsync(
+          httpContext, exception, StatusCodes.Status422UnprocessableEntity,
+          new Dictionary<string, string[]>(StringComparer.Ordinal) { [parameter] = [IntegerOutOfRangeMessage] },
+          IntegerOutOfRangeMessage);
     }
 
     // BUG-039 safety net: a NUL character that still reached PostgreSQL.
@@ -176,6 +199,71 @@ public sealed partial class GlobalExceptionHandler : IExceptionHandler
   /// The JSON names System.Text.Json lists when required properties are missing ("...missing required properties
   /// including: 'isActive', 'amount'."); empty for any other reading error.
   /// </summary>
+  /// <summary>The name of an int query or route parameter that could not be bound, from the framework message.</summary>
+  internal static string? BoundIntegerParameter(string message)
+  {
+    // «Failed to bind parameter "int? page" from …» or, through [AsParameters], «"Nullable<int> Page"».
+    var match = System.Text.RegularExpressions.Regex.Match(message, @"^Failed to bind parameter ""(?<type>[^""]+) (?<name>[A-Za-z0-9_]+)"" from ");
+    if (!match.Success || !System.Text.RegularExpressions.Regex.IsMatch(match.Groups["type"].Value, @"^(int\??|Nullable<int>|Int32|Nullable<Int32>)$"))
+    {
+      return null;
+    }
+
+    var name = match.Groups["name"].Value;
+    return char.ToLowerInvariant(name[0]) + name[1..];
+  }
+
+  /// <summary>The body had a value that could not be read as a 32-bit whole number; <see cref="IsNumberAtAsync"/> tells an overflow.</summary>
+  /// A value of another type (a text) is not this case: it stays a 400 «formato esperado» (lote C2).
+  internal static bool IsIntegerConversion(JsonException exception)
+      => exception.Message.Contains("System.Int32", StringComparison.Ordinal)
+          || exception.InnerException is FormatException { Message: var inner } && inner.Contains("Int32", StringComparison.Ordinal);
+
+  /// <summary>Whether the (buffered) JSON body has a number at <paramref name="path"/> («$.amount», «$.lines[0].quantity»).</summary>
+  internal const string BufferedJsonBodyKey = "barbershop.buffered-json-body";
+
+  internal static async Task<bool> IsNumberAtAsync(HttpContext httpContext, string? path)
+  {
+    var body = httpContext.Items[BufferedJsonBodyKey] as Stream ?? httpContext.Request.Body;
+    if (path is null || !body.CanSeek)
+    {
+      return false;
+    }
+
+    try
+    {
+      body.Position = 0;
+      using var document = await JsonDocument.ParseAsync(body);
+      var element = document.RootElement;
+      foreach (System.Text.RegularExpressions.Match step in System.Text.RegularExpressions.Regex.Matches(path, @"\.([^.\[]+)|\[(\d+)\]"))
+      {
+        if (step.Groups[1].Success)
+        {
+          if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty(step.Groups[1].Value, out element))
+          {
+            return false;
+          }
+        }
+        else if (element.ValueKind != JsonValueKind.Array || int.Parse(step.Groups[2].Value) >= element.GetArrayLength())
+        {
+          return false;
+        }
+        else
+        {
+          element = element[int.Parse(step.Groups[2].Value)];
+        }
+      }
+
+      // Only a whole number that does not fit (a fraction is the wrong format, as before: 400).
+      return element.ValueKind == JsonValueKind.Number && !element.TryGetInt32(out _) && element.TryGetDecimal(out var number)
+          && number == decimal.Truncate(number) && !element.GetRawText().Contains('.');
+    }
+    catch (JsonException)
+    {
+      return false;
+    }
+  }
+
   internal static IReadOnlyList<string> MissingRequiredProperties(JsonException exception)
   {
     var message = exception.Message;

@@ -22,6 +22,14 @@ public static class CustomerAppointmentsEndpoints
         .ProducesProblem(StatusCodes.Status403Forbidden)
         .ProducesProblem(StatusCodes.Status404NotFound);
 
+    // SONDA BUG-118: reloading /booking/confirm?appointmentId=... shows the booking just made, even a future one.
+    appointments.MapGet("/{appointmentId:guid}", GetByIdAsync)
+        .WithName("GetCustomerAppointment")
+        .Produces<AppointmentView>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden)
+        .ProducesProblem(StatusCodes.Status404NotFound);
+
     appointments.MapPost(string.Empty, CreateAsync)
         .WithName("CreateCustomerAppointment")
         .Produces<AppointmentView>(StatusCodes.Status201Created)
@@ -57,6 +65,13 @@ public static class CustomerAppointmentsEndpoints
       ICustomerAppointmentsService service,
       CancellationToken cancellationToken)
       => service.GetHistoryAsync(user.GetRequiredUserId(), query, cancellationToken);
+
+  private static Task<AppointmentView> GetByIdAsync(
+      ClaimsPrincipal user,
+      Guid appointmentId,
+      ICustomerAppointmentsService service,
+      CancellationToken cancellationToken)
+      => service.GetByIdAsync(user.GetRequiredUserId(), appointmentId, cancellationToken);
 
   private static async Task<IResult> CreateAsync(
       ClaimsPrincipal user,

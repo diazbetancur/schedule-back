@@ -8,6 +8,12 @@ public sealed record PageRequest
     public const int DefaultPageSize = 25;
     public const int MaxPageSize = 100;
 
+    /// <summary>
+    /// SONDA BUG-141/158: page=2147483647 overflowed (page - 1) × pageSize into a 500. Far beyond any real list, and
+    /// (MaxPage - 1) × MaxPageSize still fits in an int.
+    /// </summary>
+    public const int MaxPage = 1_000_000;
+
     private PageRequest(int page, int pageSize)
     {
         Page = page;
@@ -26,9 +32,9 @@ public sealed record PageRequest
     public static PageRequest Create(int? page, int? pageSize)
     {
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-        if (page is < 1)
+        if (page is < 1 or > MaxPage)
         {
-            errors["page"] = ["La página debe ser 1 o mayor."];
+            errors["page"] = ["La página debe estar entre 1 y 1.000.000."];
         }
 
         if (pageSize is < 1 or > MaxPageSize)

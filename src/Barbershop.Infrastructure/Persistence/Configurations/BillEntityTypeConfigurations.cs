@@ -46,6 +46,7 @@ internal sealed class BillConfiguration : IEntityTypeConfiguration<Bill>
     builder.Property(x => x.ServiceDate).HasColumnType("date");
     builder.Property(x => x.Notes).HasMaxLength(Bill.MaxNotesLength);
     builder.Property(x => x.PaymentMethodNameSnapshot).HasMaxLength(PaymentMethod.MaxNameLength);
+    builder.Property(x => x.ChargedPaymentMethodName).HasMaxLength(PaymentMethod.MaxNameLength);
     builder.Property(x => x.VoidReason).HasMaxLength(Bill.MaxReasonLength);
     builder.Property(x => x.OpenedAt).HasColumnType("timestamp with time zone").IsRequired();
     builder.Property(x => x.ClosedAt).HasColumnType("timestamp with time zone");

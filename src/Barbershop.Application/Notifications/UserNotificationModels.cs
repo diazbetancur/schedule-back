@@ -28,6 +28,9 @@ public static class UserNotificationTypes
   public const string BillClosed = "bill.closed";
   public const string BillCorrected = "bill.corrected";
   public const string BillVoided = "bill.voided";
+
+  // ADR-0021 L4: category «Reseñas», for the professional of the appointment and the administrators.
+  public const string ReviewReceived = "review.received";
 }
 
 /// <summary>
@@ -43,10 +46,16 @@ public static class NotificationCategories
 
   /// <summary>ADR-0020 Q19: receipts of the customer's bills; optional, only the push can be switched off.</summary>
   public const string Purchases = "purchases";
+
+  /// <summary>ADR-0021 L4: a customer reviewed an appointment; only professionals and administrators receive it.</summary>
+  public const string Reviews = "reviews";
   public const string Account = "account";
 
   /// <summary>The categories the user may switch off, in the order the settings screen shows them.</summary>
-  public static IReadOnlyList<string> Optional { get; } = [Appointments, Memberships, Loyalty, Purchases, Campaigns];
+  public static IReadOnlyList<string> Optional { get; } = [Appointments, Memberships, Loyalty, Purchases, Reviews, Campaigns];
+
+  /// <summary>ADR-0021 L4: the optional categories that only reach professionals and administrators.</summary>
+  public static IReadOnlyList<string> StaffOnly { get; } = [Reviews];
 
   public static string ForType(string type)
   {
@@ -68,6 +77,11 @@ public static class NotificationCategories
     if (type.StartsWith("bill.", StringComparison.Ordinal))
     {
       return Purchases;
+    }
+
+    if (type.StartsWith("review.", StringComparison.Ordinal))
+    {
+      return Reviews;
     }
 
     return type == UserNotificationTypes.Campaign ? Campaigns : Account;

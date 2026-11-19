@@ -10,6 +10,7 @@ using Barbershop.Application.PublicContent;
 using Barbershop.Application.Services.Admin;
 using Barbershop.Application.Staff;
 using Barbershop.Application.Staff.Admin;
+using Barbershop.Domain.Appointments;
 using Barbershop.Domain.Common;
 using Barbershop.Domain.Scheduling;
 using Barbershop.Domain.Services;
@@ -135,6 +136,11 @@ public sealed class ServiceBookingHttpIntegrationTests
     var appointment = await booked.Content.ReadFromJsonAsync<AppointmentView>(Json);
     Assert.Equal((color, "Color", 45, At(day, 9, 45)),
         (appointment!.GeneralServiceId!.Value, appointment.GeneralServiceName, appointment.ReservedDurationMinutes!.Value, appointment.EndsAtUtc));
+
+    // SONDA BUG-118: the booking can be read back by its id (reloading /booking/confirm?appointmentId=...).
+    var readBack = await context.Client.GetFromJsonAsync<AppointmentView>($"/api/v1/customer/appointments/{appointment.Id}", Json);
+    Assert.Equal((appointment.Id, AppointmentStatus.Pending), (readBack!.Id, readBack.Status));
+    Assert.Equal(HttpStatusCode.NotFound, (await context.Client.GetAsync($"/api/v1/customer/appointments/{Guid.NewGuid()}")).StatusCode);
 
     // A Corte overlapping the color is a conflict; the slots of Corte skip the color's 45 minutes.
     Assert.Equal(HttpStatusCode.Conflict, (await BookAsync(context.Client, staff.StaffProfileId, Corte, At(day, 9, 30))).StatusCode);

@@ -153,7 +153,7 @@ public sealed class CustomerNotificationsTests : IDisposable
 
     var notices = (await NotificationsAsync()).OrderBy(item => item.CreatedAt).ToList();
     Assert.Equal(
-        [("Ganaste 15 puntos", "La barbería sumó 15 puntos a tu cuenta."), ("Se retiraron 1 punto", "La barbería descontó 1 punto de tu cuenta.")],
+        [("Ganaste 15 puntos", "La barbería sumó 15 puntos a tu cuenta."), ("Se retiró 1 punto", "La barbería descontó 1 punto de tu cuenta.")],
         notices.Select(item => (item.Title, item.Body)));
     Assert.DoesNotContain(notices, item => item.Body.Contains("interno", StringComparison.Ordinal));
   }
@@ -179,6 +179,26 @@ public sealed class CustomerNotificationsTests : IDisposable
     Assert.StartsWith("Aprobamos tu canje de «Gorra». Reclámalo en la barbería hasta el", approved.Body);
     var rejected = Assert.Single(notices, item => item.Type == UserNotificationTypes.LoyaltyRedemptionRejected);
     Assert.Equal("No aprobamos tu canje de «Gorra». Motivo: Sin existencias. Tus 10 puntos vuelven a estar disponibles.", rejected.Body);
+    // SONDA BUG-147 (decision of the user): the points coming back are told on their own too.
+    var returned = Assert.Single(notices, item => item.Type == UserNotificationTypes.LoyaltyPointsEarned && item.Title == "Te devolvimos 10 puntos");
+    Assert.Equal("Tu canje de «Gorra» no fue aprobado, así que los puntos vuelven a tu cuenta.", returned.Body);
+  }
+
+  // SONDA BUG-146: singular and plural agree with the quantity.
+  [Fact]
+  public async Task ARejectedRedemptionOfOnePoint_SpeaksInSingular()
+  {
+    var customerId = await CreateCustomerAsync(linked: true);
+    await _wallet.AdjustAsync(_admin.Id, customerId, new LoyaltyAdjustmentRequest("Credit", 5, "Saldo inicial", Guid.NewGuid()));
+    var reward = await _redemptions.CreateAsync(_admin.Id, new LoyaltyRewardUpsertRequest("Sticker", null, "Other", null, 1));
+    var request = await _redemptions.RequestAsync(_customerUser.Id, new LoyaltyRedemptionRequest(reward.Id, Guid.NewGuid()));
+
+    await _redemptions.RejectAsync(
+        _admin.Id, request.Id, new LoyaltyRedemptionReasonRequest((await _redemptions.GetAsync(request.Id)).Version, "Sin existencias"));
+
+    var notices = await NotificationsAsync();
+    Assert.EndsWith("Tu punto vuelve a estar disponible.", Assert.Single(notices, item => item.Type == UserNotificationTypes.LoyaltyRedemptionRejected).Body);
+    Assert.Contains(notices, item => item.Title == "Te devolvimos 1 punto" && item.Body.EndsWith("el punto vuelve a tu cuenta."));
   }
 
   // ── Scheduled expiry notices ───────────────────────────────────────────────────────────────
@@ -219,6 +239,29 @@ public sealed class CustomerNotificationsTests : IDisposable
     await ClearNotificationsAsync();
     _clock.Now = new DateTimeOffset(2026, 11, 16, 3, 0, 0, TimeSpan.Zero); // 22:00 in Bogotá.
     Assert.Equal(0, await reminders.RunAsync());
+  }
+
+  // SONDA BUG-164: a membership with every unit used has nothing left to lose: no «vence pronto».
+  [Fact]
+  public async Task ExpiryReminders_SkipAMembershipWithoutBalance()
+  {
+    var customerId = await CreateCustomerAsync(linked: true);
+    var plan = await CreatePlanAsync(points: null);
+    var used = await _memberships.SellAsync(
+        _admin.Id, customerId, new MembershipSaleRequest(plan.Id, Today.AddDays(-30), EndsOn: Today.AddDays(6), ActivateNow: true));
+    var ledger = new MembershipLedgerService(_dbContext, _memberships, _clock);
+    await ledger.ConsumeAsync(_admin.Id, used.Id, new MembershipConsumptionRequest(_haircut.Id, 10, Today, null, Guid.NewGuid()));
+    _dbContext.ChangeTracker.Clear();
+    await ClearNotificationsAsync();
+
+    var dispatcher = new NotificationDispatcher(_dbContext, _clock, new NotificationWorkerSignal(), NullLogger<NotificationDispatcher>.Instance);
+    Assert.Equal(0, await new CustomerExpiryReminderService(_dbContext, dispatcher, _clock).RunAsync());
+
+    // With one unit given back it has something left again, and it is warned.
+    var consumption = await _dbContext.MembershipConsumptions.AsNoTracking().SingleAsync();
+    await ledger.ReverseAsync(_admin.Id, used.Id, consumption.Id, new MembershipConsumptionReverseRequest("Corte no realizado"));
+    _dbContext.ChangeTracker.Clear();
+    Assert.Equal(1, await new CustomerExpiryReminderService(_dbContext, dispatcher, _clock).RunAsync());
   }
 
   // ── Preferences (push only) and history ────────────────────────────────────────────────────

@@ -28,7 +28,8 @@ internal sealed class RolesManagementService : IAdminRolesService
             .OrderBy(role => role.Name)
             .ToListAsync(cancellationToken);
 
-        return roles.Select(Map).ToArray();
+        var versions = await LoadVersionsAsync(cancellationToken);
+        return roles.Select(role => Map(role, versions.GetValueOrDefault(role.Id))).ToArray();
     }
 
     public async Task<RoleView> CreateAsync(RoleCreateRequest request, CancellationToken cancellationToken = default)
@@ -49,8 +50,25 @@ internal sealed class RolesManagementService : IAdminRolesService
         return Map(role);
     }
 
+    internal const string ConcurrentChangeMessage =
+        "Otra persona cambió este rol mientras lo editabas. Recarga la página para ver sus permisos actuales y vuelve a guardar.";
+
     public async Task<RoleView> UpdateAsync(Guid roleId, RoleUpdateRequest request, CancellationToken cancellationToken = default)
     {
+        // SONDA BUG-161: two saves of the same role at once used to leave a mix of both permission sets. The role row is
+        // locked, so the saves run one after the other, and a save based on an older version than the current one is a 409.
+        var relational = _dbContext.Database.IsNpgsql();
+        await using var transaction = relational ? await _dbContext.Database.BeginTransactionAsync(cancellationToken) : null;
+        if (relational)
+        {
+            await _dbContext.Database.ExecuteSqlInterpolatedAsync($"SELECT 1 FROM public.roles WHERE \"Id\" = {roleId} FOR UPDATE", cancellationToken);
+            var current = (await LoadVersionsAsync(cancellationToken)).GetValueOrDefault(roleId);
+            if (request.Version is { } expected && current is not null && !string.Equals(expected, current, StringComparison.Ordinal))
+            {
+                throw new ConflictException(ConcurrentChangeMessage);
+            }
+        }
+
         var role = await LoadAsync(roleId, cancellationToken);
         if (!role.CanEditPermissions)
         {
@@ -93,8 +111,25 @@ internal sealed class RolesManagementService : IAdminRolesService
         }
 
         await _dbContext.SaveChangesAsync(cancellationToken);
-        return Map(role);
+        if (transaction is not null)
+        {
+            // The permissions live in role_permissions: touching the role row gives the role a new version every save.
+            await _dbContext.Database.ExecuteSqlInterpolatedAsync($"UPDATE public.roles SET \"Name\" = \"Name\" WHERE \"Id\" = {roleId}", cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+
+        return Map(role, (await LoadVersionsAsync(cancellationToken)).GetValueOrDefault(roleId));
     }
+
+    /// <summary>The PostgreSQL row version (xmin) of each role; empty with other providers.</summary>
+    private async Task<Dictionary<Guid, string>> LoadVersionsAsync(CancellationToken cancellationToken)
+        => _dbContext.Database.IsNpgsql()
+            ? await _dbContext.Database
+                .SqlQueryRaw<RoleVersionRow>("SELECT \"Id\", xmin::text AS \"Version\" FROM public.roles")
+                .ToDictionaryAsync(row => row.Id, row => row.Version, cancellationToken)
+            : [];
+
+    private sealed record RoleVersionRow(Guid Id, string Version);
 
     public async Task DeleteAsync(Guid roleId, CancellationToken cancellationToken = default)
     {
@@ -175,7 +210,9 @@ internal sealed class RolesManagementService : IAdminRolesService
         }
     }
 
-    private static RoleView Map(Role role)
+    private static RoleView Map(Role role) => Map(role, null);
+
+    private static RoleView Map(Role role, string? version)
         => new(
             role.Id,
             role.Name,
@@ -185,5 +222,6 @@ internal sealed class RolesManagementService : IAdminRolesService
                 .Select(rolePermission => new PermissionView(rolePermission.Permission.Id, rolePermission.Permission.Code, rolePermission.Permission.Description))
                 .OrderBy(permission => permission.Code, StringComparer.Ordinal)
                 .ToArray(),
-            role.CanEditPermissions);
+            role.CanEditPermissions,
+            version);
 }

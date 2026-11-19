@@ -256,6 +256,161 @@ public sealed class ApiInputErrorsHttpIntegrationTests
     Assert.Equal("El valor no tiene el formato esperado.", problem.GetProperty("errors").GetProperty("amount")[0].GetString());
   }
 
+  // ── SONDA lote K ──
+
+  /// <summary>BUG-160: a whole number beyond 2.147.483.647 is a 422 with the field and the limit (it was a generic 400).</summary>
+  [Fact]
+  public async Task AnAmountBeyondTheIntegerLimit_Answers422WithTheField_InIncomeExpensesAndFixedExpenses()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAdminAsync(context, "int-admin");
+    Authenticate(context.Client, admin);
+    var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(-5)).ToString("yyyy-MM-dd");
+
+    foreach (var (url, body, field) in new[]
+             {
+               ("/api/v1/admin/income", "{\"kind\":\"MembershipSale\",\"amount\":2147483648,\"occurredOn\":\"" + today + "\",\"isPromo\":false}", "amount"),
+               ("/api/v1/admin/expenses", "{\"name\":\"Arriendo\",\"amount\":99999999999,\"occurredOn\":\"" + today + "\"}", "amount"),
+               ("/api/v1/admin/fixed-expenses", "{\"name\":\"Arriendo\",\"defaultAmount\":2147483648}", "defaultAmount"),
+             })
+    {
+      using var response = await PostJsonAsync(context.Client, url, body);
+      var problem = await AssertValidationAsync(response, HttpStatusCode.UnprocessableEntity);
+      Assert.Equal("Debe ser un número entero de como máximo 2.147.483.647.", problem.GetProperty("errors").GetProperty(field)[0].GetString());
+    }
+  }
+
+  /// <summary>BUG-141/158: page=2147483647 overflowed the offset (500); out-of-range pages are a 422 everywhere.</summary>
+  [Fact]
+  public async Task AnExtremePage_Answers422_InEveryList()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAdminAsync(context, "page-admin");
+    Authenticate(context.Client, admin);
+    foreach (var url in new[]
+             {
+               "/api/v1/notifications/history?page=2147483647&pageSize=50",
+               "/api/v1/bills?page=2147483647",
+               "/api/v1/customer/bills?page=2147483647",
+               "/api/v1/admin/inventory?page=2147483647",
+               "/api/v1/admin/income?page=2147483648",
+             })
+    {
+      using var response = await context.Client.GetAsync(url);
+      var problem = await AssertValidationAsync(response, HttpStatusCode.UnprocessableEntity);
+      Assert.True(problem.GetProperty("errors").TryGetProperty("page", out _), url);
+    }
+
+    using var lastPage = await context.Client.GetAsync("/api/v1/customer/bills?page=1000000");
+    Assert.Equal(HttpStatusCode.OK, lastPage.StatusCode);
+  }
+
+  // ── SONDA lote M ──
+
+  /// <summary>BUG-163: a number written as a text is the wrong format (it was read as a number).</summary>
+  [Fact]
+  public async Task ANumberWrittenAsText_IsTheWrongFormat()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAdminAsync(context, "text-number-admin");
+    Authenticate(context.Client, admin);
+    using var response = await PostJsonAsync(context.Client, "/api/v1/admin/expenses", """{"name":"Arriendo","amount":"30000","occurredOn":"2026-11-01"}""");
+
+    var problem = await AssertValidationAsync(response, HttpStatusCode.BadRequest);
+    Assert.Equal("El valor no tiene el formato esperado.", problem.GetProperty("errors").GetProperty("amount")[0].GetString());
+  }
+
+  /// <summary>BUG-126: the cash closing never runs into the future, and a date with a time is refused.</summary>
+  [Fact]
+  public async Task TheCashClosing_DoesNotRunIntoTheFuture_AndRefusesADateWithATime()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAdminAsync(context, "cash-dates-admin");
+    Authenticate(context.Client, admin);
+    var today = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(-5));
+
+    using (var onlyFrom = await context.Client.GetAsync($"/api/v1/admin/reports/cash?from={today.AddDays(-3):yyyy-MM-dd}"))
+    {
+      Assert.Equal(HttpStatusCode.OK, onlyFrom.StatusCode);
+      var body = JsonDocument.Parse(await onlyFrom.Content.ReadAsStringAsync()).RootElement;
+      Assert.Equal(today.ToString("yyyy-MM-dd"), body.GetProperty("to").GetString());
+    }
+
+    using var withTime = await context.Client.GetAsync("/api/v1/admin/reports/cash?from=2026-11-10T23:00:00");
+    var problem = await AssertValidationAsync(withTime, HttpStatusCode.UnprocessableEntity);
+    Assert.Equal("Escribe la fecha como AAAA-MM-DD, sin hora.", problem.GetProperty("errors").GetProperty("from")[0].GetString());
+  }
+
+  /// <summary>BUG-138: an empty body no longer clears the minimum stock in silence.</summary>
+  [Fact]
+  public async Task TheMinimumStock_MustBeSent_EvenToClearIt()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAdminAsync(context, "min-stock-admin");
+    Authenticate(context.Client, admin);
+    using var response = await context.Client.PutAsync($"/api/v1/admin/inventory/{Guid.NewGuid()}/min-stock",
+        new StringContent("{}", Encoding.UTF8, "application/json"));
+
+    var problem = await AssertValidationAsync(response, HttpStatusCode.UnprocessableEntity);
+    Assert.True(problem.GetProperty("errors").TryGetProperty("minStock", out _));
+  }
+
+  /// <summary>BUG-150 and BUG-151: malformed push keys, an empty customer id and «ALL» are refused.</summary>
+  [Fact]
+  public async Task MalformedPushKeys_AndMalformedBroadcastTargets_AreRefused()
+  {
+    using var context = await CreateContextAsync();
+    if (context is null)
+    {
+      return;
+    }
+
+    var admin = await RegisterAdminAsync(context, "push-admin");
+    Authenticate(context.Client, admin);
+    using (var subscribe = await PostJsonAsync(context.Client, "/api/v1/notifications/subscribe",
+               """{"endpoint":"https://updates.push.services.mozilla.com/wpush/v2/abc","p256dhKey":"@@@@####","authKey":"!!!!"}"""))
+    {
+      var errors = (await AssertValidationAsync(subscribe, HttpStatusCode.UnprocessableEntity)).GetProperty("errors");
+      Assert.True(errors.TryGetProperty("p256dhKey", out _));
+      Assert.True(errors.TryGetProperty("authKey", out _));
+    }
+
+    foreach (var body in new[]
+             {
+               """{"title":"Hola","body":"Prueba","targetType":"selected","customerUserIds":["00000000-0000-0000-0000-000000000000"]}""",
+               """{"title":"Hola","body":"Prueba","targetType":"ALL"}""",
+             })
+    {
+      using var preview = await PostJsonAsync(context.Client, "/api/v1/admin/notifications/broadcast/preview", body);
+      await AssertValidationAsync(preview, HttpStatusCode.UnprocessableEntity);
+    }
+  }
+
   // ── BUG-097 ──
 
   [Fact]

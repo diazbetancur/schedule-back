@@ -27,6 +27,26 @@ internal sealed partial class BillsService
 
     private const string AlreadyApprovedMessage = "Esta cuenta ya fue aprobada por otra persona. Recarga la bandeja.";
 
+    /// <summary>
+    /// Only a closed (or unapproved) bill is approved. SONDA BUG-128: the preview follows the same rule, so it never shows
+    /// postings for a voided, open or already approved bill.
+    /// </summary>
+    /// <summary>SONDA BUG-132: «Cuenta C-000123» on the sale movements of the stock card.</summary>
+    private static string BillReference(Bill bill) => $"Cuenta {bill.DisplayNumber ?? bill.Id.ToString()}";
+
+    private static void EnsureApprovable(Bill bill)
+    {
+        switch (bill.Status)
+        {
+            case BillStatus.Approved:
+                throw new ConflictException(AlreadyApprovedMessage);
+            case BillStatus.Open:
+                throw new ConflictException("La cuenta todavía está abierta: debe cerrarse antes de aprobarla.");
+            case BillStatus.Voided:
+                throw new ConflictException("La cuenta está anulada.");
+        }
+    }
+
     public async Task<BillApprovalPreviewView> PreviewAsync(Guid currentUserId, Guid billId, CancellationToken cancellationToken = default)
     {
         var actor = await LoadActorAsync(currentUserId, cancellationToken);
@@ -36,6 +56,7 @@ internal sealed partial class BillsService
         }
 
         var bill = await LoadVisibleAsync(actor, billId, tracked: false, cancellationToken);
+        EnsureApprovable(bill);
         var lines = bill.Lines.OrderBy(line => line.Position).ToList();
         var shares = AllocateDiscounts(bill);
         var loyaltyEnabled = await _wallet.IsProgramEnabledAsync(cancellationToken);
@@ -136,15 +157,7 @@ internal sealed partial class BillsService
         {
             await using var transaction = await BeginTransactionAsync(cancellationToken);
             var bill = await LoadLockedAsync(actor, billId, cancellationToken);
-            switch (bill.Status)
-            {
-                case BillStatus.Approved:
-                    throw new ConflictException(AlreadyApprovedMessage);
-                case BillStatus.Open:
-                    throw new ConflictException("La cuenta todavía está abierta: debe cerrarse antes de aprobarla.");
-                case BillStatus.Voided:
-                    throw new ConflictException("La cuenta está anulada.");
-            }
+            EnsureApprovable(bill);
 
             EnsureVersion(bill, request.Version.Value);
             var lines = bill.Lines.OrderBy(line => line.Position).ToList();
@@ -225,7 +238,8 @@ internal sealed partial class BillsService
                         var stock = await LoadStockAsync(line.ProductId!.Value, stocks, utcNow, cancellationToken);
                         var costBefore = stock.AverageUnitCost;
                         var movementPostingId = Guid.NewGuid();
-                        var movement = stock.Sell(line.Quantity, postingDate, movementPostingId, currentUserId, utcNow);
+                        // SONDA BUG-132: the stock card says which bill the units left with.
+                        var movement = stock.Sell(line.Quantity, postingDate, movementPostingId, currentUserId, utcNow, BillReference(bill));
                         _dbContext.InventoryMovements.Add(movement);
                         var income = IncomeEntry.CreateProductSale(
                             line.ProductId!.Value, line.NameSnapshot, line.Quantity, line.UnitPrice, costBefore, share.Net, postingDate,
@@ -432,7 +446,7 @@ internal sealed partial class BillsService
                     {
                         var sale = sales[posting.InventoryMovementId!.Value];
                         var stock = await LoadStockAsync(sale.ProductId, stocks, utcNow, cancellationToken);
-                        var returned = stock.ReturnSale(sale.Quantity, sale.UnitCost, today, Guid.NewGuid(), currentUserId, utcNow);
+                        var returned = stock.ReturnSale(sale.Quantity, sale.UnitCost, today, Guid.NewGuid(), currentUserId, utcNow, BillReference(bill));
                         _dbContext.InventoryMovements.Add(returned);
                         posting.MarkReversed(returned.Id, utcNow);
                         break;

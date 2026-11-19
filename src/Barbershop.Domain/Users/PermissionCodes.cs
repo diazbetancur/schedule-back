@@ -69,6 +69,15 @@ public static class PermissionCodes
   public const string BillsVoid = "bills.void";
 
   /// <summary>
+  /// ADR-0021 L1: puts a service, a membership consumption, a service redemption or a tip on another professional's
+  /// name. Without it a user can only put those lines on their own name (products are not affected).
+  /// </summary>
+  public const string BillsAssignOtherStaff = "bills.assign-other-staff";
+
+  /// <summary>ADR-0021 L2: sees the cash closing (what was charged by day and payment method).</summary>
+  public const string ReportsCashView = "reports.cash.view";
+
+  /// <summary>
   /// ADR-0020 Q16: codes taken out of the catalog. Their rows stay in the database untouched (nothing is deleted), but
   /// they are not listed, not granted, not issued in tokens, and saving a role leaves them as they are.
   /// </summary>
@@ -96,6 +105,8 @@ public static class PermissionCodes
     BillsApprove,
     BillsUnapprove,
     BillsVoid,
+    BillsAssignOtherStaff,
+    ReportsCashView,
   ];
 
   public static bool IsInCatalog(string code) => All.Contains(code, StringComparer.Ordinal);
@@ -117,5 +128,6 @@ public static class PermissionCodes
     BillsApprove,
     BillsUnapprove,
     BillsVoid,
+    ReportsCashView,
   ];
 }

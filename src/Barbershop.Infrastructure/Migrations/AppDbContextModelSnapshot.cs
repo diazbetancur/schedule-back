@@ -147,6 +147,16 @@ namespace Barbershop.Infrastructure.Migrations
                     b.Property<Guid?>("ApprovedByUserId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("ChargedPaymentMethodId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ChargedPaymentMethodName")
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)");
+
+                    b.Property<int?>("ChargedTotal")
+                        .HasColumnType("integer");
+
                     b.Property<DateTime?>("ClosedAt")
                         .HasColumnType("timestamp with time zone");
 

@@ -70,13 +70,29 @@ internal sealed partial class BillsService : IMyBillsService, IBillReportsServic
 
     public async Task<CashClosingView> GetCashClosingAsync(CashClosingQuery query, CancellationToken cancellationToken = default)
     {
-        var (from, to) = HistoryRange.Resolve(query.From, query.To, Today());
+        // SONDA BUG-126: the cash closing never runs into the future; with only «from», it ends today at the latest.
+        // (Agendas and other histories keep their window of 30 days forward from «from».)
+        var cashTo = query.To ?? (query.From is { } fromDay && fromDay <= Today() && fromDay.AddDays(HistoryRange.MaxDays - 1) > Today() ? Today() : null);
+        var (from, to) = HistoryRange.Resolve(query.From, cashTo, Today());
         var start = BogotaClock.ToUtc(from, TimeOnly.MinValue);
         var end = BogotaClock.ToUtc(to.AddDays(1), TimeOnly.MinValue);
-        var closed = await _dbContext.Bills.AsNoTracking()
-            .Where(bill => bill.ClosedAt >= start && bill.ClosedAt < end && bill.Total > 0 && bill.PaymentMethodId != null)
-            .Select(bill => new CashRow(bill.ClosedAt!.Value, bill.Status, bill.PaymentMethodId!.Value, bill.PaymentMethodNameSnapshot ?? string.Empty, bill.Total))
-            .ToListAsync(cancellationToken);
+        // SONDA BUG-121: the cash closing counts what was charged when each bill was closed, not its current total or
+        // payment method (an approver may correct both later). Bills closed before the copy existed and whose charge could
+        // not be rebuilt without ambiguity (see AddBillChargeSnapshot) keep their current values.
+        var closed = (await _dbContext.Bills.AsNoTracking()
+                .Where(bill => bill.ClosedAt >= start && bill.ClosedAt < end)
+                .Select(bill => new
+                {
+                    ClosedAt = bill.ClosedAt!.Value,
+                    bill.Status,
+                    Total = bill.ChargedTotal ?? bill.Total,
+                    MethodId = bill.ChargedTotal != null ? bill.ChargedPaymentMethodId : bill.PaymentMethodId,
+                    MethodName = bill.ChargedTotal != null ? bill.ChargedPaymentMethodName : bill.PaymentMethodNameSnapshot,
+                })
+                .ToListAsync(cancellationToken))
+            .Where(bill => bill.Total > 0 && bill.MethodId != null)
+            .Select(bill => new CashRow(bill.ClosedAt, bill.Status, bill.MethodId!.Value, bill.MethodName ?? string.Empty, bill.Total))
+            .ToList();
         var charged = closed.Where(bill => bill.Status != BillStatus.Voided).ToList();
         var voided = closed.Where(bill => bill.Status == BillStatus.Voided).ToList();
 

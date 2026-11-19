@@ -106,6 +106,82 @@ public sealed class BillsHttpIntegrationTests
   }
 
   [Fact]
+  public async Task L2_TheCashClosing_IsItsOwnCriticalPermission_GrantedToAnyRole_AndRevokedAtOnce()
+  {
+    using var factory = await CreateFactoryAsync();
+    if (factory is null) return;
+    using var client = factory.CreateClient();
+    var admin = await RegisterAdminAsync(factory, client, "cash");
+    var permissions = await GetPermissionsAsync(client, admin.AccessToken);
+    var role = await CreateRoleAsync(client, admin.AccessToken, "Caja", permissions[PermissionCodes.ReportsCashView]);
+    var cashier = await CreateUserWithRolesAsync(client, admin.AccessToken, "cashier", role.Id);
+
+    // ADR-0021 L2: no Admin role needed; the permission is enough (and the Admin keeps it by default).
+    AuthenticateAs(client, cashier.AccessToken);
+    Assert.Equal(HttpStatusCode.OK, await StatusAsync(client.GetAsync("/api/v1/admin/reports/cash")));
+    Assert.Equal(HttpStatusCode.Forbidden, await StatusAsync(client.GetAsync("/api/v1/admin/reports/summary")));
+    AuthenticateAs(client, admin.AccessToken);
+    Assert.Equal(HttpStatusCode.OK, await StatusAsync(client.GetAsync("/api/v1/admin/reports/cash")));
+
+    // Critical (ADR-0005): removing it from the role applies to the very same token.
+    using (var update = await client.PutAsJsonAsync($"/api/v1/admin/roles/{role.Id}", new RoleUpdateRequest("Caja", [])))
+    {
+      Assert.Equal(HttpStatusCode.OK, update.StatusCode);
+    }
+
+    AuthenticateAs(client, cashier.AccessToken);
+    Assert.Equal(HttpStatusCode.Forbidden, await StatusAsync(client.GetAsync("/api/v1/admin/reports/cash")));
+  }
+
+  [Fact]
+  public async Task BUG157_TheCustomerSearch_IsLimitedPerUser()
+  {
+    using var factory = await CreateFactoryAsync();
+    if (factory is null) return;
+    using var client = factory.CreateClient();
+    var admin = await RegisterAdminAsync(factory, client, "search");
+
+    AuthenticateAs(client, admin.AccessToken);
+    for (var i = 0; i < global::Api.Barbershop.Configuration.ApiFoundationServiceCollectionExtensions.BillCustomerSearchPermitLimit; i++)
+    {
+      Assert.Equal(HttpStatusCode.OK, await StatusAsync(client.GetAsync($"/api/v1/bills/customers?q=cliente{i}")));
+    }
+
+    Assert.Equal(HttpStatusCode.TooManyRequests, await StatusAsync(client.GetAsync("/api/v1/bills/customers?q=cliente")));
+  }
+
+  [Fact]
+  public async Task BUG161_SavingARoleFromAnOlderVersion_IsAConflict_AndTheRoleKeepsTheNewerSet()
+  {
+    using var factory = await CreateFactoryAsync();
+    if (factory is null) return;
+    using var client = factory.CreateClient();
+    var admin = await RegisterAdminAsync(factory, client, "roles");
+    var permissions = await GetPermissionsAsync(client, admin.AccessToken);
+    var role = await CreateRoleAsync(client, admin.AccessToken, "Caja versión", permissions[PermissionCodes.BillsOpen]);
+
+    AuthenticateAs(client, admin.AccessToken);
+    var read = (await client.GetFromJsonAsync<List<RoleView>>("/api/v1/admin/roles"))!.Single(candidate => candidate.Id == role.Id);
+    Assert.False(string.IsNullOrEmpty(read.Version));
+
+    using (var first = await client.PutAsJsonAsync($"/api/v1/admin/roles/{role.Id}",
+               new RoleUpdateRequest("Caja versión", [permissions[PermissionCodes.BillsClose]], read.Version)))
+    {
+      Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+    }
+
+    using (var stale = await client.PutAsJsonAsync($"/api/v1/admin/roles/{role.Id}",
+               new RoleUpdateRequest("Caja versión", [permissions[PermissionCodes.BillsCharge]], read.Version)))
+    {
+      Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+    }
+
+    var after = (await client.GetFromJsonAsync<List<RoleView>>("/api/v1/admin/roles"))!.Single(candidate => candidate.Id == role.Id);
+    Assert.Equal([PermissionCodes.BillsClose], after.Permissions.Select(permission => permission.Code));
+    Assert.NotEqual(read.Version, after.Version);
+  }
+
+  [Fact]
   public async Task BillsApprove_IsCritical_ARevocationAppliesToTheSameToken()
   {
     using var factory = await CreateFactoryAsync();
@@ -160,9 +236,9 @@ public sealed class BillsHttpIntegrationTests
     var pending = await client.GetFromJsonAsync<BillPendingView>("/api/v1/bills/pending");
     var opened = Assert.Single(pending!.OpenBills);
     Assert.Equal((appointmentId, "Cliente Agenda"), (opened.AppointmentId!.Value, opened.CustomerName));
-    // An appointment completed before the bills existed, with nothing registered, is listed to open its bill.
-    Assert.Equal(legacyId, Assert.Single(pending.AppointmentsWithoutBill).AppointmentId);
-    Assert.Equal(2, (await client.GetFromJsonAsync<BillCountView>("/api/v1/bills/pending/count"))!.Count);
+    // ADR-0021 L8: an appointment of a past day without a bill is no longer offered (its bill can no longer be opened).
+    Assert.DoesNotContain(pending.AppointmentsWithoutBill, item => item.AppointmentId == legacyId);
+    Assert.Equal(1, (await client.GetFromJsonAsync<BillCountView>("/api/v1/bills/pending/count"))!.Count); // only the open bill
 
     var bill = await client.GetFromJsonAsync<BillView>($"/api/v1/bills/{opened.Id}");
     var line = Assert.Single(bill!.Lines);

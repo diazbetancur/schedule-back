@@ -129,7 +129,9 @@ internal sealed class InventoryManagementService : IAdminInventoryService
         var range = HistoryRange.ResolveOptional(listQuery.From, listQuery.To);
         var type = ListFilters.ParseEnum<InventoryMovementType>(listQuery.Type, "type");
 
-        if (!await _dbContext.Products.AsNoTracking().AnyAsync(product => product.Id == productId, cancellationToken))
+        // SONDA BUG-140: like its detail, receipts and adjustments, the stock card of a deleted product answers 404 (the
+        // movements stay in the database; the deletion is logical).
+        if (!await _dbContext.Products.AsNoTracking().AnyAsync(product => product.Id == productId && !product.IsDeleted, cancellationToken))
         {
             throw new NotFoundException(ProductNotFoundMessage);
         }

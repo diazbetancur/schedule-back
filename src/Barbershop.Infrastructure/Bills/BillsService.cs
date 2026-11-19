@@ -30,15 +30,24 @@ namespace Barbershop.Infrastructure.Bills;
 /// </summary>
 internal sealed partial class BillsService : IBillsService, IBillApprovalService, IPaymentMethodsService
 {
-    private const int MaxCustomerOptions = 20;
-    private const int PendingAppointmentWindowDays = 30;
-    private const int MaxBackdatedDays = 30;
+    private const int MaxCustomerOptions = 10;
+
+    /// <summary>SONDA BUG-157: a name is searched from 3 letters; a phone only by its full number (7 digits or more).</summary>
+    internal const int MinCustomerSearchLength = 3;
+    internal const int MinCustomerPhoneDigits = 7;
+    internal const string OnlyTodayMessage =
+        "La cuenta se abre el día de la atención, con la fecha de hoy. Lo que no se registró ese día ya no se registra.";
+    internal const string PastAppointmentMessage =
+        "Esta cita fue de un día anterior. Su cuenta se abría ese día; lo que no se registró ese día ya no se registra.";
+    internal const string DateIsFixedMessage = "La fecha de una cuenta abierta no se cambia: es la del día de la atención.";
 
     internal const string StaleMessage = "La cuenta cambió mientras la editabas. Recarga e intenta de nuevo.";
     internal const string MissingVersionMessage = "Falta la versión de la cuenta. Recarga e intenta de nuevo.";
     internal const string NotFoundMessage = "La cuenta no existe o no tienes acceso a ella.";
     internal const string WalkInLimitMessage =
         "Una cuenta de cliente ocasional no puede usar membresías, canjes ni puntos. Elige un perfil de cliente.";
+    internal const string AssignOtherStaffMessage =
+        "Solo puedes cargar servicios y propinas a tu nombre. Para cargarlos a otro profesional necesitas el permiso «Cargar servicios y propinas a nombre de otro profesional».";
     internal const string DiscountPermissionMessage = "Solo administración o quien tenga el permiso de descuentos puede dar descuentos o cortesías.";
     internal const string DiscountTooLargeMessage = "El descuento no puede ser mayor que lo que descuenta.";
     internal const string CancelledAppointmentMessage =
@@ -119,7 +128,8 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             actor.Has(PermissionCodes.BillsCharge),
             actor.Has(PermissionCodes.BillsClose),
             actor.Has(PermissionCodes.BillsApprove),
-            actor.Has(PermissionCodes.BillsVoid));
+            actor.Has(PermissionCodes.BillsVoid),
+            actor.Has(PermissionCodes.BillsAssignOtherStaff));
     }
 
     public async Task<PagedResult<BillSummaryView>> ListAsync(Guid currentUserId, BillListQuery query, CancellationToken cancellationToken = default)
@@ -233,20 +243,56 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
 
     public async Task<IReadOnlyList<BillCustomerOption>> SearchCustomersAsync(string? query, CancellationToken cancellationToken = default)
     {
+        // SONDA BUG-157, same minimization as ADR-0009: a name by its letters, an email or a phone only when written in full
+        // (no fragments such as "@gmail.com" that would walk the base), few results and only hints of the contact data.
         var customers = _dbContext.Customers.AsNoTracking().Where(customer => customer.MergedIntoCustomerId == null);
-        var term = query?.Trim().ToLowerInvariant();
-        if (string.IsNullOrEmpty(term) || term.Length < 2)
+        var term = query?.Trim() ?? string.Empty;
+        if (term.Length < MinCustomerSearchLength)
         {
             return [];
         }
 
+        if (term.Contains('@'))
+        {
+            var at = term.IndexOf('@');
+            var domain = term[(at + 1)..];
+            if (at == 0 || !domain.Contains('.') || domain.StartsWith('.') || domain.EndsWith('.') || term.Count(c => c == '@') != 1)
+            {
+                return [];
+            }
+
+            var email = term.ToUpperInvariant(); // the stored NormalizedEmail: trimmed and upper case
+            customers = customers.Where(customer => customer.NormalizedEmail == email);
+        }
+        else if (term.All(c => char.IsAsciiDigit(c) || c is ' ' or '+' or '-' or '(' or ')'))
+        {
+            var digits = new string(term.Where(char.IsAsciiDigit).ToArray());
+            if (digits.Length < MinCustomerPhoneDigits)
+            {
+                return [];
+            }
+
+            var withCountry = "57" + digits;
+            var withoutCountry = digits.Length == 12 && digits.StartsWith("57", StringComparison.Ordinal) ? digits[2..] : digits;
+            customers = customers.Where(customer =>
+                customer.NormalizedPhone == digits || customer.NormalizedPhone == withCountry || customer.NormalizedPhone == withoutCountry);
+        }
+        else
+        {
+            var name = term.ToLowerInvariant();
+            customers = customers.Where(customer => customer.FullName.ToLower().Contains(name));
+        }
+
         return (await customers
-                .Where(customer => customer.FullName.ToLower().Contains(term) || customer.Phone.Contains(term) || customer.Email.ToLower().Contains(term))
                 .OrderBy(customer => customer.FullName)
                 .Take(MaxCustomerOptions)
-                .Select(customer => new { customer.Id, customer.FullName, customer.Phone })
+                .Select(customer => new { customer.Id, customer.FullName, customer.Phone, customer.Email })
                 .ToListAsync(cancellationToken))
-            .Select(customer => new BillCustomerOption(customer.Id, customer.FullName, ServiceRecordCustomerPrivacy.PhoneHint(customer.Phone)))
+            .Select(customer => new BillCustomerOption(
+                customer.Id,
+                customer.FullName,
+                ServiceRecordCustomerPrivacy.PhoneHint(customer.Phone),
+                ServiceRecordCustomerPrivacy.EmailHint(customer.Email)))
             .ToArray();
     }
 
@@ -371,6 +417,34 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         return await GetAsync(currentUserId, billId, cancellationToken);
     }
 
+    /// <summary>
+    /// SONDA BUG-127: a retry with the same key must carry the same opening data. Every field the request gives is
+    /// compared with the header the bill was opened with (its «Opened» event), not with later edits.
+    /// </summary>
+    private async Task<bool> SameOpeningAsync(Guid billId, BillOpenRequest request, CancellationToken cancellationToken)
+    {
+        var opened = await _dbContext.BillEvents.AsNoTracking()
+            .Where(billEvent => billEvent.BillId == billId && billEvent.Type == BillEventType.Opened)
+            .OrderBy(billEvent => billEvent.CreatedAt)
+            .Select(billEvent => billEvent.AfterJson)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (opened is null)
+        {
+            return true;
+        }
+
+        using var header = JsonDocument.Parse(opened);
+        var root = header.RootElement;
+        string? Text(string name) => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+        return (request.CustomerId is not { } customerId || string.Equals(Text("customerId"), customerId.ToString(), StringComparison.OrdinalIgnoreCase))
+            && (string.IsNullOrWhiteSpace(request.CustomerName)
+                || string.Equals(Text("customerName")?.Trim(), request.CustomerName.Trim(), StringComparison.OrdinalIgnoreCase))
+            && (request.ServiceDate is not { } serviceDate || Text("serviceDate") == serviceDate.ToString("yyyy-MM-dd"))
+            && (request.StaffProfileId is not { } staffId || string.Equals(Text("staffProfileId"), staffId.ToString(), StringComparison.OrdinalIgnoreCase))
+            && (string.IsNullOrWhiteSpace(request.Notes) || Text("notes")?.Trim() == request.Notes.Trim());
+    }
+
     private async Task<BillView?> ReplayOpenAsync(Actor actor, BillOpenRequest request, CancellationToken cancellationToken)
     {
         var previous = await _dbContext.Bills.AsNoTracking()
@@ -380,7 +454,8 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             return null;
         }
 
-        if (previous.OpenedByUserId != actor.UserId || previous.AppointmentId != request.AppointmentId)
+        if (previous.OpenedByUserId != actor.UserId || previous.AppointmentId != request.AppointmentId
+            || !await SameOpeningAsync(previous.Id, request, cancellationToken))
         {
             throw new ConflictException("Esta cuenta ya se abrió con otros datos. Recarga la página para abrir una nueva.");
         }
@@ -414,6 +489,12 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             throw new ConflictException("La cita es de un día futuro. Abre su cuenta el día de la cita.");
         }
 
+        // ADR-0021 L8: only on the day of the appointment, never after.
+        if (BogotaDate(appointment.StartsAt) < Today())
+        {
+            throw new ConflictException(PastAppointmentMessage);
+        }
+
         await EnsureAppointmentWithoutBillAsync(_dbContext, appointment.Id, cancellationToken);
         return await NewAppointmentBillAsync(_dbContext, appointment, actor.UserId, request.IdempotencyKey, request.Notes, Now(), cancellationToken);
     }
@@ -421,7 +502,12 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
     private async Task<Bill> OpenWithoutAppointmentAsync(Actor actor, BillOpenRequest request, CancellationToken cancellationToken)
     {
         var (customerId, customerName) = await ResolveCustomerAsync(request.CustomerId, request.CustomerName, cancellationToken);
-        var serviceDate = ValidateServiceDate(request.ServiceDate ?? Today());
+        // ADR-0021 L8: without an appointment the bill is of today; no past (or future) date.
+        var serviceDate = request.ServiceDate ?? Today();
+        if (serviceDate != Today())
+        {
+            throw Invalid("serviceDate", OnlyTodayMessage);
+        }
 
         Guid? staffProfileId;
         if (request.StaffProfileId is { } requestedStaff && requestedStaff != actor.StaffProfileId)
@@ -531,7 +617,9 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             bill => bill.AppointmentId == appointment.Id && bill.Status != BillStatus.Voided, cancellationToken);
         var hasRecords = await dbContext.ServiceRecords.AnyAsync(
             record => record.AppointmentId == appointment.Id && record.Status != ServiceRecordStatus.Rejected, cancellationToken);
-        if (hasBill || hasRecords)
+        // ADR-0021 L8: an appointment of a past day can still be completed (ADR-0018 D2), but its bill is not opened.
+        var today = DateOnly.FromDateTime(BogotaClock.ToLocal(utcNow));
+        if (hasBill || hasRecords || DateOnly.FromDateTime(BogotaClock.ToLocal(appointment.StartsAt)) != today)
         {
             return null;
         }
@@ -562,13 +650,13 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             var (customerId, customerName) = request.CustomerId is null && string.IsNullOrWhiteSpace(request.CustomerName)
                 ? (bill.CustomerId, bill.CustomerNameSnapshot)
                 : await ResolveCustomerAsync(request.CustomerId, request.CustomerName, cancellationToken);
+            // ADR-0021 L8: the date of an open bill is the day of the service and is not changed (bills opened before the
+            // rule keep theirs too).
             var serviceDate = request.ServiceDate ?? bill.ServiceDate;
-            if (bill.AppointmentId is not null && serviceDate != bill.ServiceDate)
+            if (serviceDate != bill.ServiceDate)
             {
-                throw Invalid("serviceDate", "Con una cita, la fecha es la de la cita.");
+                throw Invalid("serviceDate", bill.AppointmentId is not null ? "Con una cita, la fecha es la de la cita." : DateIsFixedMessage);
             }
-
-            ValidateServiceDate(serviceDate);
             if (customerId != bill.CustomerId
                 && bill.Lines.Any(line => line.Type is BillLineType.MembershipConsumption or BillLineType.Redemption))
             {
@@ -898,6 +986,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         {
             case BillLineType.Service:
             {
+                EnsureCanAssignStaff(actor, request.StaffProfileId);
                 var staffId = await RequireStaffAsync(request.StaffProfileId, cancellationToken);
                 var general = await RequireGeneralServiceAsync(request.GeneralServiceId, cancellationToken);
                 if (request.IsCourtesy)
@@ -928,9 +1017,16 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             case BillLineType.MembershipConsumption:
             {
                 var customerId = bill.CustomerId ?? throw new ConflictException(WalkInLimitMessage);
+                EnsureCanAssignStaff(actor, request.StaffProfileId);
                 var staffId = await RequireStaffAsync(request.StaffProfileId, cancellationToken);
                 var membershipId = request.CustomerMembershipId ?? throw Invalid("customerMembershipId", "Elige la membresía de la que se descuenta el servicio.");
                 var rateId = request.ServiceId ?? throw Invalid("serviceId", "Elige el servicio de la membresía.");
+                // SONDA BUG-145: each consumption line is one unit; a quantity was accepted and silently counted as 1.
+                if (request.Quantity is { } consumedQuantity && consumedQuantity != 1)
+                {
+                    throw Invalid("quantity", "Cada línea de consumo de membresía descuenta una unidad. Para descontar dos, agrega dos líneas.");
+                }
+
                 await EnsureMembershipBalanceAsync(bill, customerId, membershipId, rateId, extra: 1, cancellationToken);
                 var rate = await _dbContext.Services.AsNoTracking().SingleAsync(candidate => candidate.Id == rateId, cancellationToken);
                 var generalName = await _dbContext.GeneralServices.AsNoTracking()
@@ -943,6 +1039,9 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             {
                 var customerId = bill.CustomerId ?? throw new ConflictException(WalkInLimitMessage);
                 var redemptionId = request.LoyaltyRedemptionId ?? throw Invalid("loyaltyRedemptionId", "Elige el canje aprobado que se entrega.");
+                // SONDA BUG-129: the same redemption added to two bills at once. Locking the redemption (after the bill, the
+                // order every bill operation follows) makes the second one wait and then see the first: 409, never 200/200.
+                await LockAsync($"SELECT 1 FROM public.loyalty_redemptions WHERE \"Id\" = {redemptionId} FOR UPDATE", cancellationToken);
                 var live = await _wallet.ResolveLiveCustomerIdAsync(customerId, cancellationToken);
                 var redemption = await _dbContext.LoyaltyRedemptions.AsNoTracking()
                     .SingleOrDefaultAsync(candidate => candidate.Id == redemptionId && candidate.CustomerId == live, cancellationToken)
@@ -962,6 +1061,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
                     return BillLine.Redemption(redemption.Id, redemption.RewardNameSnapshot, null, null, null, 0, null, utcNow);
                 }
 
+                EnsureCanAssignStaff(actor, request.StaffProfileId);
                 var staffId = await RequireStaffAsync(request.StaffProfileId, cancellationToken);
                 var rate = await _dbContext.Services.AsNoTracking().SingleAsync(candidate => candidate.Id == redemption.ServiceIdSnapshot, cancellationToken);
                 return BillLine.Redemption(
@@ -985,6 +1085,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
 
             case BillLineType.Tip:
             {
+                EnsureCanAssignStaff(actor, request.StaffProfileId);
                 var staffId = await RequireStaffAsync(request.StaffProfileId, cancellationToken);
                 var amount = ValidateAmount(request.Amount);
                 var mode = ParseTipMode(request.TipPaymentMode);
@@ -1001,6 +1102,13 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         var utcNow = Now();
         if (request.StaffProfileId is { } staffId && staffId != line.StaffProfileId)
         {
+            // ADR-0021 L1: only a change of professional is checked, so lines already on another professional's name
+            // (open bills from before the rule) keep working: their rate, courtesy or amount can still be edited.
+            if (line.Type != BillLineType.Product)
+            {
+                EnsureCanAssignStaff(actor, staffId);
+            }
+
             line.SetStaff(await RequireStaffAsync(staffId, cancellationToken), utcNow);
         }
 
@@ -1040,6 +1148,14 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             case BillLineType.Product:
                 if (request.Quantity is { } quantity && quantity != line.Quantity)
                 {
+                    // SONDA BUG-156: more units of a product that was deleted or deactivated are refused, as when adding a
+                    // line; fewer units (a correction downwards) are still allowed.
+                    if (quantity > line.Quantity && !await _dbContext.Products.AnyAsync(
+                            product => product.Id == line.ProductId && !product.IsDeleted && product.IsActive, cancellationToken))
+                    {
+                        throw Invalid("quantity", "El producto ya no existe o está inactivo: solo puedes bajar su cantidad o quitar la línea.");
+                    }
+
                     line.SetQuantity(ValidateQuantity(quantity), utcNow);
                 }
 
@@ -1070,11 +1186,58 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
 
     private static string? CourtesyReason(BillLineRequest request) => request.IsCourtesy ? ValidateReason(request.Reason) : null;
 
+    /// <summary>
+    /// ADR-0021 L1: services, membership consumptions, service redemptions and tips go on the actor's own name unless
+    /// they hold bills.assign-other-staff (Admin by default). Products are not checked: their professional is only
+    /// informative (Q11). The line an appointment bill opens with is the appointment's professional and is not checked.
+    /// </summary>
+    private static void EnsureCanAssignStaff(Actor actor, Guid? staffProfileId)
+    {
+        if (staffProfileId is { } staffId && staffId != actor.StaffProfileId && !actor.Has(PermissionCodes.BillsAssignOtherStaff))
+        {
+            throw new UnauthorizedAccessException(AssignOtherStaffMessage);
+        }
+    }
+
     private static void EnsureCanDiscount(Actor actor)
     {
         if (!actor.Has(PermissionCodes.BillsDiscount))
         {
             throw new UnauthorizedAccessException(DiscountPermissionMessage);
+        }
+    }
+
+    internal const string TotalTooLargeMessage =
+        "La cuenta superaría el máximo técnico de $ 2.147.483.647. Revisa las cantidades o divide el cobro en otra cuenta.";
+
+    /// <summary>
+    /// SONDA BUG-131: the amounts of a bill are 32-bit (like every money column). They are added up in 64 bits first, so
+    /// a bill that would pass the technical maximum is a clear 422 instead of an overflow (500).
+    /// </summary>
+    private static void EnsureTotalsFit(Bill bill)
+    {
+        long subtotal = 0, tips = 0, directTips = 0;
+        foreach (var line in bill.Lines)
+        {
+            var gross = (long)line.Quantity * line.UnitPrice;
+            if (line.IsChargeable)
+            {
+                subtotal += gross;
+            }
+            else if (line.Type == BillLineType.Tip)
+            {
+                if (line.TipPaymentMode == TipPaymentMode.Direct) directTips += line.UnitPrice; else tips += line.UnitPrice;
+            }
+
+            if (gross > int.MaxValue)
+            {
+                throw Invalid("quantity", TotalTooLargeMessage);
+            }
+        }
+
+        if (subtotal > int.MaxValue || subtotal + tips > int.MaxValue || directTips > int.MaxValue)
+        {
+            throw Invalid("amount", TotalTooLargeMessage);
         }
     }
 
@@ -1237,6 +1400,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             var statusBefore = bill.Status;
             var hadMethod = bill.PaymentMethodId is not null;
             var change = await apply(actor, bill);
+            EnsureTotalsFit(bill);
             bill.Recalculate();
             ValidateDiscounts(bill);
             if (statusBefore is BillStatus.Closed or BillStatus.Unapproved)
@@ -1320,12 +1484,16 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         return bills.Where(bill => bill.OpenedByUserId == userId || (staffId != null && bill.StaffProfileId == staffId));
     }
 
-    /// <summary>BUG-092: completed appointments of the last 30 days with no bill (not voided) and nothing registered.</summary>
+    /// <summary>
+    /// BUG-092: completed appointments with no bill (not voided) and nothing registered. ADR-0021 L8: only today's, the
+    /// only ones whose bill can still be opened.
+    /// </summary>
     private IQueryable<Appointment> PendingAppointmentsQuery(Actor actor)
     {
-        var earliest = BogotaClock.ToUtc(Today().AddDays(-PendingAppointmentWindowDays), TimeOnly.MinValue);
+        var earliest = BogotaClock.ToUtc(Today(), TimeOnly.MinValue);
+        var latest = BogotaClock.ToUtc(Today().AddDays(1), TimeOnly.MinValue);
         var appointments = _dbContext.Appointments.AsNoTracking()
-            .Where(appointment => appointment.Status == AppointmentStatus.Completed && appointment.StartsAt >= earliest
+            .Where(appointment => appointment.Status == AppointmentStatus.Completed && appointment.StartsAt >= earliest && appointment.StartsAt < latest
                 && !_dbContext.Bills.Any(bill => bill.AppointmentId == appointment.Id && bill.Status != BillStatus.Voided)
                 && !_dbContext.ServiceRecords.Any(record => record.AppointmentId == appointment.Id && record.Status != ServiceRecordStatus.Rejected));
         if (actor.Has(PermissionCodes.BillsManage))
@@ -1634,19 +1802,6 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         return name.Length is < Bill.MinCustomerNameLength or > Bill.MaxCustomerNameLength
             ? throw Invalid("customerName", "Elige el cliente o escribe el nombre del cliente ocasional (entre 2 y 120 caracteres).")
             : (null, name);
-    }
-
-    private DateOnly ValidateServiceDate(DateOnly serviceDate)
-    {
-        var today = Today();
-        if (serviceDate > today)
-        {
-            throw Invalid("serviceDate", "La fecha del servicio no puede ser futura.");
-        }
-
-        return serviceDate < today.AddDays(-MaxBackdatedDays)
-            ? throw Invalid("serviceDate", $"La fecha del servicio no puede tener más de {MaxBackdatedDays} días.")
-            : serviceDate;
     }
 
     private async Task<Guid> RequireStaffAsync(Guid? staffProfileId, CancellationToken cancellationToken)

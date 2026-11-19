@@ -366,7 +366,8 @@ public sealed partial class BillsServiceTests : IDisposable
     _dbContext.StaffProfiles.Add(approverStaff);
     await _dbContext.SaveChangesAsync();
     var bill = await OpenWalkInAsync(_barberUser, "Cliente");
-    bill = await _bills.AddLineAsync(_barberUser.Id, bill.Id, new BillLineRequest(
+    // ADR-0021 L1: the barber cannot put a line on another professional's name; the Admin can.
+    bill = await _bills.AddLineAsync(_admin.Id, bill.Id, new BillLineRequest(
         bill.Version, "Service", approverStaff.Id, ServiceCatalogDefaults.CorteGeneralServiceId, _haircut.Id));
     bill = await CloseAsync(_barberUser, bill);
     var refused = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => ApproveAsync(_approverUser, bill));

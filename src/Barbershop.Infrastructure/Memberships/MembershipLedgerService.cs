@@ -35,6 +35,12 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
 
     private readonly CustomerNotificationOutbox _notifications;
 
+    /// <summary>
+    /// SONDA BUG-145: consumption notices queued in this unit of work, per membership and service. A bill with two lines
+    /// of the same service sends one notice with the total used and the balance left after both.
+    /// </summary>
+    private readonly Dictionary<(Guid MembershipId, Guid ServiceId), (int Quantity, QueuedNotification Notice)> _consumptionNotices = new();
+
     public async Task<CustomerMembershipDetailView> ConsumeAsync(
         Guid currentUserId,
         Guid membershipId,
@@ -257,12 +263,27 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
         var remaining = membership.Allowances
             .Where(allowance => allowance.Services.Any(service => service.ServiceId == request.ServiceId))
             .Sum(allowance => available[allowance.Id]) - request.Quantity;
-        await _notifications.QueueForCustomerAsync(
+        var key = (membership.Id, request.ServiceId);
+        var quantity = request.Quantity;
+        // Only a notice still waiting in this unit of work is merged; one already saved (an earlier operation) stays.
+        if (_consumptionNotices.Remove(key, out var previous)
+            && _dbContext.Entry(previous.Notice.Inbox).State == EntityState.Added)
+        {
+            _notifications.Withdraw(previous.Notice);
+            quantity += previous.Quantity;
+        }
+
+        var notice = await _notifications.QueueForCustomerAsync(
             membership.CustomerId,
             UserNotificationTypes.MembershipConsumed,
             CustomerNotificationMessages.MembershipConsumed(
-                membership.Id, membership.PlanName, consumption.ServiceNameSnapshot, request.Quantity, Math.Max(0, remaining)),
+                membership.Id, membership.PlanName, consumption.ServiceNameSnapshot, quantity, Math.Max(0, remaining)),
             cancellationToken);
+        if (notice is not null)
+        {
+            _consumptionNotices[key] = (quantity, notice);
+        }
+
         return consumption;
     }
 
@@ -365,6 +386,16 @@ internal sealed class MembershipLedgerService : IAdminMembershipLedgerService
                 Used = group.Sum(movement => movement.Type == MembershipMovementType.Consumption ? movement.Quantity : -movement.Quantity),
             })
             .ToDictionaryAsync(row => row.AllowanceId, row => row.Used, cancellationToken);
+
+        // SONDA BUG-145: movements added in this unit of work and not saved yet (a bill approval registers one
+        // consumption per line before saving) count too; otherwise the second line saw the units the first one took.
+        foreach (var pending in _dbContext.ChangeTracker.Entries<MembershipMovement>()
+                     .Where(entry => entry.State == EntityState.Added && entry.Entity.CustomerMembershipId == membership.Id)
+                     .Select(entry => entry.Entity))
+        {
+            var delta = pending.Type == MembershipMovementType.Consumption ? pending.Quantity : -pending.Quantity;
+            used[pending.MembershipAllowanceId] = used.GetValueOrDefault(pending.MembershipAllowanceId) + delta;
+        }
 
         return membership.Allowances.ToDictionary(
             allowance => allowance.Id,

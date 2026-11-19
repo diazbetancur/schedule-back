@@ -103,6 +103,25 @@ public sealed class CustomerAppointmentsTests : IDisposable
     }
 
     [Fact]
+    public async Task GetByIdAsync_ReturnsTheCustomersOwnFutureBooking_AndHidesOthers()
+    {
+        // SONDA BUG-118: reloading /booking/confirm?appointmentId=... shows the booking just made (a future one).
+        var staff = await CreateStaffAsync("byid-staff@example.com", "ById Staff", "ById Staff");
+        var customer = await CreateCustomerAsync("byid-customer@example.com", "ById Customer", "+5491100000011");
+        var stranger = await CreateCustomerAsync("byid-stranger@example.com", "ById Stranger", "+5491100000012");
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 11, 0)]);
+        var created = await _customerAppointmentsService.CreateAsync(
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 0), null));
+
+        var found = await _customerAppointmentsService.GetByIdAsync(customer.Id, created.Id);
+
+        Assert.Equal((created.Id, AppointmentStatus.Pending, staff.StaffProfileId), (found.Id, found.Status, found.StaffProfileId));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => _customerAppointmentsService.GetByIdAsync(stranger.Id, created.Id));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => _customerAppointmentsService.GetByIdAsync(customer.Id, Guid.NewGuid()));
+    }
+
+    [Fact]
     public async Task CreateAsync_RejectsPastSlots()
     {
         var staff = await CreateStaffAsync("past-staff@example.com", "Past Staff", "Past Staff");

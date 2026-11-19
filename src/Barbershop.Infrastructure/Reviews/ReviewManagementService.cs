@@ -1,8 +1,12 @@
+using System.Globalization;
 using Barbershop.Application.Common.Exceptions;
+using Barbershop.Application.Notifications;
 using Barbershop.Application.Reviews;
 using Barbershop.Domain.Appointments;
+using Barbershop.Domain.Common;
 using Barbershop.Domain.Staff;
 using Barbershop.Domain.Users;
+using Barbershop.Infrastructure.Notifications;
 using Barbershop.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,13 +14,18 @@ namespace Barbershop.Infrastructure.Reviews;
 
 internal sealed class ReviewManagementService : ICustomerReviewsService, IPublicReviewsService
 {
+  private static readonly CultureInfo DisplayCulture = CultureInfo.GetCultureInfo("es-CO");
+  private static readonly string NormalizedAdminRole = RoleNames.Admin.ToUpperInvariant();
+
   private readonly AppDbContext _dbContext;
   private readonly TimeProvider _timeProvider;
+  private readonly CustomerNotificationOutbox _notifications;
 
   public ReviewManagementService(AppDbContext dbContext, TimeProvider timeProvider)
   {
     _dbContext = dbContext;
     _timeProvider = timeProvider;
+    _notifications = new CustomerNotificationOutbox(dbContext, timeProvider);
   }
 
   async Task<IReadOnlyList<CustomerReviewView>> ICustomerReviewsService.GetByCurrentCustomerAsync(Guid currentUserId, CancellationToken cancellationToken)
@@ -89,6 +98,7 @@ internal sealed class ReviewManagementService : ICustomerReviewsService, IPublic
         request.Comment);
 
     _dbContext.Reviews.Add(review);
+    await QueueReviewNoticesAsync(appointment, review, currentUserId, cancellationToken);
 
     try
     {
@@ -112,6 +122,53 @@ internal sealed class ReviewManagementService : ICustomerReviewsService, IPublic
     }
 
     return MapCustomerReview(review, appointment.StaffProfileId);
+  }
+
+  /// <summary>
+  /// ADR-0021 L4: the professional of the appointment and every active administrator are told about the review (stars
+  /// and comment), in the same unit of work as the review: if it is not saved, nobody is notified. Nobody gets it twice
+  /// and the author never gets their own review. Category «Reseñas»: the push follows each user's preferences.
+  /// </summary>
+  private async Task QueueReviewNoticesAsync(Appointment appointment, Review review, Guid authorUserId, CancellationToken cancellationToken)
+  {
+    var staff = await _dbContext.StaffProfiles.AsNoTracking()
+        .Where(profile => profile.Id == appointment.StaffProfileId)
+        .Select(profile => new { profile.UserId, profile.DisplayName })
+        .SingleOrDefaultAsync(cancellationToken);
+    var staffUserId = staff is null
+        ? (Guid?)null
+        : await _dbContext.Users.AsNoTracking()
+            .Where(user => user.Id == staff.UserId && user.IsActive)
+            .Select(user => (Guid?)user.Id)
+            .SingleOrDefaultAsync(cancellationToken);
+    var adminUserIds = await _dbContext.Users.AsNoTracking()
+        .Where(user => user.IsActive && user.UserRoles.Any(userRole => userRole.Role.NormalizedName == NormalizedAdminRole))
+        .Select(user => user.Id)
+        .ToListAsync(cancellationToken);
+
+    var staffName = staff?.DisplayName ?? "el profesional";
+    var when = BogotaClock.ToLocal(appointment.StartsAt).ToString("d 'de' MMMM", DisplayCulture);
+    var stars = review.Stars == 1 ? "1 de 5 estrellas" : $"{review.Stars} de 5 estrellas";
+    var comment = string.IsNullOrWhiteSpace(review.Comment) ? null : review.Comment.Trim();
+    var title = $"Nueva reseña: {stars}";
+    var url = $"/staff/{appointment.StaffProfileId}";
+    var tag = $"review-{review.Id:N}";
+
+    if (staffUserId is { } staffId && staffId != authorUserId)
+    {
+      var staffBody = comment is null
+          ? $"{appointment.CustomerName} calificó tu cita del {when} y no dejó comentario."
+          : $"{appointment.CustomerName} calificó tu cita del {when}: «{comment}»";
+      _notifications.Queue(staffId, UserNotificationTypes.ReviewReceived, new PushNotificationMessage(title, staffBody, url, tag, IsTimeSensitive: false));
+    }
+
+    var adminBody = comment is null
+        ? $"{appointment.CustomerName} calificó la cita del {when} con {staffName} y no dejó comentario."
+        : $"{appointment.CustomerName} calificó la cita del {when} con {staffName}: «{comment}»";
+    foreach (var adminId in adminUserIds.Where(id => id != authorUserId && id != staffUserId).Distinct())
+    {
+      _notifications.Queue(adminId, UserNotificationTypes.ReviewReceived, new PushNotificationMessage(title, adminBody, url, tag, IsTimeSensitive: false));
+    }
   }
 
   async Task<IReadOnlyList<PublicStaffReviewView>> IPublicReviewsService.GetByStaffProfileAsync(Guid staffProfileId, CancellationToken cancellationToken)

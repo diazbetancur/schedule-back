@@ -28,6 +28,9 @@ public static class ApiFoundationServiceCollectionExtensions
         services.Configure<JsonOptions>(options =>
         {
             options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
+            // SONDA BUG-163: the web defaults read "30000" (a text) as a number. Numbers must come as JSON numbers; a text
+            // in a numeric field is the wrong format (400 with the field, like any other wrong type, lote C2).
+            options.SerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.Strict;
             // BUG-069 / BUG-081: value properties of write requests cannot be left out of the body.
             options.SerializerOptions.TypeInfoResolver = (options.SerializerOptions.TypeInfoResolver ?? new DefaultJsonTypeInfoResolver())
                 .WithAddedModifier(RequiredRequestValues.Apply);
@@ -133,6 +136,10 @@ public static class ApiFoundationServiceCollectionExtensions
                 .RequireAuthenticatedUser()
                 .AddRequirements(new AdminOrCurrentPermissionRequirement(
                     AuthRoleNames.Admin, global::Barbershop.Domain.Users.PermissionCodes.BillsVoid)));
+            options.AddPolicy(AuthPolicyNames.CashClosingAccess, policy => policy
+                .RequireAuthenticatedUser()
+                .AddRequirements(new AdminOrCurrentPermissionRequirement(
+                    AuthRoleNames.Admin, global::Barbershop.Domain.Users.PermissionCodes.ReportsCashView)));
         });
         services.AddScoped<IAuthorizationHandler, CurrentPermissionAuthorizationHandler>();
         services.AddScoped<IAuthorizationHandler, AdminOrCurrentPermissionAuthorizationHandler>();
@@ -226,6 +233,15 @@ public static class ApiFoundationServiceCollectionExtensions
                 QueueLimit = 0,
             }));
 
+        // SONDA BUG-157: the customer search of «Cuentas» cannot be used to walk the base.
+        options.AddPolicy(RateLimitPolicyNames.BillCustomerSearch, httpContext =>
+            RateLimitPartition.GetFixedWindowLimiter(GetUserPartition(httpContext), _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = BillCustomerSearchPermitLimit,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+            }));
+
         options.AddPolicy(RateLimitPolicyNames.NotificationBroadcast, httpContext =>
             RateLimitPartition.GetFixedWindowLimiter(GetUserPartition(httpContext), _ => new FixedWindowRateLimiterOptions
             {
@@ -236,6 +252,9 @@ public static class ApiFoundationServiceCollectionExtensions
     }
 
     public const int NotificationTestPermitLimit = 3;
+
+    /// <summary>SONDA BUG-157: searches of customers per user and minute (typing a name a few times fits easily).</summary>
+    public const int BillCustomerSearchPermitLimit = 30;
     public const int NotificationBroadcastPermitLimit = 5;
 
     private static string GetClientIp(HttpContext httpContext) => ClientIpResolver.Resolve(httpContext);

@@ -11,4 +11,7 @@ public static class RateLimitPolicyNames
 
     /// <summary>BUG-112: admin broadcasts, per signed-in user.</summary>
     public const string NotificationBroadcast = "notification-broadcast";
+
+    /// <summary>SONDA BUG-157: the customer search of the bills, per signed-in user.</summary>
+    public const string BillCustomerSearch = "bill-customer-search";
 }

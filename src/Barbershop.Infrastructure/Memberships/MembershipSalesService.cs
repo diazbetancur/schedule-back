@@ -22,6 +22,10 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
     private const string ConcurrencyConflictMessage =
         "La membresía o el cliente fueron modificados por otra operación (por ejemplo, otra venta en curso). Recarga e intenta de nuevo.";
 
+    internal const string HasConsumptionsMessage =
+
+        "Esta membresía ya tiene consumos registrados, así que no se puede anular. Lo ya usado se respeta; si un consumo fue un error, reviértelo primero.";
+
     private const string MovedByMergeMessage =
         "La membresía pasó a otro cliente por una fusión mientras la operación esperaba. Recarga e intenta de nuevo.";
 
@@ -315,6 +319,17 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
         if (membership.Status == MembershipStatus.Annulled)
         {
             throw new ConflictException("La membresía ya está anulada.");
+        }
+
+        // ADR-0021 L3: a membership already used keeps its consumptions and is not annulled. Only a consumption that
+        // was not reversed counts (reversing one, for instance by unapproving its bill, frees the annulment again).
+        var hasConsumptions = await _dbContext.MembershipConsumptions.AsNoTracking()
+            .AnyAsync(consumption => consumption.CustomerMembershipId == membership.Id
+                && !_dbContext.MembershipConsumptionReversals.Any(reversal => reversal.MembershipConsumptionId == consumption.Id),
+                cancellationToken);
+        if (hasConsumptions)
+        {
+            throw new ConflictException(HasConsumptionsMessage);
         }
 
         // Annulment blocks the pending benefits (enforced where they are used); nothing is deleted or refunded.

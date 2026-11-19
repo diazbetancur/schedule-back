@@ -460,6 +460,16 @@ internal sealed class LoyaltyRedemptionService : IAdminLoyaltyRewardsService, IA
                     UserNotificationTypes.LoyaltyRedemptionRejected,
                     CustomerNotificationMessages.RedemptionRejected(redemption.Id, redemption.RewardNameSnapshot, redemption.PointsCost, reason),
                     cancellationToken);
+                // SONDA BUG-147 (decision of the user, ADR-0019 lote M): the points coming back are told on their own too.
+                await _notifications.QueueForCustomerAsync(
+                    redemption.CustomerId,
+                    UserNotificationTypes.LoyaltyPointsEarned,
+                    CustomerNotificationMessages.PointsReturned(
+                        redemption.PointsCost,
+                        redemption.PointsCost == 1
+                            ? $"Tu canje de «{redemption.RewardNameSnapshot}» no fue aprobado, así que el punto vuelve a tu cuenta."
+                            : $"Tu canje de «{redemption.RewardNameSnapshot}» no fue aprobado, así que los puntos vuelven a tu cuenta."),
+                    cancellationToken);
             },
             cancellationToken);
         return await GetAsync(redemptionId, cancellationToken);

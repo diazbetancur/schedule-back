@@ -129,7 +129,8 @@ public sealed partial class BillsServiceTests
     _dbContext.StaffProfiles.Add(approverStaff);
     await _dbContext.SaveChangesAsync();
     var bill = await OpenWalkInAsync(_barberUser, "Cliente");
-    bill = await _bills.AddLineAsync(_barberUser.Id, bill.Id, new BillLineRequest(bill.Version, "Service", approverStaff.Id, ServiceCatalogDefaults.CorteGeneralServiceId, _haircut.Id));
+    // ADR-0021 L1: the line on another professional's name is put by the Admin.
+    bill = await _bills.AddLineAsync(_admin.Id, bill.Id, new BillLineRequest(bill.Version, "Service", approverStaff.Id, ServiceCatalogDefaults.CorteGeneralServiceId, _haircut.Id));
     bill = await ApproveAsync(_admin, await CloseAsync(_barberUser, bill));
 
     var refused = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => UnapproveAsync(_approverUser, bill, "Me equivoqué"));

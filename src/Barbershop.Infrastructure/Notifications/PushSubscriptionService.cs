@@ -123,15 +123,47 @@ internal sealed class PushSubscriptionService : IPushSubscriptionService
     {
       errors["p256dhKey"] = ["Faltan las claves de la suscripción de notificaciones."];
     }
+    else if (Base64UrlLength(request.P256dhKey) != 65)
+    {
+      // SONDA BUG-150: the browser key is an uncompressed P-256 point (65 bytes) in base64url.
+      errors["p256dhKey"] = [InvalidKeyMessage];
+    }
 
     if (string.IsNullOrWhiteSpace(request.AuthKey))
     {
       errors["authKey"] = ["Faltan las claves de la suscripción de notificaciones."];
     }
+    else if (Base64UrlLength(request.AuthKey) != 16)
+    {
+      errors["authKey"] = [InvalidKeyMessage];
+    }
 
     if (errors.Count > 0)
     {
       throw new ValidationProblemException(errors);
+    }
+  }
+
+  private const string InvalidKeyMessage =
+      "Las claves de la suscripción de notificaciones no tienen el formato esperado. Vuelve a activar las notificaciones.";
+
+  /// <summary>The decoded length of a base64url (or base64) text, or -1 when it is not one.</summary>
+  internal static int Base64UrlLength(string value)
+  {
+    var text = value.Trim().TrimEnd('=').Replace('-', '+').Replace('_', '/');
+    if (text.Length == 0 || text.Any(c => !(char.IsAsciiLetterOrDigit(c) || c is '+' or '/')))
+    {
+      return -1;
+    }
+
+    var padded = text.PadRight(text.Length + ((4 - (text.Length % 4)) % 4), '=');
+    try
+    {
+      return Convert.FromBase64String(padded).Length;
+    }
+    catch (FormatException)
+    {
+      return -1;
     }
   }
 

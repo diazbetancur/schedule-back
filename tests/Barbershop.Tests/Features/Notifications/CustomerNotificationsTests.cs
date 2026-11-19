@@ -153,7 +153,7 @@ public sealed class CustomerNotificationsTests : IDisposable
 
     var notices = (await NotificationsAsync()).OrderBy(item => item.CreatedAt).ToList();
     Assert.Equal(
-        [("Ganaste 15 puntos", "La barbería sumó 15 puntos a tu cuenta."), ("Se retiraron 1 punto", "La barbería descontó 1 punto de tu cuenta.")],
+        [("Ganaste 15 puntos", "La barbería sumó 15 puntos a tu cuenta."), ("Se retiró 1 punto", "La barbería descontó 1 punto de tu cuenta.")],
         notices.Select(item => (item.Title, item.Body)));
     Assert.DoesNotContain(notices, item => item.Body.Contains("interno", StringComparison.Ordinal));
   }
@@ -179,6 +179,26 @@ public sealed class CustomerNotificationsTests : IDisposable
     Assert.StartsWith("Aprobamos tu canje de «Gorra». Reclámalo en la barbería hasta el", approved.Body);
     var rejected = Assert.Single(notices, item => item.Type == UserNotificationTypes.LoyaltyRedemptionRejected);
     Assert.Equal("No aprobamos tu canje de «Gorra». Motivo: Sin existencias. Tus 10 puntos vuelven a estar disponibles.", rejected.Body);
+    // SONDA BUG-147 (decision of the user): the points coming back are told on their own too.
+    var returned = Assert.Single(notices, item => item.Type == UserNotificationTypes.LoyaltyPointsEarned && item.Title == "Te devolvimos 10 puntos");
+    Assert.Equal("Tu canje de «Gorra» no fue aprobado, así que los puntos vuelven a tu cuenta.", returned.Body);
+  }
+
+  // SONDA BUG-146: singular and plural agree with the quantity.
+  [Fact]
+  public async Task ARejectedRedemptionOfOnePoint_SpeaksInSingular()
+  {
+    var customerId = await CreateCustomerAsync(linked: true);
+    await _wallet.AdjustAsync(_admin.Id, customerId, new LoyaltyAdjustmentRequest("Credit", 5, "Saldo inicial", Guid.NewGuid()));
+    var reward = await _redemptions.CreateAsync(_admin.Id, new LoyaltyRewardUpsertRequest("Sticker", null, "Other", null, 1));
+    var request = await _redemptions.RequestAsync(_customerUser.Id, new LoyaltyRedemptionRequest(reward.Id, Guid.NewGuid()));
+
+    await _redemptions.RejectAsync(
+        _admin.Id, request.Id, new LoyaltyRedemptionReasonRequest((await _redemptions.GetAsync(request.Id)).Version, "Sin existencias"));
+
+    var notices = await NotificationsAsync();
+    Assert.EndsWith("Tu punto vuelve a estar disponible.", Assert.Single(notices, item => item.Type == UserNotificationTypes.LoyaltyRedemptionRejected).Body);
+    Assert.Contains(notices, item => item.Title == "Te devolvimos 1 punto" && item.Body.EndsWith("el punto vuelve a tu cuenta."));
   }
 
   // ── Scheduled expiry notices ───────────────────────────────────────────────────────────────

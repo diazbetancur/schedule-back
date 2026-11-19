@@ -28,6 +28,9 @@ public static class ApiFoundationServiceCollectionExtensions
         services.Configure<JsonOptions>(options =>
         {
             options.SerializerOptions.Converters.Add(new JsonStringEnumConverter());
+            // SONDA BUG-163: the web defaults read "30000" (a text) as a number. Numbers must come as JSON numbers; a text
+            // in a numeric field is the wrong format (400 with the field, like any other wrong type, lote C2).
+            options.SerializerOptions.NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.Strict;
             // BUG-069 / BUG-081: value properties of write requests cannot be left out of the body.
             options.SerializerOptions.TypeInfoResolver = (options.SerializerOptions.TypeInfoResolver ?? new DefaultJsonTypeInfoResolver())
                 .WithAddedModifier(RequiredRequestValues.Apply);

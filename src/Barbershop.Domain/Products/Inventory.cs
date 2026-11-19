@@ -94,14 +94,15 @@ public sealed class ProductStock
   /// ADR-0020 P10: the units of an approved bill leave at the current average cost, which does not change. The stock may
   /// end below zero (a bill can be closed without enough stock); the next receipt covers the shortfall first.
   /// </summary>
-  public InventoryMovement Sell(int quantity, DateOnly occurredOn, Guid idempotencyKey, Guid performedByUserId, DateTime utcNow)
+  public InventoryMovement Sell(
+      int quantity, DateOnly occurredOn, Guid idempotencyKey, Guid performedByUserId, DateTime utcNow, string? reference = null)
   {
     EnsureQuantity(quantity);
     OnHand = checked(OnHand - quantity);
     Touch(utcNow);
     return new InventoryMovement(
         ProductId, InventoryMovementType.Sale, quantity, AverageUnitCost, OnHand, AverageUnitCost, occurredOn, reason: null,
-        supplier: null, reference: null, expenseEntryId: null, idempotencyKey, performedByUserId, utcNow);
+        supplier: null, DomainValidation.Optional(reference, MaxReferenceLength), expenseEntryId: null, idempotencyKey, performedByUserId, utcNow);
   }
 
   /// <summary>
@@ -110,7 +111,7 @@ public sealed class ProductStock
   /// had none when it was sold) the average is left as it is.
   /// </summary>
   public InventoryMovement ReturnSale(
-      int quantity, decimal? unitCost, DateOnly occurredOn, Guid idempotencyKey, Guid performedByUserId, DateTime utcNow)
+      int quantity, decimal? unitCost, DateOnly occurredOn, Guid idempotencyKey, Guid performedByUserId, DateTime utcNow, string? reference = null)
   {
     EnsureQuantity(quantity);
     if (unitCost is { } cost)
@@ -124,7 +125,7 @@ public sealed class ProductStock
     Touch(utcNow);
     return new InventoryMovement(
         ProductId, InventoryMovementType.SaleReversal, quantity, unitCost, OnHand, AverageUnitCost, occurredOn, reason: null,
-        supplier: null, reference: null, expenseEntryId: null, idempotencyKey, performedByUserId, utcNow);
+        supplier: null, DomainValidation.Optional(reference, MaxReferenceLength), expenseEntryId: null, idempotencyKey, performedByUserId, utcNow);
   }
 
   public void SetMinStock(int? minStock, DateTime utcNow)

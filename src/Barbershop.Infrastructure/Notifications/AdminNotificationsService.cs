@@ -208,7 +208,8 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
             .Select(user => user.Id)
             .ToListAsync(cancellationToken);
 
-        return (matchedIds, $"{matchedIds.Count} cliente(s) seleccionado(s)");
+        // SONDA BUG-146: singular and plural instead of «(s)».
+        return (matchedIds, matchedIds.Count == 1 ? "1 cliente seleccionado" : $"{matchedIds.Count} clientes seleccionados");
 
       case NotificationTargetTypes.Filter:
         var staffProfile = await _dbContext.StaffProfiles
@@ -239,8 +240,9 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
     }
   }
 
+  /// <summary>SONDA BUG-151: the type is one of the exact values («all», «selected», «filter»); «ALL» is not one of them.</summary>
   private static string NormalizeTargetType(string targetType)
-      => (targetType ?? string.Empty).Trim().ToLowerInvariant();
+      => (targetType ?? string.Empty).Trim();
 
   private static void ValidateRequest(NotificationBroadcastRequest request, string targetType)
   {
@@ -271,6 +273,11 @@ internal sealed class AdminNotificationsService : IAdminNotificationsService
     else if (targetType == NotificationTargetTypes.Selected && (request.CustomerUserIds is null || request.CustomerUserIds.Count == 0))
     {
       errors["customerUserIds"] = ["Selecciona al menos un cliente."];
+    }
+    else if (targetType == NotificationTargetTypes.Selected && request.CustomerUserIds!.Any(id => id == Guid.Empty))
+    {
+      // SONDA BUG-151: an empty id selects nobody; it is a malformed request, not a selection.
+      errors["customerUserIds"] = ["La selección tiene un cliente no válido. Vuelve a elegir los clientes."];
     }
     else if (targetType == NotificationTargetTypes.Filter && request.StaffProfileId is null)
     {

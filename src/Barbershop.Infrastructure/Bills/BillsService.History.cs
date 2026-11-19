@@ -70,7 +70,10 @@ internal sealed partial class BillsService : IMyBillsService, IBillReportsServic
 
     public async Task<CashClosingView> GetCashClosingAsync(CashClosingQuery query, CancellationToken cancellationToken = default)
     {
-        var (from, to) = HistoryRange.Resolve(query.From, query.To, Today());
+        // SONDA BUG-126: the cash closing never runs into the future; with only «from», it ends today at the latest.
+        // (Agendas and other histories keep their window of 30 days forward from «from».)
+        var cashTo = query.To ?? (query.From is { } fromDay && fromDay <= Today() && fromDay.AddDays(HistoryRange.MaxDays - 1) > Today() ? Today() : null);
+        var (from, to) = HistoryRange.Resolve(query.From, cashTo, Today());
         var start = BogotaClock.ToUtc(from, TimeOnly.MinValue);
         var end = BogotaClock.ToUtc(to.AddDays(1), TimeOnly.MinValue);
         // SONDA BUG-121: the cash closing counts what was charged when each bill was closed, not its current total or

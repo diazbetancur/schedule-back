@@ -237,6 +237,8 @@ public sealed class InventoryManagementServiceTests : IDisposable
     Assert.Equal("Ceras", page.Items[0].CategoryName);
     await Assert.ThrowsAsync<NotFoundException>(() => Receive(deleted, 1, 1000));
     await Assert.ThrowsAsync<NotFoundException>(() => _inventory.GetAsync(Guid.NewGuid()));
+    // SONDA BUG-140: its stock card answers like its detail (404), not 200 with a page the screen cannot show.
+    await Assert.ThrowsAsync<NotFoundException>(() => _inventory.GetMovementsAsync(deleted, new InventoryMovementListQuery()));
   }
 
   private Guid SeedProduct(string name, int price)

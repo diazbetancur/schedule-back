@@ -35,8 +35,11 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
     /// <summary>SONDA BUG-157: a name is searched from 3 letters; a phone only by its full number (7 digits or more).</summary>
     internal const int MinCustomerSearchLength = 3;
     internal const int MinCustomerPhoneDigits = 7;
-    private const int PendingAppointmentWindowDays = 30;
-    private const int MaxBackdatedDays = 30;
+    internal const string OnlyTodayMessage =
+        "La cuenta se abre el día de la atención, con la fecha de hoy. Lo que no se registró ese día ya no se registra.";
+    internal const string PastAppointmentMessage =
+        "Esta cita fue de un día anterior. Su cuenta se abría ese día; lo que no se registró ese día ya no se registra.";
+    internal const string DateIsFixedMessage = "La fecha de una cuenta abierta no se cambia: es la del día de la atención.";
 
     internal const string StaleMessage = "La cuenta cambió mientras la editabas. Recarga e intenta de nuevo.";
     internal const string MissingVersionMessage = "Falta la versión de la cuenta. Recarga e intenta de nuevo.";
@@ -414,6 +417,34 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         return await GetAsync(currentUserId, billId, cancellationToken);
     }
 
+    /// <summary>
+    /// SONDA BUG-127: a retry with the same key must carry the same opening data. Every field the request gives is
+    /// compared with the header the bill was opened with (its «Opened» event), not with later edits.
+    /// </summary>
+    private async Task<bool> SameOpeningAsync(Guid billId, BillOpenRequest request, CancellationToken cancellationToken)
+    {
+        var opened = await _dbContext.BillEvents.AsNoTracking()
+            .Where(billEvent => billEvent.BillId == billId && billEvent.Type == BillEventType.Opened)
+            .OrderBy(billEvent => billEvent.CreatedAt)
+            .Select(billEvent => billEvent.AfterJson)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (opened is null)
+        {
+            return true;
+        }
+
+        using var header = JsonDocument.Parse(opened);
+        var root = header.RootElement;
+        string? Text(string name) => root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+
+        return (request.CustomerId is not { } customerId || string.Equals(Text("customerId"), customerId.ToString(), StringComparison.OrdinalIgnoreCase))
+            && (string.IsNullOrWhiteSpace(request.CustomerName)
+                || string.Equals(Text("customerName")?.Trim(), request.CustomerName.Trim(), StringComparison.OrdinalIgnoreCase))
+            && (request.ServiceDate is not { } serviceDate || Text("serviceDate") == serviceDate.ToString("yyyy-MM-dd"))
+            && (request.StaffProfileId is not { } staffId || string.Equals(Text("staffProfileId"), staffId.ToString(), StringComparison.OrdinalIgnoreCase))
+            && (string.IsNullOrWhiteSpace(request.Notes) || Text("notes")?.Trim() == request.Notes.Trim());
+    }
+
     private async Task<BillView?> ReplayOpenAsync(Actor actor, BillOpenRequest request, CancellationToken cancellationToken)
     {
         var previous = await _dbContext.Bills.AsNoTracking()
@@ -423,7 +454,8 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             return null;
         }
 
-        if (previous.OpenedByUserId != actor.UserId || previous.AppointmentId != request.AppointmentId)
+        if (previous.OpenedByUserId != actor.UserId || previous.AppointmentId != request.AppointmentId
+            || !await SameOpeningAsync(previous.Id, request, cancellationToken))
         {
             throw new ConflictException("Esta cuenta ya se abrió con otros datos. Recarga la página para abrir una nueva.");
         }
@@ -457,6 +489,12 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             throw new ConflictException("La cita es de un día futuro. Abre su cuenta el día de la cita.");
         }
 
+        // ADR-0021 L8: only on the day of the appointment, never after.
+        if (BogotaDate(appointment.StartsAt) < Today())
+        {
+            throw new ConflictException(PastAppointmentMessage);
+        }
+
         await EnsureAppointmentWithoutBillAsync(_dbContext, appointment.Id, cancellationToken);
         return await NewAppointmentBillAsync(_dbContext, appointment, actor.UserId, request.IdempotencyKey, request.Notes, Now(), cancellationToken);
     }
@@ -464,7 +502,12 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
     private async Task<Bill> OpenWithoutAppointmentAsync(Actor actor, BillOpenRequest request, CancellationToken cancellationToken)
     {
         var (customerId, customerName) = await ResolveCustomerAsync(request.CustomerId, request.CustomerName, cancellationToken);
-        var serviceDate = ValidateServiceDate(request.ServiceDate ?? Today());
+        // ADR-0021 L8: without an appointment the bill is of today; no past (or future) date.
+        var serviceDate = request.ServiceDate ?? Today();
+        if (serviceDate != Today())
+        {
+            throw Invalid("serviceDate", OnlyTodayMessage);
+        }
 
         Guid? staffProfileId;
         if (request.StaffProfileId is { } requestedStaff && requestedStaff != actor.StaffProfileId)
@@ -574,7 +617,9 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             bill => bill.AppointmentId == appointment.Id && bill.Status != BillStatus.Voided, cancellationToken);
         var hasRecords = await dbContext.ServiceRecords.AnyAsync(
             record => record.AppointmentId == appointment.Id && record.Status != ServiceRecordStatus.Rejected, cancellationToken);
-        if (hasBill || hasRecords)
+        // ADR-0021 L8: an appointment of a past day can still be completed (ADR-0018 D2), but its bill is not opened.
+        var today = DateOnly.FromDateTime(BogotaClock.ToLocal(utcNow));
+        if (hasBill || hasRecords || DateOnly.FromDateTime(BogotaClock.ToLocal(appointment.StartsAt)) != today)
         {
             return null;
         }
@@ -605,13 +650,13 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             var (customerId, customerName) = request.CustomerId is null && string.IsNullOrWhiteSpace(request.CustomerName)
                 ? (bill.CustomerId, bill.CustomerNameSnapshot)
                 : await ResolveCustomerAsync(request.CustomerId, request.CustomerName, cancellationToken);
+            // ADR-0021 L8: the date of an open bill is the day of the service and is not changed (bills opened before the
+            // rule keep theirs too).
             var serviceDate = request.ServiceDate ?? bill.ServiceDate;
-            if (bill.AppointmentId is not null && serviceDate != bill.ServiceDate)
+            if (serviceDate != bill.ServiceDate)
             {
-                throw Invalid("serviceDate", "Con una cita, la fecha es la de la cita.");
+                throw Invalid("serviceDate", bill.AppointmentId is not null ? "Con una cita, la fecha es la de la cita." : DateIsFixedMessage);
             }
-
-            ValidateServiceDate(serviceDate);
             if (customerId != bill.CustomerId
                 && bill.Lines.Any(line => line.Type is BillLineType.MembershipConsumption or BillLineType.Redemption))
             {
@@ -1103,6 +1148,14 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             case BillLineType.Product:
                 if (request.Quantity is { } quantity && quantity != line.Quantity)
                 {
+                    // SONDA BUG-156: more units of a product that was deleted or deactivated are refused, as when adding a
+                    // line; fewer units (a correction downwards) are still allowed.
+                    if (quantity > line.Quantity && !await _dbContext.Products.AnyAsync(
+                            product => product.Id == line.ProductId && !product.IsDeleted && product.IsActive, cancellationToken))
+                    {
+                        throw Invalid("quantity", "El producto ya no existe o está inactivo: solo puedes bajar su cantidad o quitar la línea.");
+                    }
+
                     line.SetQuantity(ValidateQuantity(quantity), utcNow);
                 }
 
@@ -1431,12 +1484,16 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         return bills.Where(bill => bill.OpenedByUserId == userId || (staffId != null && bill.StaffProfileId == staffId));
     }
 
-    /// <summary>BUG-092: completed appointments of the last 30 days with no bill (not voided) and nothing registered.</summary>
+    /// <summary>
+    /// BUG-092: completed appointments with no bill (not voided) and nothing registered. ADR-0021 L8: only today's, the
+    /// only ones whose bill can still be opened.
+    /// </summary>
     private IQueryable<Appointment> PendingAppointmentsQuery(Actor actor)
     {
-        var earliest = BogotaClock.ToUtc(Today().AddDays(-PendingAppointmentWindowDays), TimeOnly.MinValue);
+        var earliest = BogotaClock.ToUtc(Today(), TimeOnly.MinValue);
+        var latest = BogotaClock.ToUtc(Today().AddDays(1), TimeOnly.MinValue);
         var appointments = _dbContext.Appointments.AsNoTracking()
-            .Where(appointment => appointment.Status == AppointmentStatus.Completed && appointment.StartsAt >= earliest
+            .Where(appointment => appointment.Status == AppointmentStatus.Completed && appointment.StartsAt >= earliest && appointment.StartsAt < latest
                 && !_dbContext.Bills.Any(bill => bill.AppointmentId == appointment.Id && bill.Status != BillStatus.Voided)
                 && !_dbContext.ServiceRecords.Any(record => record.AppointmentId == appointment.Id && record.Status != ServiceRecordStatus.Rejected));
         if (actor.Has(PermissionCodes.BillsManage))
@@ -1745,19 +1802,6 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         return name.Length is < Bill.MinCustomerNameLength or > Bill.MaxCustomerNameLength
             ? throw Invalid("customerName", "Elige el cliente o escribe el nombre del cliente ocasional (entre 2 y 120 caracteres).")
             : (null, name);
-    }
-
-    private DateOnly ValidateServiceDate(DateOnly serviceDate)
-    {
-        var today = Today();
-        if (serviceDate > today)
-        {
-            throw Invalid("serviceDate", "La fecha del servicio no puede ser futura.");
-        }
-
-        return serviceDate < today.AddDays(-MaxBackdatedDays)
-            ? throw Invalid("serviceDate", $"La fecha del servicio no puede tener más de {MaxBackdatedDays} días.")
-            : serviceDate;
     }
 
     private async Task<Guid> RequireStaffAsync(Guid? staffProfileId, CancellationToken cancellationToken)

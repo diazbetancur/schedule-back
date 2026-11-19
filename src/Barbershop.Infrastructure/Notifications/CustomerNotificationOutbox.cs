@@ -158,7 +158,7 @@ internal static class CustomerNotificationMessages
 
   public static PushNotificationMessage PointsWithdrawn(int points, string reason)
       => new(
-          $"Se retiraron {CustomerNotificationOutbox.Points(points)}",
+          points == 1 ? "Se retiró 1 punto" : $"Se retiraron {points} puntos",
           reason,
           LoyaltyUrl,
           "loyalty-points",
@@ -185,7 +185,9 @@ internal static class CustomerNotificationMessages
   public static PushNotificationMessage RedemptionRejected(Guid redemptionId, string rewardName, int points, string reason)
       => new(
           "Tu canje no fue aprobado",
-          $"No aprobamos tu canje de «{rewardName}». Motivo: {reason.Trim().TrimEnd('.')}. Tus {CustomerNotificationOutbox.Points(points)} vuelven a estar disponibles.",
+          // SONDA BUG-146: «Tus 1 punto vuelven» → singular.
+          $"No aprobamos tu canje de «{rewardName}». Motivo: {reason.Trim().TrimEnd('.')}. "
+          + (points == 1 ? "Tu punto vuelve a estar disponible." : $"Tus {points} puntos vuelven a estar disponibles."),
           LoyaltyUrl,
           $"redemption-{redemptionId:N}",
           IsTimeSensitive: false);
@@ -193,7 +195,9 @@ internal static class CustomerNotificationMessages
   public static PushNotificationMessage PointsExpiring(int points, DateOnly expiresOn)
       => new(
           "Tienes puntos por vencer",
-          $"{Capitalize(CustomerNotificationOutbox.Points(points))} de tu cuenta vencen el {CustomerNotificationOutbox.Date(expiresOn)}. Úsalos en un canje antes de esa fecha.",
+          points == 1
+              ? $"1 punto de tu cuenta vence el {CustomerNotificationOutbox.Date(expiresOn)}. Úsalo en un canje antes de esa fecha."
+              : $"{Capitalize(CustomerNotificationOutbox.Points(points))} de tu cuenta vencen el {CustomerNotificationOutbox.Date(expiresOn)}. Úsalos en un canje antes de esa fecha.",
           LoyaltyUrl,
           "loyalty-expiring",
           IsTimeSensitive: false);

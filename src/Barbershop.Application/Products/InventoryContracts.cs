@@ -80,8 +80,10 @@ public sealed record InventoryReceiptRequest(
 /// <param name="Direction">In or Out.</param>
 public sealed record InventoryAdjustmentRequest(Guid? IdempotencyKey, string? Direction, int? Quantity, string? Reason);
 
-/// <param name="MinStock">null clears the threshold.</param>
-public sealed record InventoryMinStockRequest(int? MinStock);
+/// <param name="MinStock">
+/// null clears the threshold. SONDA BUG-138: it must be sent (null included); an empty body used to clear it silently.
+/// </param>
+public sealed record InventoryMinStockRequest([property: System.Text.Json.Serialization.JsonRequired] int? MinStock);
 
 /// <summary>The stock line and the movement just recorded (or the one a retried request already stored).</summary>
 public sealed record InventoryMovementResultView(InventoryItemView Item, InventoryMovementView Movement);

@@ -236,9 +236,9 @@ public sealed class BillsHttpIntegrationTests
     var pending = await client.GetFromJsonAsync<BillPendingView>("/api/v1/bills/pending");
     var opened = Assert.Single(pending!.OpenBills);
     Assert.Equal((appointmentId, "Cliente Agenda"), (opened.AppointmentId!.Value, opened.CustomerName));
-    // An appointment completed before the bills existed, with nothing registered, is listed to open its bill.
-    Assert.Equal(legacyId, Assert.Single(pending.AppointmentsWithoutBill).AppointmentId);
-    Assert.Equal(2, (await client.GetFromJsonAsync<BillCountView>("/api/v1/bills/pending/count"))!.Count);
+    // ADR-0021 L8: an appointment of a past day without a bill is no longer offered (its bill can no longer be opened).
+    Assert.DoesNotContain(pending.AppointmentsWithoutBill, item => item.AppointmentId == legacyId);
+    Assert.Equal(1, (await client.GetFromJsonAsync<BillCountView>("/api/v1/bills/pending/count"))!.Count); // only the open bill
 
     var bill = await client.GetFromJsonAsync<BillView>($"/api/v1/bills/{opened.Id}");
     var line = Assert.Single(bill!.Lines);

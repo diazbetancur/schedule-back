@@ -21,6 +21,9 @@ public static class InputValueGuard
   public const string NulMessage = "El texto contiene caracteres no permitidos.";
   public const string DateRangeMessage = "La fecha está fuera del rango permitido (entre 1900 y 2100).";
 
+  /// <summary>SONDA BUG-126: a calendar date in the URL with a time («2026-11-10T23:00:00») used to be read silently.</summary>
+  public const string DateOnlyFormatMessage = "Escribe la fecha como AAAA-MM-DD, sin hora.";
+
   public static readonly DateOnly MinDate = new(1900, 1, 1);
   public static readonly DateOnly MaxDate = new(2100, 12, 31);
 
@@ -33,6 +36,7 @@ public static class InputValueGuard
     return async invocationContext =>
     {
       var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+      var datePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
       for (var index = 0; index < invocationContext.Arguments.Count && index < parameters.Length; index++)
       {
         var value = invocationContext.Arguments[index];
@@ -40,7 +44,18 @@ public static class InputValueGuard
         var isComplex = value is not null && IsInspectable(value.GetType());
 
         // A body DTO or [AsParameters] record reports its own property names; a simple value its parameter name.
-        Inspect(value, isComplex ? string.Empty : JsonNamingPolicy.CamelCase.ConvertName(parameter.Name ?? "value"), errors, 0);
+        Inspect(value, isComplex ? string.Empty : JsonNamingPolicy.CamelCase.ConvertName(parameter.Name ?? "value"), errors, 0, datePaths);
+      }
+
+      // A calendar date that came in the query string must be exactly a date.
+      var query = invocationContext.HttpContext.Request.Query;
+      foreach (var path in datePaths)
+      {
+        if (query.TryGetValue(path, out var raw) && raw.Count > 0
+            && !System.Text.RegularExpressions.Regex.IsMatch(raw[0] ?? string.Empty, @"^\d{4}-\d{2}-\d{2}$"))
+        {
+          errors.TryAdd(path, [DateOnlyFormatMessage]);
+        }
       }
 
       if (errors.Count > 0)
@@ -52,7 +67,7 @@ public static class InputValueGuard
     };
   }
 
-  private static void Inspect(object? value, string path, Dictionary<string, string[]> errors, int depth)
+  private static void Inspect(object? value, string path, Dictionary<string, string[]> errors, int depth, HashSet<string>? datePaths = null)
   {
     switch (value)
     {
@@ -67,6 +82,7 @@ public static class InputValueGuard
         return;
       case DateOnly date:
         CheckDate(date, path, errors);
+        datePaths?.Add(Key(path));
         return;
       case DateTime dateTime:
         CheckDate(DateOnly.FromDateTime(dateTime), path, errors);
@@ -87,7 +103,7 @@ public static class InputValueGuard
       var index = 0;
       foreach (var item in items)
       {
-        Inspect(item, $"{path}[{index}]", errors, depth + 1);
+        Inspect(item, $"{path}[{index}]", errors, depth + 1, datePaths);
         index++;
       }
 
@@ -107,7 +123,7 @@ public static class InputValueGuard
       }
 
       var name = JsonNamingPolicy.CamelCase.ConvertName(property.Name);
-      Inspect(property.GetValue(value), string.IsNullOrEmpty(path) ? name : $"{path}.{name}", errors, depth + 1);
+      Inspect(property.GetValue(value), string.IsNullOrEmpty(path) ? name : $"{path}.{name}", errors, depth + 1, datePaths);
     }
   }
 

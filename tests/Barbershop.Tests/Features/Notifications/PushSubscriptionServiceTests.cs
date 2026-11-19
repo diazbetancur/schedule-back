@@ -48,8 +48,8 @@ public sealed class PushSubscriptionServiceTests : IDisposable
 
     var subscription = Assert.Single(_dbContext.PushSubscriptions);
     Assert.Equal(secondUser, subscription.UserId);
-    Assert.Equal("p256-b", subscription.P256dhKey);
-    Assert.Equal("auth-b", subscription.AuthKey);
+    Assert.Equal(P256("p256-b"), subscription.P256dhKey);
+    Assert.Equal(Auth("auth-b"), subscription.AuthKey);
   }
 
   [Fact]
@@ -61,8 +61,8 @@ public sealed class PushSubscriptionServiceTests : IDisposable
     await _service.SubscribeAsync(userId, Request(Endpoint, "p256-new", "auth-new"));
 
     var subscription = Assert.Single(_dbContext.PushSubscriptions);
-    Assert.Equal("p256-new", subscription.P256dhKey);
-    Assert.Equal("auth-new", subscription.AuthKey);
+    Assert.Equal(P256("p256-new"), subscription.P256dhKey);
+    Assert.Equal(Auth("auth-new"), subscription.AuthKey);
   }
 
   [Fact]
@@ -138,5 +138,21 @@ public sealed class PushSubscriptionServiceTests : IDisposable
   }
 
   private static PushSubscriptionRequest Request(string endpoint, string p256dh, string auth, string? userAgent = null)
-      => new(endpoint, p256dh, auth, userAgent);
+      => new(endpoint, P256(p256dh), Auth(auth), userAgent);
+
+  /// <summary>SONDA BUG-150: keys must be real-shaped; a label is turned into a valid 65-byte P-256 key (base64url).</summary>
+  private static string P256(string label) => Key(65, label, 0x04);
+
+  private static string Auth(string label) => Key(16, label, null);
+
+  private static string Key(int length, string label, byte? first)
+  {
+    var bytes = System.Security.Cryptography.SHA512.HashData(System.Text.Encoding.UTF8.GetBytes(label)).Concat(new byte[64]).Take(length).ToArray();
+    if (first is { } prefix)
+    {
+      bytes[0] = prefix;
+    }
+
+    return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+  }
 }

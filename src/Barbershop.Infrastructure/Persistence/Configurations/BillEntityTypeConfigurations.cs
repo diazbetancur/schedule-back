@@ -135,6 +135,11 @@ internal sealed class BillLineConfiguration : IEntityTypeConfiguration<BillLine>
     builder.Property(x => x.UpdatedAt).HasColumnType("timestamp with time zone");
     builder.Ignore(x => x.IsChargeable);
     builder.Ignore(x => x.GrossAmount);
+    builder.Property(x => x.RemovedAt).HasColumnType("timestamp with time zone");
+
+    // SONDA BUG-177 (ADR-0021 L9): a line removed during a correction stays for its postings but is out of every query
+    // and of its bill; reading it back needs IgnoreQueryFilters (the history of a points lot).
+    builder.HasQueryFilter(x => x.RemovedAt == null);
 
     builder.HasOne<StaffProfile>().WithMany().HasForeignKey(x => x.StaffProfileId).OnDelete(DeleteBehavior.Restrict);
     builder.HasOne<GeneralService>().WithMany().HasForeignKey(x => x.GeneralServiceId).OnDelete(DeleteBehavior.Restrict);

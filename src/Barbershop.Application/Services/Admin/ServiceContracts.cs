@@ -45,4 +45,8 @@ public sealed record ServiceListQuery(
 /// What still points at a rate (BUG-103): the active membership plans that include it and the active loyalty rewards
 /// that deliver it. Shown before deleting it, so the admin knows those plans and rewards stop being sellable.
 /// </summary>
-public sealed record ServiceUsageView(IReadOnlyList<string> ActivePlans, IReadOnlyList<string> ActiveRewards);
+/// <param name="PendingBills">
+/// ADR-0021 L14 (SONDA BUG-178): bills not approved yet (open, closed waiting for approval, being corrected) with a line of
+/// the rate, by number or «cuenta abierta de {cliente}». While there is one, the rate cannot be deleted.
+/// </param>
+public sealed record ServiceUsageView(IReadOnlyList<string> ActivePlans, IReadOnlyList<string> ActiveRewards, IReadOnlyList<string>? PendingBills = null);

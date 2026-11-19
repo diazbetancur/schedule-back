@@ -117,10 +117,18 @@ public sealed record BillPendingAppointmentView(
     string StaffName);
 
 /// <summary>«Cuentas por cerrar»: open bills (overdue ones flagged, Q5) and completed appointments without a bill.</summary>
+/// <summary>SONDA BUG-181: the open bills come by pages (the appointments of today without a bill come whole).</summary>
+public sealed record BillPendingQuery(int? Page = null, int? PageSize = null);
+
+/// <param name="Count">Open bills plus appointments without a bill, all of them (the badge).</param>
+/// <param name="OpenBillsTotalCount">SONDA BUG-181: every open bill; <c>OpenBills</c> is one page of them.</param>
 public sealed record BillPendingView(
     IReadOnlyList<BillSummaryView> OpenBills,
     IReadOnlyList<BillPendingAppointmentView> AppointmentsWithoutBill,
-    int Count);
+    int Count,
+    int Page = 1,
+    int PageSize = PageRequest.DefaultPageSize,
+    int OpenBillsTotalCount = 0);
 
 public sealed record BillCountView(int Count);
 
@@ -192,7 +200,8 @@ public sealed record BillHeaderRequest(uint? Version, Guid? CustomerId, string? 
 /// One request for every line type; each type reads its own fields. Service: staff, general service, rate (optional
 /// while open), courtesy and reason. Product: product, quantity, optional staff. MembershipConsumption: staff, rate,
 /// membership. Redemption: redemption and (service rewards) staff. Discount: amount, reason, optional line. Tip: staff,
-/// amount, payment mode.
+/// amount, payment mode. <c>UnitPrice</c> is never taken: the price comes from the catalog, and a different one is a 422
+/// (SONDA BUG-180) instead of being ignored.
 /// </summary>
 public sealed record BillLineRequest(
     uint? Version,
@@ -208,13 +217,15 @@ public sealed record BillLineRequest(
     string? Reason = null,
     Guid? AppliesToLineId = null,
     string? TipPaymentMode = null,
-    bool IsCourtesy = false);
+    bool IsCourtesy = false,
+    int? UnitPrice = null);
 
 public sealed record BillCloseRequest(uint? Version, Guid? PaymentMethodId = null);
 
 public sealed record BillReasonRequest(uint? Version, string? Reason);
 
-public sealed record BillPaymentMethodRequest(uint? Version, Guid? PaymentMethodId);
+/// <param name="Reason">ADR-0021 L11: why the method is corrected; required, audited in bill_events.</param>
+public sealed record BillPaymentMethodRequest(uint? Version, Guid? PaymentMethodId, string? Reason = null);
 
 /// <summary>Approve the whole bill. <c>NoPointsLineIds</c>: eligible service lines the approver decides not to credit.</summary>
 public sealed record BillApproveRequest(uint? Version, Guid IdempotencyKey, IReadOnlyList<Guid>? NoPointsLineIds = null, string? Notes = null);
@@ -258,7 +269,7 @@ public interface IBillsService
 
   Task<PagedResult<BillSummaryView>> ListAsync(Guid currentUserId, BillListQuery query, CancellationToken cancellationToken = default);
 
-  Task<BillPendingView> GetPendingAsync(Guid currentUserId, CancellationToken cancellationToken = default);
+  Task<BillPendingView> GetPendingAsync(Guid currentUserId, BillPendingQuery? query = null, CancellationToken cancellationToken = default);
 
   Task<BillCountView> GetPendingCountAsync(Guid currentUserId, CancellationToken cancellationToken = default);
 
@@ -266,7 +277,8 @@ public interface IBillsService
 
   Task<IReadOnlyList<BillEventView>> GetEventsAsync(Guid currentUserId, Guid billId, CancellationToken cancellationToken = default);
 
-  Task<IReadOnlyList<BillCustomerOption>> SearchCustomersAsync(string? query, CancellationToken cancellationToken = default);
+  /// <summary>ADR-0021 L15: only the Admin and whoever holds bills.open (checked in the database).</summary>
+  Task<IReadOnlyList<BillCustomerOption>> SearchCustomersAsync(Guid currentUserId, string? query, CancellationToken cancellationToken = default);
 
   Task<IReadOnlyList<BillMembershipOption>> GetMembershipOptionsAsync(Guid currentUserId, Guid billId, CancellationToken cancellationToken = default);
 

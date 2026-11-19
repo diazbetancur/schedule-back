@@ -145,16 +145,23 @@ internal sealed class UserNotificationsService : IUserNotificationsService
         .ToDictionaryAsync(preference => preference.Category, preference => preference.PushEnabled, StringComparer.Ordinal, cancellationToken);
 
     // ADR-0021 L4: «Reseñas» is only offered to professionals and administrators, the only ones who receive it.
-    var normalizedStaffRoles = new[] { RoleNames.Admin.ToUpperInvariant(), RoleNames.Staff.ToUpperInvariant() };
-    var isStaffSide = await _dbContext.Users.AsNoTracking()
-        .AnyAsync(user => user.Id == currentUserId
-            && user.UserRoles.Any(userRole => normalizedStaffRoles.Contains(userRole.Role.NormalizedName)), cancellationToken);
+    var isStaffSide = await IsStaffSideAsync(currentUserId, cancellationToken);
 
     // ADR-0019 N4: without a row the category is on.
     return new NotificationPreferencesView(NotificationCategories.Optional
         .Where(category => isStaffSide || !NotificationCategories.StaffOnly.Contains(category))
         .Select(category => new NotificationPreferenceView(category, stored.GetValueOrDefault(category, true)))
         .ToArray());
+  }
+
+  internal const string StaffOnlyCategoryMessage = "Los avisos de reseñas son solo para profesionales y administradores.";
+
+  private async Task<bool> IsStaffSideAsync(Guid currentUserId, CancellationToken cancellationToken)
+  {
+    var normalizedStaffRoles = new[] { RoleNames.Admin.ToUpperInvariant(), RoleNames.Staff.ToUpperInvariant() };
+    return await _dbContext.Users.AsNoTracking()
+        .AnyAsync(user => user.Id == currentUserId
+            && user.UserRoles.Any(userRole => normalizedStaffRoles.Contains(userRole.Role.NormalizedName)), cancellationToken);
   }
 
   public async Task<NotificationPreferencesView> UpdatePreferencesAsync(
@@ -185,6 +192,19 @@ internal sealed class UserNotificationsService : IUserNotificationsService
     if (changes.Where(change => change?.Category is not null).GroupBy(change => change!.Category).Any(group => group.Count() > 1))
     {
       errors["categories"] = ["Cada tipo de aviso puede aparecer una sola vez."];
+    }
+
+    if (errors.Count == 0 && changes.Any(change => NotificationCategories.StaffOnly.Contains(change!.Category!, StringComparer.Ordinal))
+        && !await IsStaffSideAsync(currentUserId, cancellationToken))
+    {
+      // SONDA BUG-176 (ADR-0021 L4): «Reseñas» only reaches professionals and administrators; a customer cannot store it.
+      for (var index = 0; index < changes.Count; index++)
+      {
+        if (NotificationCategories.StaffOnly.Contains(changes[index]!.Category!, StringComparer.Ordinal))
+        {
+          errors[$"categories[{index}].category"] = [StaffOnlyCategoryMessage];
+        }
+      }
     }
 
     if (errors.Count > 0)

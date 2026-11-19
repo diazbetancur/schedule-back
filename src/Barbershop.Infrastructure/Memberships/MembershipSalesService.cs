@@ -1,6 +1,7 @@
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Memberships.Admin;
+using Barbershop.Domain.Bills;
 using Barbershop.Domain.Common;
 using Barbershop.Domain.Customers;
 using Barbershop.Domain.Finance;
@@ -332,16 +333,58 @@ internal sealed class MembershipSalesService : IAdminMembershipsService
             throw new ConflictException(HasConsumptionsMessage);
         }
 
+        // ADR-0021 L10 (SONDA BUG-170, BUG-183): nor while a bill that is not voided (open, closed waiting for approval or
+        // being corrected) carries a consumption of it; the bill would be left without a way out. Adding that line locks
+        // this membership after its bill, so a line added at the same moment is seen here or sees the annulment.
+        if (await PendingBillWithConsumptionAsync(membership.Id, cancellationToken) is { } pending)
+        {
+            throw new ConflictException(PendingBillConsumptionMessage(pending));
+        }
+
         // Annulment blocks the pending benefits (enforced where they are used); nothing is deleted or refunded.
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
         membership.Annul(currentUserId, reason, utcNow);
         _dbContext.MembershipEvents.Add(new MembershipEvent(membership.Id, MembershipEventType.Annulled, currentUserId, utcNow, reason));
         await _wallet.WithdrawForMembershipAnnulmentInCurrentTransactionAsync(
             membership.Id, membership.CustomerId, reason, currentUserId, utcNow, cancellationToken);
+        // ADR-0021 L12 (SONDA BUG-175): the customer is told, without the internal reason.
+        await _notifications.QueueForCustomerAsync(
+            membership.CustomerId,
+            UserNotificationTypes.MembershipAnnulled,
+            CustomerNotificationMessages.MembershipAnnulled(membership.Id, membership.PlanName),
+            cancellationToken);
 
         await SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return await MapDetailAsync(membership, cancellationToken);
+    }
+
+    internal sealed record PendingBillConsumption(string? Number, BillStatus Status, string CustomerName, DateOnly ServiceDate);
+
+    private async Task<PendingBillConsumption?> PendingBillWithConsumptionAsync(Guid membershipId, CancellationToken cancellationToken)
+        => await (
+                from line in _dbContext.BillLines.AsNoTracking()
+                join bill in _dbContext.Bills.AsNoTracking() on line.BillId equals bill.Id
+                where line.Type == BillLineType.MembershipConsumption && line.CustomerMembershipId == membershipId
+                    && (bill.Status == BillStatus.Open || bill.Status == BillStatus.Closed || bill.Status == BillStatus.Unapproved)
+                orderby bill.OpenedAt
+                select new { bill.Series, bill.Number, bill.Status, bill.CustomerNameSnapshot, bill.ServiceDate })
+            .Take(1)
+            .ToListAsync(cancellationToken) switch
+        {
+            [var row] => new PendingBillConsumption(
+                row.Number is { } number ? Bill.FormatNumber(row.Series ?? BillNumberSeries.DefaultPrefix, number) : null,
+                row.Status, row.CustomerNameSnapshot, row.ServiceDate),
+            _ => null
+        };
+
+    /// <summary>ADR-0021 L10: which bill holds the consumption, so it can be found and fixed.</summary>
+    internal static string PendingBillConsumptionMessage(PendingBillConsumption pending)
+    {
+        var where = pending.Number is { } number
+            ? $"la cuenta {number} ({(pending.Status == BillStatus.Unapproved ? "en corrección" : "cerrada, por aprobar")})"
+            : $"la cuenta abierta de {pending.CustomerName} del {pending.ServiceDate.ToString("dd/MM/yyyy", System.Globalization.CultureInfo.InvariantCulture)}";
+        return $"Esta membresía tiene un consumo en {where}. Quita esa línea o anula la cuenta antes de anular la membresía.";
     }
 
     public async Task<IReadOnlyList<MembershipIncomeCandidateView>> GetIncomeCandidatesAsync(DateOnly date, CancellationToken cancellationToken = default)

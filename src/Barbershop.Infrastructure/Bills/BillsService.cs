@@ -17,6 +17,7 @@ using Barbershop.Infrastructure.Loyalty;
 using Barbershop.Infrastructure.Memberships;
 using Barbershop.Infrastructure.Notifications;
 using Barbershop.Infrastructure.Persistence;
+using Barbershop.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
@@ -182,12 +183,18 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             .ToPagedResultAsync(page, (rows, ct) => MapSummariesAsync(rows, ct), cancellationToken);
     }
 
-    public async Task<BillPendingView> GetPendingAsync(Guid currentUserId, CancellationToken cancellationToken = default)
+    public async Task<BillPendingView> GetPendingAsync(Guid currentUserId, BillPendingQuery? query = null, CancellationToken cancellationToken = default)
     {
         var actor = await LoadActorAsync(currentUserId, cancellationToken);
-        var open = await VisibleBills(actor)
-            .Where(bill => bill.Status == BillStatus.Open)
+        // SONDA BUG-181: «page» was ignored and every open bill came at once (≈170 KB with 370 bills).
+        var page = PageRequest.Create(query?.Page, query?.PageSize);
+        var openQuery = VisibleBills(actor).Where(bill => bill.Status == BillStatus.Open);
+        var openTotal = await openQuery.CountAsync(cancellationToken);
+        var lastPage = Math.Max(1, (openTotal + page.PageSize - 1) / page.PageSize);
+        var pageNumber = Math.Min(page.Page, lastPage);
+        var open = await openQuery
             .OrderBy(bill => bill.OpenedAt).ThenBy(bill => bill.Id)
+            .Skip((pageNumber - 1) * page.PageSize).Take(page.PageSize)
             .Include(bill => bill.Lines).AsSplitQuery()
             .ToListAsync(cancellationToken);
         var appointments = await PendingAppointmentsQuery(actor)
@@ -205,7 +212,10 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             appointments.Select(appointment => new BillPendingAppointmentView(
                 appointment.Id, appointment.StartsAt, appointment.CustomerName, appointment.GeneralServiceNameSnapshot,
                 appointment.StaffProfileId, staffNames.GetValueOrDefault(appointment.StaffProfileId, string.Empty))).ToArray(),
-            summaries.Count + appointments.Count);
+            openTotal + appointments.Count,
+            pageNumber,
+            page.PageSize,
+            openTotal);
     }
 
     public async Task<BillCountView> GetPendingCountAsync(Guid currentUserId, CancellationToken cancellationToken = default)
@@ -241,8 +251,19 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             .ToArray();
     }
 
-    public async Task<IReadOnlyList<BillCustomerOption>> SearchCustomersAsync(string? query, CancellationToken cancellationToken = default)
+    internal const string CustomerSearchPermissionMessage = "Solo quien abre cuentas puede buscar clientes.";
+
+    public async Task<IReadOnlyList<BillCustomerOption>> SearchCustomersAsync(
+        Guid currentUserId, string? query, CancellationToken cancellationToken = default)
     {
+        // ADR-0021 L15 (SONDA BUG-157): the search serves to open a bill, so only the Admin and bills.open use it, read
+        // from the database on every request like the other bill permissions.
+        var actor = await LoadActorAsync(currentUserId, cancellationToken);
+        if (!actor.Has(PermissionCodes.BillsOpen))
+        {
+            throw new UnauthorizedAccessException(CustomerSearchPermissionMessage);
+        }
+
         // SONDA BUG-157, same minimization as ADR-0009: a name by its letters, an email or a phone only when written in full
         // (no fragments such as "@gmail.com" that would walk the base), few results and only hints of the contact data.
         var customers = _dbContext.Customers.AsNoTracking().Where(customer => customer.MergedIntoCustomerId == null);
@@ -698,7 +719,7 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         }, cancellationToken);
 
     public Task<BillView> RemoveLineAsync(Guid currentUserId, Guid billId, Guid lineId, uint? version, CancellationToken cancellationToken = default)
-        => MutateAsync(currentUserId, billId, version, (actor, bill) =>
+        => MutateAsync(currentUserId, billId, version, async (actor, bill) =>
         {
             var line = bill.Lines.SingleOrDefault(candidate => candidate.Id == lineId)
                 ?? throw new NotFoundException("La línea no existe en esta cuenta.");
@@ -708,9 +729,19 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             }
 
             var before = LineJson(line);
-            bill.RemoveLine(line, Now());
-            _dbContext.BillLines.Remove(line);
-            return Task.FromResult(new BillChange(BillEventType.LineRemoved, null, before, null));
+            // SONDA BUG-177 (ADR-0021 L9): in a bill being corrected the line has the (reversed) postings of the previous
+            // approval, which point to it; deleting it broke that reference (a 409 «Otra persona cambió…»). It is kept,
+            // marked as removed, and stops counting: the new approval posts only the lines still in the bill.
+            var hasPostings = await _dbContext.BillPostings.AnyAsync(posting => posting.BillLineId == line.Id, cancellationToken)
+                || await _dbContext.IncomeEntries.AnyAsync(entry => entry.BillLineId == line.Id, cancellationToken)
+                || await _dbContext.LoyaltyRedemptions.AnyAsync(redemption => redemption.BillLineId == line.Id, cancellationToken);
+            bill.RemoveLine(line, Now(), keepRecord: hasPostings);
+            if (!hasPostings)
+            {
+                _dbContext.BillLines.Remove(line);
+            }
+
+            return new BillChange(BillEventType.LineRemoved, null, before, null);
         }, cancellationToken);
 
     public Task<BillView> DetachAppointmentAsync(Guid currentUserId, Guid billId, BillReasonRequest request, CancellationToken cancellationToken = default)
@@ -888,7 +919,10 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
 
     public Task<BillView> ChangePaymentMethodAsync(
         Guid currentUserId, Guid billId, BillPaymentMethodRequest request, CancellationToken cancellationToken = default)
-        => MutateAsync(currentUserId, billId, request.Version, async (actor, bill) =>
+    {
+        // ADR-0021 L11: the correction is audited with its reason.
+        var reason = ValidateReason(request.Reason);
+        return MutateAsync(currentUserId, billId, request.Version, async (actor, bill) =>
         {
             if (bill.Status is not (BillStatus.Closed or BillStatus.Unapproved))
             {
@@ -908,10 +942,13 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
                 throw Invalid("paymentMethodId", "Elige el método de pago.");
             }
 
-            var before = Json(new { paymentMethod = bill.PaymentMethodNameSnapshot });
-            bill.ChangePaymentMethod(method.Id, method.Name, Now());
-            return new BillChange(BillEventType.PaymentMethodChanged, null, before, Json(new { paymentMethod = method.Name }));
+            var before = Json(new { paymentMethod = bill.PaymentMethodNameSnapshot, paymentMethodId = bill.PaymentMethodId });
+            bill.CorrectPaymentMethod(method.Id, method.Name, Now());
+            return new BillChange(
+                BillEventType.PaymentMethodChanged, reason, before,
+                Json(new { paymentMethod = method.Name, paymentMethodId = method.Id, chargedTotal = bill.ChargedTotal }));
         }, cancellationToken);
+    }
 
     // ── Payment methods (Q1) ────────────────────────────────────────────────────────────────────
 
@@ -994,11 +1031,17 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
                     EnsureCanDiscount(actor);
                 }
 
+                EnsureSingleServiceUnit(request);
                 var line = BillLine.Service(staffId, general.Id, general.Name, null, 0, null, request.IsCourtesy, CourtesyReason(request), utcNow);
                 if (request.ServiceId is { } rateId)
                 {
                     var rate = await RequireRateAsync(rateId, general.Id, allowDeleted: false, cancellationToken);
+                    EnsureCatalogPrice(request, rate.BasePrice);
                     line.SetRate(general.Id, rate.Id, $"{general.Name} · {rate.Name}", rate.BasePrice, rate.BusinessPercentage, utcNow);
+                }
+                else
+                {
+                    EnsureCatalogPrice(request, 0);
                 }
 
                 return line;
@@ -1010,6 +1053,8 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
                     .SingleOrDefaultAsync(candidate => candidate.Id == request.ProductId && !candidate.IsDeleted && candidate.IsActive, cancellationToken)
                     ?? throw Invalid("productId", "El producto no existe o está inactivo.");
                 var quantity = ValidateQuantity(request.Quantity);
+                EnsureCatalogPrice(request, product.Price);
+                EnsureLineAmountFits(quantity, product.Price);
                 Guid? staffId = request.StaffProfileId is null ? null : await RequireStaffAsync(request.StaffProfileId, cancellationToken);
                 return BillLine.Product(product.Id, product.Name, quantity, product.Price, staffId, utcNow);
             }
@@ -1027,6 +1072,9 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
                     throw Invalid("quantity", "Cada línea de consumo de membresía descuenta una unidad. Para descontar dos, agrega dos líneas.");
                 }
 
+                // ADR-0021 L10: locked after the bill (the order of the approval), so an annulment at the same moment either
+                // sees this line or makes this one see the membership annulled.
+                await LockAsync($"SELECT 1 FROM public.customer_memberships WHERE \"Id\" = {membershipId} FOR UPDATE", cancellationToken);
                 await EnsureMembershipBalanceAsync(bill, customerId, membershipId, rateId, extra: 1, cancellationToken);
                 var rate = await _dbContext.Services.AsNoTracking().SingleAsync(candidate => candidate.Id == rateId, cancellationToken);
                 var generalName = await _dbContext.GeneralServices.AsNoTracking()
@@ -1080,6 +1128,11 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
                     throw Invalid("appliesToLineId", "El descuento solo se aplica a un servicio cobrado o a un producto de esta cuenta.");
                 }
 
+                if (request.AppliesToLineId is { } discountedId)
+                {
+                    await EnsureStillSoldAsync(bill.Lines.Single(line => line.Id == discountedId), "appliesToLineId", cancellationToken);
+                }
+
                 return BillLine.Discount(amount, reason, request.AppliesToLineId, utcNow);
             }
 
@@ -1116,20 +1169,29 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
         {
             case BillLineType.Service:
             {
+                EnsureSingleServiceUnit(request);
                 var generalId = request.GeneralServiceId ?? line.GeneralServiceId!.Value;
                 if (request.ServiceId is { } rateId && (rateId != line.ServiceId || generalId != line.GeneralServiceId))
                 {
                     var general = await RequireGeneralServiceAsync(generalId, cancellationToken);
                     var rate = await RequireRateAsync(rateId, general.Id, allowDeleted: false, cancellationToken);
+                    EnsureCatalogPrice(request, rate.BasePrice);
                     line.SetRate(general.Id, rate.Id, $"{general.Name} · {rate.Name}", rate.BasePrice, rate.BusinessPercentage, utcNow);
                 }
                 else if (request.GeneralServiceId is { } newGeneral && newGeneral != line.GeneralServiceId)
                 {
                     throw Invalid("serviceId", "Elige la tarifa del nuevo servicio.");
                 }
+                else
+                {
+                    EnsureCatalogPrice(request, line.UnitPrice);
+                }
 
                 if (request.IsCourtesy != line.IsCourtesy || (request.IsCourtesy && CourtesyReason(request) != line.Reason))
                 {
+                    // SONDA BUG-180 (ADR-0021 L17): a rate that was deleted or deactivated only allows another rate, another
+                    // professional or removing the line, as when adding one.
+                    await EnsureStillSoldAsync(line, "isCourtesy", cancellationToken);
                     if (request.IsCourtesy)
                     {
                         EnsureCanDiscount(actor);
@@ -1146,17 +1208,19 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
             }
 
             case BillLineType.Product:
+                EnsureCatalogPrice(request, line.UnitPrice);
                 if (request.Quantity is { } quantity && quantity != line.Quantity)
                 {
                     // SONDA BUG-156: more units of a product that was deleted or deactivated are refused, as when adding a
                     // line; fewer units (a correction downwards) are still allowed.
-                    if (quantity > line.Quantity && !await _dbContext.Products.AnyAsync(
-                            product => product.Id == line.ProductId && !product.IsDeleted && product.IsActive, cancellationToken))
+                    if (quantity > line.Quantity)
                     {
-                        throw Invalid("quantity", "El producto ya no existe o está inactivo: solo puedes bajar su cantidad o quitar la línea.");
+                        await EnsureStillSoldAsync(line, "quantity", cancellationToken);
                     }
 
-                    line.SetQuantity(ValidateQuantity(quantity), utcNow);
+                    var validated = ValidateQuantity(quantity);
+                    EnsureLineAmountFits(validated, line.UnitPrice);
+                    line.SetQuantity(validated, utcNow);
                 }
 
                 if (request.StaffProfileId is null && line.StaffProfileId is not null && request.Type is not null)
@@ -1168,6 +1232,11 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
 
             case BillLineType.Discount:
                 EnsureCanDiscount(actor);
+                if (line.AppliesToLineId is { } discountedId && bill.Lines.SingleOrDefault(target => target.Id == discountedId) is { } target)
+                {
+                    await EnsureStillSoldAsync(target, "amount", cancellationToken);
+                }
+
                 line.SetAmount(ValidateAmount(request.Amount ?? line.UnitPrice), ValidateReason(request.Reason ?? line.Reason), null, utcNow);
                 break;
 
@@ -1185,6 +1254,58 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
     }
 
     private static string? CourtesyReason(BillLineRequest request) => request.IsCourtesy ? ValidateReason(request.Reason) : null;
+
+    internal const string ProductGoneMessage = "El producto ya no existe o está inactivo: solo puedes bajar su cantidad o quitar la línea.";
+    internal const string RateGoneMessage =
+        "La tarifa de esta línea ya no está vigente: no admite descuentos ni cortesías. Elige otra tarifa o quita la línea.";
+    internal const string CatalogPriceMessage = "El precio sale del catálogo y no se cambia en la cuenta.";
+    internal const string ServiceUnitMessage = "Cada línea de servicio es de una unidad. Para cobrar dos, agrega dos líneas.";
+
+    /// <summary>
+    /// SONDA BUG-156 / BUG-180 (ADR-0021 L17): a line of a product or a rate that was deleted or deactivated only allows
+    /// what lowers the charge (fewer units), another professional, another rate or removing it; nothing that charges it
+    /// again (more units, a discount, a courtesy), as when adding a line.
+    /// </summary>
+    private async Task EnsureStillSoldAsync(BillLine line, string field, CancellationToken cancellationToken)
+    {
+        if (line.Type == BillLineType.Product
+            && !await _dbContext.Products.AnyAsync(product => product.Id == line.ProductId && !product.IsDeleted && product.IsActive, cancellationToken))
+        {
+            throw Invalid(field, ProductGoneMessage);
+        }
+
+        if (line.Type == BillLineType.Service && line.ServiceId is { } rateId
+            && !await _dbContext.Services.AnyAsync(rate => rate.Id == rateId && !rate.IsDeleted && rate.IsActive, cancellationToken))
+        {
+            throw Invalid(field, RateGoneMessage);
+        }
+    }
+
+    /// <summary>SONDA BUG-180: the price is the catalog's; a request with another one is refused instead of ignored.</summary>
+    private static void EnsureCatalogPrice(BillLineRequest request, int catalogPrice)
+    {
+        if (request.UnitPrice is { } price && price != catalogPrice)
+        {
+            throw Invalid("unitPrice", CatalogPriceMessage);
+        }
+    }
+
+    private static void EnsureSingleServiceUnit(BillLineRequest request)
+    {
+        if (request.Quantity is { } quantity && quantity != 1)
+        {
+            throw Invalid("quantity", ServiceUnitMessage);
+        }
+    }
+
+    /// <summary>SONDA BUG-182: one line of 1.000 × 2.500.000 overflowed (500) before the totals were checked.</summary>
+    private static void EnsureLineAmountFits(int quantity, int unitPrice)
+    {
+        if (!BillLine.AmountFits(quantity, unitPrice))
+        {
+            throw Invalid("quantity", TotalTooLargeMessage);
+        }
+    }
 
     /// <summary>
     /// ADR-0021 L1: services, membership consumptions, service redemptions and tips go on the actor's own name unless
@@ -1823,6 +1944,12 @@ internal sealed partial class BillsService : IBillsService, IBillApprovalService
 
     private async Task<Barbershop.Domain.Services.Service> RequireRateAsync(Guid rateId, Guid generalServiceId, bool allowDeleted, CancellationToken cancellationToken)
     {
+        if (!allowDeleted && _dbContext.Database.IsNpgsql())
+        {
+            // ADR-0021 L14: shared after the bill, so deleting the rate at the same moment waits for this line.
+            await _dbContext.ShareRateAsync(rateId, cancellationToken);
+        }
+
         var rate = await _dbContext.Services.AsNoTracking().SingleOrDefaultAsync(candidate => candidate.Id == rateId, cancellationToken);
         if (rate is null || (!allowDeleted && (rate.IsDeleted || !rate.IsActive)))
         {

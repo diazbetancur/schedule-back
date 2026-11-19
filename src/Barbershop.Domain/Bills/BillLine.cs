@@ -72,6 +72,12 @@ public sealed class BillLine
   public DateTime CreatedAt { get; private set; }
   public DateTime? UpdatedAt { get; private set; }
 
+  /// <summary>
+  /// SONDA BUG-177 (ADR-0021 L9): a line removed while its bill was being corrected, kept because the reversed postings
+  /// of the previous approval point to it. It no longer counts anywhere; a line without postings is deleted instead.
+  /// </summary>
+  public DateTime? RemovedAt { get; private set; }
+
   /// <summary>Services that are not courtesies and products: the lines discounts apply to.</summary>
   public bool IsChargeable => Type == BillLineType.Product || (Type == BillLineType.Service && !IsCourtesy);
 
@@ -235,6 +241,15 @@ public sealed class BillLine
 
     Touch(utcNow);
   }
+
+  internal void MarkRemoved(DateTime utcNow)
+  {
+    RemovedAt = DomainValidation.EnsureUtc(utcNow, nameof(utcNow));
+    UpdatedAt = RemovedAt;
+  }
+
+  /// <summary>SONDA BUG-182: quantity × unit price of a line fits the 32-bit amount columns.</summary>
+  public static bool AmountFits(int quantity, int unitPrice) => (long)quantity * unitPrice <= int.MaxValue;
 
   internal void AttachTo(Guid billId, int position)
   {

@@ -58,7 +58,8 @@ public sealed record AppointmentUpdateRequest(
     string? CustomerPhone,
     string? Notes,
     Guid? GeneralServiceId = null,
-    int? DurationMinutes = null);
+    int? DurationMinutes = null,
+    Guid? StaffProfileId = null);
 
 /// <summary>A service that can be booked with a professional right now, and how long it takes them. No price.</summary>
 public sealed record AppointmentServiceOption(

@@ -50,6 +50,8 @@ internal sealed class RolesManagementService : IAdminRolesService
         return Map(role);
     }
 
+    internal const string InvalidVersionMessage = "La versión del rol no es válida. Recarga la página y vuelve a guardar.";
+
     internal const string ConcurrentChangeMessage =
         "Otra persona cambió este rol mientras lo editabas. Recarga la página para ver sus permisos actuales y vuelve a guardar.";
 
@@ -57,6 +59,15 @@ internal sealed class RolesManagementService : IAdminRolesService
     {
         // SONDA BUG-161: two saves of the same role at once used to leave a mix of both permission sets. The role row is
         // locked, so the saves run one after the other, and a save based on an older version than the current one is a 409.
+        // SONDA BUG-173: a version that is not a version at all («abc») is a field error, not a concurrency conflict.
+        if (request.Version is { } sent && !uint.TryParse(sent, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out _))
+        {
+            throw new ValidationProblemException(new Dictionary<string, string[]>(StringComparer.Ordinal)
+            {
+                ["version"] = [InvalidVersionMessage]
+            });
+        }
+
         var relational = _dbContext.Database.IsNpgsql();
         await using var transaction = relational ? await _dbContext.Database.BeginTransactionAsync(cancellationToken) : null;
         if (relational)

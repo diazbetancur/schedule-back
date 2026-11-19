@@ -148,6 +148,30 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     return await ordered.ToPagedResultAsync(page, x => Map(x.Appointment, x.StaffName), cancellationToken);
   }
 
+  /// <summary>ADR-0021 L13 (SONDA BUG-179): with a bill that is not voided, the professional and the service stay.</summary>
+  internal const string BillKeepsAppointmentMessage = "Esta cita tiene una cuenta abierta. Anúlala antes de cambiarla.";
+
+  internal const string StaffIsFixedMessage =
+      "El profesional de una cita no se cambia. Cancélala y agenda una nueva con el otro profesional.";
+
+  /// <summary>
+  /// ADR-0021 L13: the bill of the appointment carries its professional and its service line; changing them in the
+  /// appointment left both out of step. The appointment row is locked first, like opening a bill does.
+  /// </summary>
+  private async Task EnsureNoLiveBillAsync(Guid appointmentId, CancellationToken cancellationToken)
+  {
+    if (_dbContext.Database.IsNpgsql())
+    {
+      await _dbContext.Database.ExecuteSqlInterpolatedAsync(
+          $"SELECT 1 FROM public.appointments WHERE \"Id\" = {appointmentId} FOR UPDATE", cancellationToken);
+    }
+
+    if (await _dbContext.Bills.AnyAsync(bill => bill.AppointmentId == appointmentId && bill.Status != Barbershop.Domain.Bills.BillStatus.Voided, cancellationToken))
+    {
+      throw new ConflictException(BillKeepsAppointmentMessage);
+    }
+  }
+
   internal const string OpenBillRescheduleMessage =
       "Esta cita ya tiene una cuenta abierta, así que no se puede reprogramar. Ciérrala si el servicio se prestó, o anúlala para poder cambiar la fecha.";
 
@@ -658,6 +682,22 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
         {
           ["status"] = ["Esta cita ya no se puede editar: solo se editan citas pendientes o confirmadas."]
         });
+      }
+
+      // ADR-0021 L13: the professional of an appointment never changes (a staffProfileId used to be ignored silently);
+      // with a bill, the service does not change either.
+      if (request.StaffProfileId is { } requestedStaff && requestedStaff != appointment.StaffProfileId)
+      {
+        await EnsureNoLiveBillAsync(appointment.Id, cancellationToken);
+        throw new ValidationProblemException(new Dictionary<string, string[]>
+        {
+          ["staffProfileId"] = [StaffIsFixedMessage]
+        });
+      }
+
+      if (request.GeneralServiceId is { } requestedService && requestedService != appointment.GeneralServiceId)
+      {
+        await EnsureNoLiveBillAsync(appointment.Id, cancellationToken);
       }
 
       if (request.StartsAtUtc != appointment.StartsAt)

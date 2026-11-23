@@ -9,9 +9,9 @@ using Microsoft.EntityFrameworkCore;
 namespace Barbershop.Infrastructure.Availability;
 
 /// <summary>
-/// Free slots of a professional for one service (ADR-0016 D10, F1): each slot lasts what that service takes them,
-/// starts on the 15-minute grid of an availability rule and fits inside it, and does not overlap an absence or a
-/// pending/confirmed appointment (appointments from before services keep their own EndsAt). No price (D9).
+/// Free slots of a professional for one service (ADR-0016 D10): each slot lasts what that service takes them and is
+/// placed by <see cref="AppointmentSlotGrid"/> (ADR-0022: one start every duration from the start of each rule,
+/// resuming where an absence or a pending/confirmed appointment ends). No price (D9).
 /// </summary>
 internal sealed class PublicAvailabilityService : IPublicAvailabilityService
 {
@@ -55,86 +55,24 @@ internal sealed class PublicAvailabilityService : IPublicAvailabilityService
       duration = offering.DurationMinutes;
     }
 
-    var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
-    var rangeStart = BogotaClock.ToUtc(from, TimeOnly.MinValue);
-    var rangeEndExclusive = BogotaClock.ToUtc(to.AddDays(1), TimeOnly.MinValue);
-
-    var rules = await _dbContext.StaffAvailabilityRules
-        .Where(rule => rule.StaffProfileId == staffProfileId && rule.IsActive)
-        .OrderBy(rule => rule.DayOfWeek)
-        .ThenBy(rule => rule.StartTime)
-        .ToListAsync(cancellationToken);
-
-    var unavailablePeriods = await _dbContext.StaffUnavailablePeriods
-        .Where(period => period.StaffProfileId == staffProfileId && period.EndsAt > rangeStart && period.StartsAt < rangeEndExclusive)
-        .ToListAsync(cancellationToken);
-
-    var appointments = await _dbContext.Appointments
-        .Where(appointment => appointment.StaffProfileId == staffProfileId
-            && (appointment.Status == AppointmentStatus.Pending || appointment.Status == AppointmentStatus.Confirmed)
-            && appointment.EndsAt > rangeStart
-            && appointment.StartsAt < rangeEndExclusive)
-        .ToListAsync(cancellationToken);
-
-    var rulesByDay = rules
-        .GroupBy(rule => rule.DayOfWeek)
-        .ToDictionary(group => group.Key, group => group.ToArray());
-
-    var slots = new SortedDictionary<DateTime, PublicAvailabilitySlotResponse>();
-    for (var date = from; date <= to; date = date.AddDays(1))
-    {
-      if (!rulesByDay.TryGetValue(date.DayOfWeek, out var dayRules))
-      {
-        continue;
-      }
-
-      foreach (var rule in dayRules)
-      {
-        foreach (var (slotStart, slotEnd) in AppointmentSlotGrid.Slots(date, rule, duration))
-        {
-          if (slotStart >= utcNow
-              && unavailablePeriods.All(period => !period.Overlaps(slotStart, slotEnd))
-              && appointments.All(appointment => !appointment.Overlaps(slotStart, slotEnd)))
-          {
-            // Two rules of the same day could produce the same start; it is listed once.
-            slots.TryAdd(slotStart, new PublicAvailabilitySlotResponse(slotStart, slotEnd));
-          }
-        }
-      }
-    }
-
-    return new PublicAvailabilitySlotsResponse(
+    var slots = await AppointmentSlotGrid.FindAsync(
+        _dbContext,
         staffProfileId,
         from,
         to,
-        duration,
-        slots.Values.ToArray(),
-        generalServiceId,
-        AppointmentSlotGrid.StepMinutes);
+        TimeSpan.FromMinutes(duration),
+        null,
+        _timeProvider.GetUtcNow().UtcDateTime,
+        cancellationToken);
+
+    // ADR-0022 P1: the nominal step is the duration; after an occupied time the grid resumes where it ends (P3).
+    return new PublicAvailabilitySlotsResponse(staffProfileId, from, to, duration, slots, generalServiceId, duration);
   }
 
   private static void ValidateRequest(DateOnly from, DateOnly to, Guid? generalServiceId, int? durationMinutes)
   {
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-
-    if (from == default)
-    {
-      errors["from"] = ["Indica la fecha inicial."];
-    }
-
-    if (to == default)
-    {
-      errors["to"] = ["Indica la fecha final."];
-    }
-
-    if (to < from)
-    {
-      errors["to"] = ["La fecha final no puede ser anterior a la inicial."];
-    }
-    else if (to.DayNumber - from.DayNumber > 30)
-    {
-      errors["to"] = ["Consulta como máximo 31 días de disponibilidad a la vez."];
-    }
+    AddRangeErrors(errors, from, to);
 
     if (generalServiceId is null && durationMinutes is null)
     {
@@ -158,6 +96,29 @@ internal sealed class PublicAvailabilityService : IPublicAvailabilityService
     if (errors.Count > 0)
     {
       throw new ValidationProblemException(errors);
+    }
+  }
+
+  /// <summary>The date range rules shared by every slots query (also the customer's reschedule slots).</summary>
+  internal static void AddRangeErrors(IDictionary<string, string[]> errors, DateOnly from, DateOnly to)
+  {
+    if (from == default)
+    {
+      errors["from"] = ["Indica la fecha inicial."];
+    }
+
+    if (to == default)
+    {
+      errors["to"] = ["Indica la fecha final."];
+    }
+
+    if (to < from)
+    {
+      errors["to"] = ["La fecha final no puede ser anterior a la inicial."];
+    }
+    else if (to.DayNumber - from.DayNumber > 30)
+    {
+      errors["to"] = ["Consulta como máximo 31 días de disponibilidad a la vez."];
     }
   }
 }

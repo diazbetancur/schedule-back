@@ -1,5 +1,6 @@
 using System.Net.Mail;
 using Barbershop.Application.Appointments;
+using Barbershop.Application.Availability;
 using Barbershop.Application.Common.Exceptions;
 using Barbershop.Application.Common.Paging;
 using Barbershop.Application.Notifications;
@@ -192,6 +193,37 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
     {
       throw new ConflictException(OpenBillRescheduleMessage);
     }
+  }
+
+  async Task<PublicAvailabilitySlotsResponse> ICustomerAppointmentsService.GetRescheduleSlotsAsync(
+      Guid currentUserId, Guid appointmentId, DateOnly from, DateOnly to, CancellationToken cancellationToken)
+  {
+    var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+    PublicAvailabilityService.AddRangeErrors(errors, from, to);
+    ThrowIfAnyErrors(errors);
+
+    _ = await LoadActiveUserAsync(currentUserId, cancellationToken);
+
+    // Someone else's appointment answers exactly like a missing one, so ids cannot be probed.
+    var appointment = await _dbContext.Appointments.AsNoTracking()
+        .SingleOrDefaultAsync(a => a.Id == appointmentId && a.CustomerUserId == currentUserId, cancellationToken)
+        ?? throw new KeyNotFoundException("No encontramos la cita.");
+
+    if (appointment.Status is not (AppointmentStatus.Pending or AppointmentStatus.Confirmed))
+    {
+      ThrowIfAnyErrors(new Dictionary<string, string[]>(StringComparer.Ordinal)
+      {
+        ["appointmentId"] = ["Esta cita ya no se puede reprogramar: fue cancelada, completada o marcada como no asistida."]
+      });
+    }
+
+    // Same length as RescheduleAsync keeps (D11), and the appointment itself is not occupied (ADR-0022 P5).
+    var duration = appointment.EndsAt - appointment.StartsAt;
+    var slots = await AppointmentSlotGrid.FindAsync(
+        _dbContext, appointment.StaffProfileId, from, to, duration, appointment.Id, _timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
+
+    var minutes = (int)Math.Round(duration.TotalMinutes);
+    return new PublicAvailabilitySlotsResponse(appointment.StaffProfileId, from, to, minutes, slots, appointment.GeneralServiceId, minutes);
   }
 
   async Task<AppointmentView> ICustomerAppointmentsService.GetByIdAsync(Guid currentUserId, Guid appointmentId, CancellationToken cancellationToken)
@@ -901,9 +933,11 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
   }
 
   /// <summary>
-  /// The time must be inside one availability rule (for customer bookings, on its 15-minute grid: F1), within one
-  /// Bogotá day, and must not overlap an absence or another pending/confirmed appointment. Called under the
-  /// professional's lock, so what it reads is what the previous change of the same agenda committed.
+  /// Customer bookings and reschedules (<paramref name="requireGrid"/>): the start must be one of the slots
+  /// <see cref="AppointmentSlotGrid"/> offers right now for that professional, day and duration, leaving out the
+  /// appointment being rescheduled (ADR-0022 P5). Manual appointments of the panel (ADR-0022 P7, unchanged): inside one
+  /// availability rule, within one Bogotá day, and not overlapping an absence or another pending/confirmed appointment.
+  /// Called under the professional's lock, so what it reads is what the previous change of the same agenda committed.
   /// </summary>
   private async Task EnsureSlotIsAvailableAsync(
       Guid staffProfileId,
@@ -923,6 +957,27 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
       throw new ConflictException(SlotNotAvailableMessage);
     }
 
+    if (requireGrid)
+    {
+      var day = DateOnly.FromDateTime(startsAtLocal);
+      var slots = await AppointmentSlotGrid.FindAsync(
+          _dbContext,
+          staffProfileId,
+          day,
+          day,
+          endsAtUtc - startsAtUtc,
+          excludedAppointmentId,
+          _timeProvider.GetUtcNow().UtcDateTime,
+          cancellationToken);
+
+      if (!slots.Any(slot => slot.StartAtUtc == startsAtUtc && slot.EndAtUtc == endsAtUtc))
+      {
+        throw new ConflictException(SlotNotAvailableMessage);
+      }
+
+      return;
+    }
+
     var startTime = TimeOnly.FromDateTime(startsAtLocal);
     var endTime = TimeOnly.FromDateTime(endsAtLocal);
 
@@ -934,11 +989,7 @@ internal sealed class AppointmentManagementService : ICustomerAppointmentsServic
             && endTime <= rule.EndTime)
         .ToListAsync(cancellationToken);
 
-    var coveredByRule = requireGrid
-        ? coveringRules.Any(rule => AppointmentSlotGrid.IsSlotOf(rule, startTime, endTime))
-        : coveringRules.Count > 0;
-
-    if (!coveredByRule)
+    if (coveringRules.Count == 0)
     {
       throw new ConflictException(SlotNotAvailableMessage);
     }

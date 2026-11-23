@@ -193,11 +193,11 @@ public sealed class AvailabilityServicesTests : IDisposable
 
     var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
 
-    // F1: a slot every 15 minutes from the start of the rule, as long as the 30-minute service fits.
+    // ADR-0022 P1: a slot every 30 minutes (the service) from the start of the rule, as long as the service fits.
     Assert.Equal(30, response.SlotDurationMinutes);
-    Assert.Equal(15, response.SlotStepMinutes);
+    Assert.Equal(30, response.SlotStepMinutes);
     Assert.Equal(Corte, response.GeneralServiceId);
-    AssertStarts(response, nextDay, (9, 0), (9, 15), (9, 30), (9, 45), (10, 0));
+    AssertStarts(response, nextDay, (9, 0), (9, 30), (10, 0));
     Assert.All(response.Slots, slot => Assert.Equal(TimeSpan.FromMinutes(30), slot.EndAtUtc - slot.StartAtUtc));
   }
 
@@ -246,8 +246,8 @@ public sealed class AvailabilityServicesTests : IDisposable
 
     var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, CurrentDate, CurrentDate, Corte, null);
 
-    // Now is 10:15 Bogotá: 10:15 itself is still offered, nothing before it.
-    AssertStarts(response, CurrentDate, (10, 15), (10, 30), (10, 45), (11, 0), (11, 15), (11, 30));
+    // ADR-0022 P4: now is 10:15 Bogotá. Nothing before it is offered and the grid keeps its 9:00 anchor.
+    AssertStarts(response, CurrentDate, (10, 30), (11, 0), (11, 30));
   }
 
   [Fact]
@@ -313,15 +313,15 @@ public sealed class AvailabilityServicesTests : IDisposable
     var color = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Color");
     await ServiceOfferingTestData.OfferAsync(_dbContext, staff.StaffProfileId, color.Id, 45);
 
-    // 9:00-10:10 is not a multiple of 15 nor of 45; a 45-minute service ends at 10:00 at the latest.
+    // 9:00-10:10 is not a multiple of 30 nor of 45: the next slot of each service would end after 10:10.
     await _staffAvailabilityService.ReplaceRulesAsync(staff.UserId, [Rule(DayOfWeek.Tuesday, 9, 0, 10, 10)]);
 
     var colorSlots = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, color.Id, null);
     Assert.Equal(45, colorSlots.SlotDurationMinutes);
-    AssertStarts(colorSlots, nextDay, (9, 0), (9, 15));
+    AssertStarts(colorSlots, nextDay, (9, 0));
 
     var corteSlots = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
-    AssertStarts(corteSlots, nextDay, (9, 0), (9, 15), (9, 30));
+    AssertStarts(corteSlots, nextDay, (9, 0), (9, 30));
 
     // A fixed duration (to reschedule an appointment that keeps its own) works the same way.
     var fixedSlots = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, null, 70);
@@ -339,7 +339,7 @@ public sealed class AvailabilityServicesTests : IDisposable
     var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
 
     // 23:30 + 30 minutes would end at midnight, outside the rule (and the day).
-    AssertStarts(response, nextDay, (23, 0), (23, 15));
+    AssertStarts(response, nextDay, (23, 0));
   }
 
   [Fact]
@@ -376,6 +376,80 @@ public sealed class AvailabilityServicesTests : IDisposable
     await _dbContext.SaveChangesAsync();
     await Assert.ThrowsAsync<ValidationProblemException>(() =>
         _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null));
+  }
+
+  [Fact]
+  public async Task GetSlotsAsync_StepsByTheDurationOfTheService_WithoutOccupiedTimes()
+  {
+    var staff = await CreateStaffAsync("slot-step-30@example.com", "Slot Step 30", "Slot Step 30");
+    var nextDay = CurrentDate.AddDays(1);
+    await _staffAvailabilityService.ReplaceRulesAsync(staff.UserId, [Rule(DayOfWeek.Tuesday, 9, 0, 12, 0)]);
+
+    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
+
+    // ADR-0022 P1/P2: 9:00 to 12:00 with a 30-minute cut gives six start times.
+    AssertStarts(response, nextDay, (9, 0), (9, 30), (10, 0), (10, 30), (11, 0), (11, 30));
+    Assert.Equal(30, response.SlotStepMinutes);
+  }
+
+  [Fact]
+  public async Task GetSlotsAsync_StepsBy45Minutes_ForA45MinuteService()
+  {
+    var staff = await CreateStaffAsync("slot-step-45@example.com", "Slot Step 45", "Slot Step 45");
+    var nextDay = CurrentDate.AddDays(1);
+    var color = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Color");
+    await ServiceOfferingTestData.OfferAsync(_dbContext, staff.StaffProfileId, color.Id, 45);
+    await _staffAvailabilityService.ReplaceRulesAsync(staff.UserId, [Rule(DayOfWeek.Tuesday, 9, 0, 12, 0)]);
+
+    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, color.Id, null);
+
+    AssertStarts(response, nextDay, (9, 0), (9, 45), (10, 30), (11, 15));
+    Assert.Equal(45, response.SlotStepMinutes);
+  }
+
+  [Fact]
+  public async Task GetSlotsAsync_RestartsRightWhereAnAppointmentEnds()
+  {
+    var staff = await CreateStaffAsync("slot-after-appointment@example.com", "Slot After", "Slot After");
+    var nextDay = CurrentDate.AddDays(1);
+    await _staffAvailabilityService.ReplaceRulesAsync(staff.UserId, [Rule(DayOfWeek.Tuesday, 9, 0, 12, 0)]);
+    await AddAppointmentAsync(staff.StaffProfileId, nextDay, 9, 0, 9, 45, AppointmentStatus.Confirmed);
+
+    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
+
+    // ADR-0022 P3: no loose gap; the next start is when the appointment ends.
+    AssertStarts(response, nextDay, (9, 45), (10, 15), (10, 45), (11, 15));
+  }
+
+  [Fact]
+  public async Task GetSlotsAsync_ResumesWhenABlockInTheMiddleOfTheRuleEnds()
+  {
+    var staff = await CreateStaffAsync("slot-after-block@example.com", "Slot Block", "Slot Block");
+    var nextDay = CurrentDate.AddDays(1);
+    await _staffAvailabilityService.ReplaceRulesAsync(staff.UserId, [Rule(DayOfWeek.Tuesday, 9, 0, 12, 0)]);
+    await _staffAvailabilityService.CreateUnavailablePeriodAsync(
+        staff.UserId,
+        new UnavailablePeriodCreateRequest(ToUtc(nextDay, 10, 0), ToUtc(nextDay, 10, 50), "Pausa"));
+
+    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
+
+    AssertStarts(response, nextDay, (9, 0), (9, 30), (10, 50), (11, 20));
+  }
+
+  [Fact]
+  public async Task GetSlotsAsync_AnExistingAppointmentAtQuarterPast_StaysAndBlocksItsTime()
+  {
+    var staff = await CreateStaffAsync("slot-legacy-quarter@example.com", "Slot Legacy", "Slot Legacy");
+    var nextDay = CurrentDate.AddDays(1);
+    await _staffAvailabilityService.ReplaceRulesAsync(staff.UserId, [Rule(DayOfWeek.Tuesday, 9, 0, 12, 0)]);
+    var legacy = await AddAppointmentAsync(staff.StaffProfileId, nextDay, 9, 15, 9, 45, AppointmentStatus.Pending);
+
+    var response = await _publicAvailabilityService.GetSlotsAsync(staff.StaffProfileId, nextDay, nextDay, Corte, null);
+
+    // ADR-0022 P6: 9:00 would overlap it, so the grid restarts at 9:45; the appointment itself is untouched.
+    AssertStarts(response, nextDay, (9, 45), (10, 15), (10, 45), (11, 15));
+    var stored = await _dbContext.Appointments.AsNoTracking().SingleAsync(candidate => candidate.Id == legacy.Id);
+    Assert.Equal((ToUtc(nextDay, 9, 15), ToUtc(nextDay, 9, 45), AppointmentStatus.Pending), (stored.StartsAt, stored.EndsAt, stored.Status));
   }
 
   private static void AssertStarts(PublicAvailabilitySlotsResponse response, DateOnly date, params (int Hour, int Minute)[] starts)

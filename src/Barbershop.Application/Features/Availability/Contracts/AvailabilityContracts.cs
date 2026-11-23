@@ -42,8 +42,9 @@ public sealed record PublicAvailabilitySlotResponse(
 
 /// <summary>
 /// Slots of one service (or of a fixed duration, to reschedule an existing appointment). Each slot lasts
-/// <c>SlotDurationMinutes</c> and starts on a <c>SlotStepMinutes</c> grid counted from the start of its availability
-/// rule (ADR-0016 F1).
+/// <c>SlotDurationMinutes</c>. ADR-0022: starts are one duration apart from the start of each availability rule, and
+/// after an occupied time the grid resumes where it ends, so <c>SlotStepMinutes</c> (now equal to the duration) is the
+/// nominal step, not a guaranteed distance between consecutive slots.
 /// </summary>
 public sealed record PublicAvailabilitySlotsResponse(
     Guid StaffProfileId,

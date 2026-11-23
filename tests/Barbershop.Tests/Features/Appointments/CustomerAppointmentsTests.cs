@@ -388,9 +388,11 @@ public sealed class CustomerAppointmentsTests : IDisposable
         await ServiceOfferingTestData.OfferAsync(_dbContext, staff.StaffProfileId, color.Id, 45);
         var notOffered = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Barba");
 
-        // 9:05 is not on the 15-minute grid of the rule (F1); 10:30 + 45 minutes does not fit before 11:00.
+        // ADR-0022: the 45-minute grid of 9:00-11:00 is 9:00 and 9:45. 9:05 and 9:15 are off it; 10:30 + 45 does not fit.
         await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.CreateAsync(
             customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, color.Id, ToUtc(nextDay, 9, 5), null)));
+        await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.CreateAsync(
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, color.Id, ToUtc(nextDay, 9, 15), null)));
         await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.CreateAsync(
             customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, color.Id, ToUtc(nextDay, 10, 30), null)));
         await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.CreateAsync(
@@ -400,16 +402,16 @@ public sealed class CustomerAppointmentsTests : IDisposable
         Assert.Contains("generalServiceId", missing.Errors.Keys);
 
         var created = await _customerAppointmentsService.CreateAsync(
-            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, color.Id, ToUtc(nextDay, 9, 15), null));
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, color.Id, ToUtc(nextDay, 9, 0), null));
 
         Assert.Equal((color.Id, "Color", 45), (created.GeneralServiceId!.Value, created.GeneralServiceName, created.ReservedDurationMinutes!.Value));
-        Assert.Equal(ToUtc(nextDay, 10, 0), created.EndsAtUtc);
+        Assert.Equal(ToUtc(nextDay, 9, 45), created.EndsAtUtc);
 
-        // A 30-minute Corte overlapping the color is refused; right after it, it is accepted.
+        // A 30-minute Corte overlapping the color is refused; right when it ends (P3), it is accepted.
         await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.CreateAsync(
-            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 45), null)));
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 30), null)));
         await _customerAppointmentsService.CreateAsync(
-            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 10, 0), null));
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 45), null));
     }
 
     [Fact]
@@ -430,12 +432,117 @@ public sealed class CustomerAppointmentsTests : IDisposable
         Assert.Equal((30, ToUtc(nextDay, 9, 30)), (stored.ReservedDurationMinutes!.Value, stored.EndsAt));
 
         var moved = await _customerAppointmentsService.RescheduleAsync(
-            customer.Id, appointment.Id, new CustomerAppointmentRescheduleRequest(ToUtc(nextDay, 11, 15)));
-        Assert.Equal((30, ToUtc(nextDay, 11, 45), Corte), (moved.ReservedDurationMinutes!.Value, moved.EndsAtUtc, moved.GeneralServiceId!.Value));
+            customer.Id, appointment.Id, new CustomerAppointmentRescheduleRequest(ToUtc(nextDay, 11, 30)));
+        Assert.Equal((30, ToUtc(nextDay, 12, 0), Corte), (moved.ReservedDurationMinutes!.Value, moved.EndsAtUtc, moved.GeneralServiceId!.Value));
 
         // Off the grid is refused for rescheduling too.
         await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.RescheduleAsync(
             customer.Id, appointment.Id, new CustomerAppointmentRescheduleRequest(ToUtc(nextDay, 10, 10))));
+    }
+
+    [Fact]
+    public async Task CreateAsync_RejectsQuarterPast_ForA30MinuteCut_WithTheSlotNotAvailableMessage()
+    {
+        var staff = await CreateStaffAsync("p-quarter-staff@example.com", "Quarter Staff", "Quarter Staff");
+        var customer = await CreateCustomerAsync("p-quarter-customer@example.com", "Quarter Customer", null);
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 12, 0)]);
+
+        var refused = await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.CreateAsync(
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 15), null)));
+
+        Assert.Equal("Ese horario ya no está disponible. Elige otro.", refused.Message);
+        Assert.False(await _dbContext.Appointments.AnyAsync(appointment => appointment.StaffProfileId == staff.StaffProfileId));
+    }
+
+    [Fact]
+    public async Task RescheduleAsync_AcceptsTheSameTimeAndAValidTime_LeavingItsOwnAppointmentOutOfTheOccupiedTimes()
+    {
+        var staff = await CreateStaffAsync("p-reschedule-staff@example.com", "Reschedule Staff", "Reschedule Staff");
+        var customer = await CreateCustomerAsync("p-reschedule-customer@example.com", "Reschedule Customer", null);
+        var other = await CreateCustomerAsync("p-reschedule-other@example.com", "Reschedule Other", null);
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 12, 0)]);
+        var color = await ServiceOfferingTestData.AddGeneralServiceAsync(_dbContext, "Color");
+        await ServiceOfferingTestData.OfferAsync(_dbContext, staff.StaffProfileId, color.Id, 45);
+
+        // Other customer 9:00-9:45, so the 30-minute grid of the day is 9:45, 10:15, 10:45, 11:15.
+        await _customerAppointmentsService.CreateAsync(
+            other.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, color.Id, ToUtc(nextDay, 9, 0), null));
+        var mine = await _customerAppointmentsService.CreateAsync(
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 10, 15), null));
+
+        var same = await _customerAppointmentsService.RescheduleAsync(
+            customer.Id, mine.Id, new CustomerAppointmentRescheduleRequest(ToUtc(nextDay, 10, 15)));
+        Assert.Equal(ToUtc(nextDay, 10, 15), same.StartsAtUtc);
+
+        // Its own appointment does not count: the picker gets exactly what the validation accepts.
+        var slots = await _customerAppointmentsService.GetRescheduleSlotsAsync(customer.Id, mine.Id, nextDay, nextDay);
+        Assert.Equal(
+            new[] { ToUtc(nextDay, 9, 45), ToUtc(nextDay, 10, 15), ToUtc(nextDay, 10, 45), ToUtc(nextDay, 11, 15) },
+            slots.Slots.Select(slot => slot.StartAtUtc));
+        Assert.Equal(30, slots.SlotDurationMinutes);
+
+        var moved = await _customerAppointmentsService.RescheduleAsync(
+            customer.Id, mine.Id, new CustomerAppointmentRescheduleRequest(ToUtc(nextDay, 9, 45)));
+        Assert.Equal((ToUtc(nextDay, 9, 45), ToUtc(nextDay, 10, 15)), (moved.StartsAtUtc, moved.EndsAtUtc));
+
+        // 10:30 is on no grid of that day.
+        await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.RescheduleAsync(
+            customer.Id, mine.Id, new CustomerAppointmentRescheduleRequest(ToUtc(nextDay, 10, 30))));
+    }
+
+    [Fact]
+    public async Task GetRescheduleSlotsAsync_OnlyForTheOwnersPendingOrConfirmedAppointment()
+    {
+        var staff = await CreateStaffAsync("p-slots-owner-staff@example.com", "Slots Owner Staff", "Slots Owner Staff");
+        var customer = await CreateCustomerAsync("p-slots-owner@example.com", "Slots Owner", null);
+        var stranger = await CreateCustomerAsync("p-slots-stranger@example.com", "Slots Stranger", null);
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 12, 0)]);
+        var mine = await _customerAppointmentsService.CreateAsync(
+            customer.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 0), null));
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            _customerAppointmentsService.GetRescheduleSlotsAsync(stranger.Id, mine.Id, nextDay, nextDay));
+
+        await _customerAppointmentsService.CancelAsync(customer.Id, mine.Id);
+        var cancelled = await Assert.ThrowsAsync<ValidationProblemException>(() =>
+            _customerAppointmentsService.GetRescheduleSlotsAsync(customer.Id, mine.Id, nextDay, nextDay));
+        Assert.Contains("appointmentId", cancelled.Errors.Keys);
+    }
+
+    [Fact]
+    public async Task AnExistingAppointmentAtQuarterPast_StaysValid_AndBlocksWhatItOverlaps()
+    {
+        var staff = await CreateStaffAsync("p-legacy-staff@example.com", "Legacy Staff", "Legacy Staff");
+        var customer = await CreateCustomerAsync("p-legacy-customer@example.com", "Legacy Customer", null);
+        var other = await CreateCustomerAsync("p-legacy-other@example.com", "Legacy Other", null);
+        var nextDay = CurrentDate.AddDays(1);
+        await _adminStaffAvailabilityService.ReplaceRulesAsync(staff.StaffProfileId, [Rule(DayOfWeek.Tuesday, 9, 0, 12, 0)]);
+
+        // Booked under the old 15-minute grid (ADR-0016 F1) and stored as is (ADR-0022 P6).
+        var legacy = new Appointment(
+            staff.StaffProfileId, customer.FullName, ToUtc(nextDay, 9, 15), ToUtc(nextDay, 9, 45),
+            AppointmentStatus.Confirmed, AppointmentSource.CustomerBooking, CurrentUtc.UtcDateTime,
+            customer.Id, customer.Email, null, null);
+        _dbContext.Appointments.Add(legacy);
+        await _dbContext.SaveChangesAsync();
+
+        var visible = await _customerAppointmentsService.GetByIdAsync(customer.Id, legacy.Id);
+        Assert.Equal((ToUtc(nextDay, 9, 15), AppointmentStatus.Confirmed), (visible.StartsAtUtc, visible.Status));
+
+        // Rescheduling it to its own time is still accepted (nothing changes).
+        var same = await _customerAppointmentsService.RescheduleAsync(
+            customer.Id, legacy.Id, new CustomerAppointmentRescheduleRequest(ToUtc(nextDay, 9, 15)));
+        Assert.Equal((ToUtc(nextDay, 9, 15), AppointmentStatus.Confirmed), (same.StartsAtUtc, same.Status));
+
+        // It occupies 9:15-9:45 like any appointment: 9:00 is refused, 9:45 is the next start.
+        await Assert.ThrowsAsync<ConflictException>(() => _customerAppointmentsService.CreateAsync(
+            other.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 0), null)));
+        var next = await _customerAppointmentsService.CreateAsync(
+            other.Id, new CustomerAppointmentCreateRequest(staff.StaffProfileId, Corte, ToUtc(nextDay, 9, 45), null));
+        Assert.Equal(ToUtc(nextDay, 10, 15), next.EndsAtUtc);
     }
 
     private static AvailabilityRuleRequest Rule(DayOfWeek dayOfWeek, int startHour, int startMinute, int endHour, int endMinute)

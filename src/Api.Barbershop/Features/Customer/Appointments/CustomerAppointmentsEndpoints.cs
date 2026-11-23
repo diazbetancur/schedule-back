@@ -1,6 +1,7 @@
 using Api.Barbershop.Features.Auth;
 using Barbershop.Application.Appointments;
 using Barbershop.Application.Auth;
+using Barbershop.Application.Availability;
 using Barbershop.Application.Common.Paging;
 using System.Security.Claims;
 
@@ -56,6 +57,15 @@ public static class CustomerAppointmentsEndpoints
         .ProducesProblem(StatusCodes.Status409Conflict)
         .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
 
+    // ADR-0022 P5: the times this appointment can move to, computed without the appointment itself.
+    appointments.MapGet("/{appointmentId:guid}/reschedule-slots", GetRescheduleSlotsAsync)
+        .WithName("GetCustomerAppointmentRescheduleSlots")
+        .Produces<PublicAvailabilitySlotsResponse>(StatusCodes.Status200OK)
+        .ProducesProblem(StatusCodes.Status401Unauthorized)
+        .ProducesProblem(StatusCodes.Status403Forbidden)
+        .ProducesProblem(StatusCodes.Status404NotFound)
+        .ProducesValidationProblem(StatusCodes.Status422UnprocessableEntity);
+
     return api;
   }
 
@@ -97,4 +107,13 @@ public static class CustomerAppointmentsEndpoints
       ICustomerAppointmentsService service,
       CancellationToken cancellationToken)
       => service.RescheduleAsync(user.GetRequiredUserId(), appointmentId, request, cancellationToken);
+
+  private static Task<PublicAvailabilitySlotsResponse> GetRescheduleSlotsAsync(
+      ClaimsPrincipal user,
+      Guid appointmentId,
+      DateOnly from,
+      DateOnly to,
+      ICustomerAppointmentsService service,
+      CancellationToken cancellationToken)
+      => service.GetRescheduleSlotsAsync(user.GetRequiredUserId(), appointmentId, from, to, cancellationToken);
 }

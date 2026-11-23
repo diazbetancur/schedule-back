@@ -115,9 +115,9 @@ public sealed class ServiceBookingHttpIntegrationTests
     Assert.Equal(HttpStatusCode.UnprocessableEntity, (await context.Client.GetAsync(slotsUrl)).StatusCode);
     Assert.Equal(HttpStatusCode.UnprocessableEntity, (await context.Client.GetAsync($"{slotsUrl}&generalServiceId={beard}")).StatusCode);
     var colorSlots = await context.Client.GetFromJsonAsync<PublicAvailabilitySlotsResponse>($"{slotsUrl}&generalServiceId={color}");
-    Assert.Equal((45, 15), (colorSlots!.SlotDurationMinutes, colorSlots.SlotStepMinutes));
-    Assert.Equal(At(day, 9, 0), colorSlots.Slots[0].StartAtUtc);
-    Assert.Equal(At(day, 9, 15), colorSlots.Slots[1].StartAtUtc);
+    // ADR-0022: one start every 45 minutes from the start of the rule (9:00-12:00).
+    Assert.Equal((45, 45), (colorSlots!.SlotDurationMinutes, colorSlots.SlotStepMinutes));
+    Assert.Equal([At(day, 9, 0), At(day, 9, 45), At(day, 10, 30), At(day, 11, 15)], colorSlots.Slots.Select(slot => slot.StartAtUtc));
     var fixedSlots = await context.Client.GetFromJsonAsync<PublicAvailabilitySlotsResponse>($"{slotsUrl}&durationMinutes=60");
     Assert.Equal(60, fixedSlots!.SlotDurationMinutes);
 
@@ -130,6 +130,7 @@ public sealed class ServiceBookingHttpIntegrationTests
     Assert.Equal(HttpStatusCode.UnprocessableEntity, (await BookAsync(context.Client, staff.StaffProfileId, Guid.Empty, At(day, 9, 0))).StatusCode);
     Assert.Equal(HttpStatusCode.Conflict, (await BookAsync(context.Client, staff.StaffProfileId, beard, At(day, 9, 0))).StatusCode);
     Assert.Equal(HttpStatusCode.Conflict, (await BookAsync(context.Client, staff.StaffProfileId, color, At(day, 9, 5))).StatusCode);
+    Assert.Equal(HttpStatusCode.Conflict, (await BookAsync(context.Client, staff.StaffProfileId, color, At(day, 9, 15))).StatusCode);
 
     using var booked = await BookAsync(context.Client, staff.StaffProfileId, color, At(day, 9, 0));
     Assert.Equal(HttpStatusCode.Created, booked.StatusCode);
@@ -147,12 +148,25 @@ public sealed class ServiceBookingHttpIntegrationTests
     var corteSlots = await context.Client.GetFromJsonAsync<PublicAvailabilitySlotsResponse>($"{slotsUrl}&generalServiceId={Corte}");
     Assert.Equal(At(day, 9, 45), corteSlots!.Slots[0].StartAtUtc);
 
+    // ADR-0022 P5: the reschedule slots leave the appointment itself out; off them is a conflict.
+    var rescheduleSlotsUrl = $"/api/v1/customer/appointments/{appointment.Id}/reschedule-slots?from={day:yyyy-MM-dd}&to={day:yyyy-MM-dd}";
+    var rescheduleSlots = await context.Client.GetFromJsonAsync<PublicAvailabilitySlotsResponse>(rescheduleSlotsUrl);
+    Assert.Equal([At(day, 9, 0), At(day, 9, 45), At(day, 10, 30), At(day, 11, 15)], rescheduleSlots!.Slots.Select(slot => slot.StartAtUtc));
+    Assert.Equal(45, rescheduleSlots.SlotDurationMinutes);
+    Assert.Equal(HttpStatusCode.Conflict, (await context.Client.PatchAsJsonAsync(
+        $"/api/v1/customer/appointments/{appointment.Id}/reschedule", new CustomerAppointmentRescheduleRequest(At(day, 10, 15)))).StatusCode);
+
     // Rescheduling keeps service and duration.
     using var moved = await context.Client.PatchAsJsonAsync(
-        $"/api/v1/customer/appointments/{appointment.Id}/reschedule", new CustomerAppointmentRescheduleRequest(At(day, 10, 15)));
+        $"/api/v1/customer/appointments/{appointment.Id}/reschedule", new CustomerAppointmentRescheduleRequest(At(day, 10, 30)));
     Assert.Equal(HttpStatusCode.OK, moved.StatusCode);
     var movedView = await moved.Content.ReadFromJsonAsync<AppointmentView>(Json);
-    Assert.Equal((color, 45, At(day, 11, 0)), (movedView!.GeneralServiceId!.Value, movedView.ReservedDurationMinutes!.Value, movedView.EndsAtUtc));
+    Assert.Equal((color, 45, At(day, 11, 15)), (movedView!.GeneralServiceId!.Value, movedView.ReservedDurationMinutes!.Value, movedView.EndsAtUtc));
+
+    // Someone else's appointment answers like a missing one.
+    var stranger = await RegisterCustomerAsync(context.Client, "booking-stranger");
+    AuthenticateAs(context.Client, stranger.AccessToken);
+    Assert.Equal(HttpStatusCode.NotFound, (await context.Client.GetAsync(rescheduleSlotsUrl)).StatusCode);
   }
 
   [Fact]
